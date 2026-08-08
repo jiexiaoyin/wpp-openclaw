@@ -1,0 +1,33 @@
+{
+  "_comment": "WeChatPadPro 单账号 demo (default). 后续多账号按 accounts/<id>.json 拆分 (B 方案). 所有 token/authcode 留空从 env vars 读. 2026-08-05 21:00 dev 阶段加 agent 字段 (老板审阅: 缺专用 agent 绑定). v1.1.12 2026-08-08 接总立 P0 (autoSetWebhook): 加 webhookPublicUrl + autoSetWebhook 字段, path 带 accountId, plugin 启动自动调 vendor /Webhook/Set.",
+  "enabled": true,
+  "tokenKey": "",
+  "tokenKeyEnv": "WECHATPRO_TOKEN_KEY",
+  "apiBaseUrl": "https://wx.juhe.chat",
+  "wsUrl": "wss://wx.juhe.chat/ws/sync",
+  "authcode": "",
+  "authcodeEnv": "WECHATPRO_AUTHCODE",
+  "webhookHost": "127.0.0.1",
+  "webhookPort": 4398,
+  "webhookPath": "/wechatpadpro/default/webhook",
+  "webhookPublicUrl": "",
+  "webhookPublicUrlEnv": "WECHATPRO_WEBHOOK_PUBLIC_URL",
+  "autoSetWebhook": true,
+  "setWebhookRetries": 3,
+  "webhookSecret": "",
+  "_webhookSecretNote": "v1.1.10 21:36 老板拍: signatureRequired 改回 permissive (src/core/signature.ts). secret 留空跳过验签, 让 vendor 不签的 push 能进. 等 vendor 真提供签名时再填 secret + 重新改 strict.",
+  "allowFrom": [
+    "wxid_dbdmq8riblxo12"
+  ],
+  "groupPolicy": "allowlist",
+  "groupAllowFrom": [
+    "57737516566@chatroom"
+  ],
+  "selfWxid": "q139198824",
+  "nickname": "接晓银",
+  "requireAtMention": true,
+  "debounceMs": 1500,
+  "agent": "wpp-wechat",
+  "_p0_pollution_fix_note": "2026-08-08 16:05 紧急加固: 仅 wxid_dbdmq8riblxo12 直聊可触发; 群聊关闭; plugin disabled in openclaw.json 等待 code-level 白名单修复",
+  "_v1.1.17_note": "2026-08-08 17:10 P0-J 安全加固: webhookHost 0.0.0.0 → 127.0.0.1 (nginx 反代 wx.juhe.chat → 127.0.0.1:4398 不受影响, 但消除全网卡暴露)"
+}

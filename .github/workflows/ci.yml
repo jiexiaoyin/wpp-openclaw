@@ -1,0 +1,58 @@
+# GitHub Actions CI for wechatpadpro-openclaw
+# v1.0.4 FIX-B2 (P3-5 CI/CD)
+# 跑: tsc + test + deploy.sh dry-run (不部署 prod, dev 阶段禁用)
+# 触发: push to main, PR to main, manual workflow_dispatch
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: TypeScript check (tsc --noEmit)
+        run: npm run check
+
+      - name: Build (tsc)
+        run: npm run build
+
+      - name: Run tests (216 → 229 cases)
+        run: npm test
+
+      - name: Deploy dry-run (verify, NOT real deploy)
+        run: bash deploy.sh
+        env:
+          # 模拟老板拍板的真实凭证 (CI 测试, 不连真 DB)
+          WECHATPRO_DB_PASSWORD: ci-dryrun-placeholder
+
+      - name: Check for gewe references (audit guard, v1.0.2 added)
+        run: |
+          if grep -ri "gewe" src/ tests/ 2>/dev/null | grep -v "// " | grep -v "OpenClaw v" | head -3; then
+            echo "::warning::Found potential gewe references in src/ or tests/. Audit-clean requirement: should be 0"
+          else
+            echo "✓ No gewe references (audit clean)"
+          fi
+
+      - name: Upload coverage (placeholder for future)
+        if: always()
+        run: |
+          echo "Coverage upload skipped (v1.0.4 — tsc + test only, no coverage tool yet)"

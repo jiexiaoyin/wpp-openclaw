@@ -1,0 +1,73 @@
+// src/storage/db/connection.ts - v0.1.0 兼容 shims
+// 老代码 (src/db.ts) 调用的 initDbPool/pingDb/initSchema/closeDb 名字保留
+// 新代码用 getAdapter() 走 interface
+
+import { error, info } from "../../core/logger.js";
+import { setBackend, getAdapter } from "./factory.js";
+import { resolveDbConfig } from "./factory.js";
+import { API_TIMEOUT_MS } from "../../core/constants.js";
+import type { WppGlobalConfig } from "../../types.js";
+
+/**
+ * 兼容老 initDbPool(cfg: WppGlobalConfig):
+ * - 从 cfg.storage.db.mariadb 抽
+ * - env 替换 password (老板 2026-08-01 铁律: 凭证单一来源)
+ * - setBackend() 走 adapter
+ * - 立即 init (建表 + 迁移)
+ *
+ * Returns nothing: 老签名返回 Pool 现在不该被依赖, 用 getAdapter()
+ */
+export async function initDbPool(cfg: WppGlobalConfig): Promise<void> {
+  const m = cfg.storage.db.mariadb;
+  if (!m) throw new Error("mariadb config missing in config.json storage.db");
+
+  let password = m.password;
+  if (!password) {
+    if (m.passwordEnv) {
+      password = process.env[m.passwordEnv] ?? "";
+    }
+    if (!password) {
+      throw new Error(
+        `mariadb password empty: set env ${m.passwordEnv ?? "WECHATPRO_DB_PASSWORD"}`,
+      );
+    }
+  }
+
+  const resolved = resolveDbConfig({
+    backend: "mariadb",
+    mysql: {
+      host: m.host,
+      port: m.port,
+      user: m.user,
+      password,
+      database: m.database,
+      connectionLimit: m.connectionLimit ?? 5,
+    },
+  });
+
+  const adapter = setBackend(resolved);
+  await adapter.init();
+  await adapter.ping();
+  info(
+    `db ready: ${m.host}:${m.port}/${m.database} (user=${m.user}, limit=${m.connectionLimit ?? 5})`,
+  );
+  // suppress unused-API_TIMEOUT_MS warning - reserved for future queryWithTimeout call
+  void API_TIMEOUT_MS;
+}
+
+export async function pingDb(): Promise<void> {
+  await getAdapter().ping();
+}
+
+export async function initSchema(): Promise<void> {
+  await getAdapter().init();
+}
+
+export async function closeDb(): Promise<void> {
+  try {
+    await getAdapter().close();
+  } catch (e) {
+    error("closeDb failed", e);
+  }
+  info("db closed");
+}

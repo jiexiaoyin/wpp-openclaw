@@ -1,0 +1,15 @@
+# 凭证与运行时产物
+node_modules/
+dist/
+*.log
+.env
+*.bak
+
+# OpenClaw 部署版(部署由 deploy.sh 管理)
+config.local.json
+accounts/*.local.json
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store

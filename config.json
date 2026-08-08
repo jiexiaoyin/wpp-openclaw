@@ -1,0 +1,19 @@
+{
+  "version": "0.1.0",
+  "_comment": "WeChatPadPro OpenClaw plugin 全局配置 (2026-08-04 init). DB 复用 1Panel-mariadb-RlbK (wechatpro/***). 账号独立配置在 accounts/<id>.json (B 方案, 老板 2026-08-01 20:36 拍板).",
+  "storage": {
+    "saveHistory": true,
+    "db": {
+      "backend": "mariadb",
+      "mariadb": {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "user": "wechatpro",
+        "password": "",
+        "passwordEnv": "WECHATPRO_DB_PASSWORD",
+        "database": "wechatpro",
+        "connectionLimit": 5
+      }
+    }
+  }
+}

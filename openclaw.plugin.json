@@ -1,0 +1,244 @@
+{
+  "name": "wechatpadpro",
+  "id": "wechatpadpro",
+  "version": "1.1.23",
+  "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin. 单账号 demo (B 方案 accounts/<id>.json 独立配置, 后续多账号可扩展). 共存模式与 本项目 并行. 完整 236 paths API 覆盖.",
+  "channelId": "wechatpadpro",
+  "channelName": "WeChatPadPro (微信 Pad 协议)",
+  "kind": "plugin",
+  "channels": [
+    "wechatpadpro"
+  ],
+  "skills": [],
+  "channelConfigs": {
+    "wechatpadpro": {
+      "label": "WeChatPadPro",
+      "description": "WeChatPadPro 微信 Pad 协议 HTTP API 适配 (vendor: knowhub.cloud adminmaxapi). 部署在 /opt/1panel/docker/compose/WechatPadPro/, 反代 https://wx.juhe.chat/api/.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "启用此账号"
+          },
+          "tokenKey": {
+            "type": "string",
+            "description": "WeChatPadPro vendor 鉴权 TokenKey (从 vendor 后台 adminmax.knowhub.cloud 拿)"
+          },
+          "apiBaseUrl": {
+            "type": "string",
+            "description": "WeChatPadPro HTTP API base URL (公网反代: https://wx.juhe.chat)"
+          },
+          "wsUrl": {
+            "type": "string",
+            "description": "WebSocket URL (公网反代: wss://wx.juhe.chat/ws/sync)"
+          },
+          "authcode": {
+            "type": "string",
+            "description": "授权码 (binary 启动时生成, 用于 WebSocket 鉴权)"
+          },
+          "webhookHost": {
+            "type": "string",
+            "description": "webhook 接收主机 (默认 0.0.0.0)"
+          },
+          "webhookPort": {
+            "type": "number",
+            "description": "webhook 接收端口"
+          },
+          "webhookPath": {
+            "type": "string",
+            "description": "webhook 接收路径"
+          },
+          "webhookSecret": {
+            "type": "string",
+            "description": "webhook 验签 secret (vendor 暂未公开签名算法, 预留)"
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "允许的私聊发送方 wxid 白名单"
+          },
+          "groupPolicy": {
+            "type": "string",
+            "enum": [
+              "open",
+              "disabled",
+              "allowlist"
+            ],
+            "description": "群聊策略"
+          },
+          "groupAllowFrom": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "允许的群 wxid 白名单"
+          },
+          "selfWxid": {
+            "type": "string",
+            "description": "当前登录的微信 wxid (扫码登录后回填)"
+          },
+          "nickname": {
+            "type": "string",
+            "description": "机器人昵称"
+          },
+          "requireAtMention": {
+            "type": "boolean",
+            "description": "群聊需 @ 才回复"
+          },
+          "debounceMs": {
+            "type": "number",
+            "description": "群消息防抖毫秒"
+          },
+          "tokenKeyEnv": {
+            "type": "string",
+            "description": "tokenKey 环境变量名 (B 方案: 凭证不入 JSON)"
+          },
+          "authcodeEnv": {
+            "type": "string",
+            "description": "authcode 环境变量名 (B 方案: 凭证不入 JSON)"
+          },
+          "webhookSecretEnv": {
+            "type": "string",
+            "description": "webhook secret 环境变量名 (B 方案: 凭证不入 JSON)"
+          },
+          "webhookPublicUrl": {
+            "type": "string",
+            "description": "v1.1.12: 公网入口 base URL (拼 vendor push URL = webhookPublicUrl + webhookPath)"
+          },
+          "webhookPublicUrlEnv": {
+            "type": "string",
+            "description": "v1.1.12: webhookPublicUrl 环境变量名 (如 WECHATPRO_WEBHOOK_PUBLIC_URL)"
+          },
+          "autoSetWebhook": {
+            "type": "boolean",
+            "description": "v1.1.12: 启动自动 setWebhook (默认 true; false 则老板手动)"
+          },
+          "setWebhookRetries": {
+            "type": "number",
+            "description": "v1.1.12: setWebhook 重试次数 (默认 3, 1s/3s/9s backoff)"
+          },
+          "agent": {
+            "type": "string",
+            "description": "v1.1.12: 绑定 OpenClaw agent id (如 wpp-wechat)"
+          }
+        }
+      },
+      "uiHints": {
+        "tokenKey": {
+          "label": "WeChatPadPro TokenKey",
+          "sensitive": true
+        },
+        "apiBaseUrl": {
+          "label": "API Base",
+          "placeholder": "https://wx.juhe.chat"
+        },
+        "wsUrl": {
+          "label": "WebSocket URL",
+          "placeholder": "wss://wx.juhe.chat/ws/sync"
+        },
+        "authcode": {
+          "label": "授权码 (扫码登录后回填)",
+          "sensitive": true
+        },
+        "webhookPort": {
+          "label": "Webhook Port",
+          "placeholder": "4398"
+        },
+        "webhookPath": {
+          "label": "Webhook Path",
+          "placeholder": "/wechatpadpro/webhook"
+        },
+        "webhookHost": {
+          "label": "Webhook Host",
+          "placeholder": "0.0.0.0"
+        },
+        "webhookSecret": {
+          "label": "Webhook Secret",
+          "sensitive": true
+        },
+        "selfWxid": {
+          "label": "Bot self wxid",
+          "placeholder": "wxid_xxx (登录后回填)"
+        },
+        "nickname": {
+          "label": "Bot 昵称",
+          "placeholder": "益融小助理"
+        },
+        "groupPolicy": {
+          "label": "群聊策略",
+          "placeholder": "open"
+        },
+        "allowFrom": {
+          "label": "允许的私聊发送方 wxid 白名单"
+        },
+        "groupAllowFrom": {
+          "label": "允许的群 wxid 白名单"
+        },
+        "requireAtMention": {
+          "label": "群聊需 @ 才回复"
+        },
+        "debounceMs": {
+          "label": "群消息防抖毫秒"
+        }
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "storage": {
+        "type": "object",
+        "properties": {
+          "saveHistory": {
+            "type": "boolean"
+          },
+          "db": {
+            "type": "object",
+            "properties": {
+              "backend": {
+                "type": "string",
+                "enum": [
+                  "mariadb",
+                  "mysql",
+                  "sqlite"
+                ]
+              },
+              "mariadb": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "port": {
+                    "type": "number"
+                  },
+                  "user": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  },
+                  "passwordEnv": {
+                    "type": "string"
+                  },
+                  "database": {
+                    "type": "string"
+                  },
+                  "connectionLimit": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "_p0_pollution_fix": "v1.1.16 (2026-08-08 16:21) — P0 污染修复: dispatcher 读 cfg.agent, DM 白名单, cfg.agent 必填校验"
+}
