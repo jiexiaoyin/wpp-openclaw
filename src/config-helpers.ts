@@ -7,13 +7,12 @@
 //       OpenClaw 传的 cfg 参数不使用 (wpp 不依赖 OpenClaw config schema)
 
 import {
-  listAccountIds as _listAccountIds,
   isConfigured as _isConfigured,
   isValidAccountId,
 } from "./config.js";
 import { DEFAULT_ACCOUNT_ID } from "./core/constants.js";
 import { _resetPluginRootCache, findPluginRoot } from "./core/paths.js";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WppAccountConfig } from "./types.js";
@@ -48,13 +47,35 @@ function findPluginRootSync(): string | null {
 }
 
 /**
- * 列出所有已知账号 ID (从 accounts/ 目录读 .json 文件名).
- * OpenClaw 用这个在 UI 展示账号列表, 也用于插件发现.
+ * v1.3.26 P0 (2026-08-10 修复): listAccountIds 必须 SYNC, 不能是 async
  *
- * @param _cfg OpenClaw 传入的 config 对象 (wpp 不依赖, 保留签名)
+ * 根因: OpenClaw health-p6SutBnt.js:364 以 `const accountIds = plugin.config.listAccountIds(cfg)`
+ *      同步调用,**不 await**;下一行 `Array.from(new Set([...accountIds]))` 直接展开.
+ *      旧实现 `async ... Promise<string[]>` → OpenClaw 拿到 Promise 对象
+ *      → `...Promise` 抛 TypeError "accountIds is not iterable"
+ *      → [health] refresh failed 每次 health snapshot 都报 (8/5 起 1650+ 次),
+ *        accountSummaries 整个 channel 快照挂掉, OpenClaw UI/状态看不到 WPP 账号.
+ *       (同 v1.1.10 P0-2 resolveAccount 同步化漏网的第 2 个函数)
+ *
+ * 修复: 改成 sync, 用 findPluginRootSync + readdirSync.
+ *       async caller 也能 await (await on non-Promise returns value as-is).
+ *
+ * 测试: tests/config-helpers.test.ts 已加 "SYNC 回归" case (不 await, 直接展开)
  */
-export async function listAccountIds(_cfg?: unknown): Promise<string[]> {
-  return _listAccountIds();
+export function listAccountIds(_cfg?: unknown): string[] {
+  const pluginRoot = findPluginRootSync();
+  if (!pluginRoot) return [];
+  try {
+    const entries = readdirSync(join(pluginRoot, "accounts"));
+    return entries
+      .filter((f) => f.endsWith(".json"))
+      .filter((f) => !f.startsWith("."))
+      .map((f) => f.replace(/\.json$/, ""));
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") return [];
+    throw e;
+  }
 }
 
 /**
@@ -76,7 +97,6 @@ export function resolveAccount(_cfg: unknown, accountId?: string): WppAccountCon
   const id = accountId ?? DEFAULT_ACCOUNT_ID;
   if (!isValidAccountId(id)) return null;
 
-  // v1.1.10 P0-2: sync plugin root 探测 (1 次启动期 walk, 微秒级)
   const pluginRoot = findPluginRootSync();
   if (!pluginRoot) return null;
   // 顺便 cache 到 async 版, 让后续 findPluginRoot() 命中缓存
@@ -99,6 +119,11 @@ export function resolveAccount(_cfg: unknown, accountId?: string): WppAccountCon
   if (raw.authcodeEnv) {
     const envAuth = process.env[raw.authcodeEnv];
     if (envAuth) raw.authcode = envAuth;
+  }
+  // v1.3.18 B-8 fix: webhookSecretEnv 真接入 (OpenClaw resolveAccount 是它取 secret 的路径)
+  if (typeof raw.webhookSecretEnv === "string" && raw.webhookSecretEnv && !raw.webhookSecret) {
+    const envSecret = process.env[raw.webhookSecretEnv];
+    if (envSecret) raw.webhookSecret = envSecret;
   }
   return raw;
 }

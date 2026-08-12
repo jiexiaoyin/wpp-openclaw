@@ -1,10 +1,6 @@
-// src/storage/media.ts - 媒体存储抽象 (v1.1.3 real S3 集成)
-// 范式: 仿 gewe v1.4.4 src/storage/media.ts (S3-compatible interface + vendor CDN fallback)
-//
-// v1.1.3 真实集成:
-//   - @aws-sdk/client-s3: 完整 S3 API (putObject, getObject, HeadBucket)
-//   - @aws-sdk/s3-request-presigner: presigned URL 生成
-//   - 兼容 AWS S3 / MinIO / AliOSS / TXOSS / Cloudflare R2 (path-style 配置)
+// src/storage/media.ts - 媒体存储抽象 (S3-compatible interface + vendor CDN fallback)
+// @aws-sdk/client-s3 完整 S3 API + s3-request-presigner presigned URL;
+// 兼容 AWS S3 / MinIO / AliOSS / TXOSS / Cloudflare R2 (path-style 配置)
 //
 // 用途: 解决 vendor CDN 不稳定时 (高并发限流, 临时不可用) 媒体 (图片/语音/视频) 备份
 // 设计:
@@ -55,7 +51,7 @@ export class PassthroughStorage implements MediaStorage {
 
   constructor(private options: { cdnBase: string }) {
     if (!options.cdnBase) {
-      throw new Error("PassthroughStorage requires cdnBase (e.g. https://wx.juhe.chat/cdn)");
+      throw new Error("PassthroughStorage requires cdnBase (e.g. https://your-cdn.example.com/cdn)");
     }
   }
 
@@ -96,7 +92,7 @@ export interface S3Config {
 }
 
 /**
- * v1.1.3 真实集成: @aws-sdk/client-s3 + s3-request-presigner
+ * @aws-sdk/client-s3 + s3-request-presigner
  * 兼容: AWS S3 / MinIO / AliOSS / TXOSS / Cloudflare R2
  */
 export class S3Storage implements MediaStorage {
@@ -129,7 +125,8 @@ export class S3Storage implements MediaStorage {
       Body: buffer,
       ContentType: mimeType,
     });
-    const resp = await this.client.send(cmd);
+    // put/get 加 30s timeout 防 endpoint 挂死时消息队列无限积压
+    const resp = await this.withTimeout(this.client.send(cmd), 30_000, `put ${key}`);
     return {
       url: this.publicUrl(key),
       key,
@@ -141,14 +138,33 @@ export class S3Storage implements MediaStorage {
 
   async get(key: string): Promise<MediaGetResult> {
     const cmd = new GetObjectCommand({ Bucket: this.config.bucket, Key: key });
-    const resp = await this.client.send(cmd);
+    const resp = await this.withTimeout(this.client.send(cmd), 30_000, `get ${key}`);
     if (!resp.Body) throw new Error(`S3Storage.get: empty body for ${key}`);
-    const bytes = await resp.Body.transformToByteArray();
+    const bytes = await this.withTimeout(resp.Body.transformToByteArray(), 60_000, `get-body ${key}`);
     return {
       buffer: Buffer.from(bytes),
       mimeType: resp.ContentType ?? "application/octet-stream",
       storage: this.kind,
     };
+  }
+
+  /**
+   * 30s timeout race wrapper for any S3 op.
+   * AbortController is the cleanest path but @aws-sdk v3 default config has requestHandler; for simplicity use Promise.race.
+   */
+  private async withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        p,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`S3Storage: ${label} timeout after ${ms}ms`)), ms);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async sign(key: string, expiresInSec: number): Promise<string> {
@@ -157,7 +173,7 @@ export class S3Storage implements MediaStorage {
   }
 
   async ping(): Promise<boolean> {
-    // v1.1.3: 加 timeout (防网络挂死)
+    // 加 timeout (防网络挂死)
     try {
       const cmd = new HeadBucketCommand({ Bucket: this.config.bucket });
       await Promise.race([

@@ -10,6 +10,7 @@ import type { ToolEntry, ToolMeta } from "../src/dispatch/agent-tools/_shared.js
 test("AGENT_TOOLS_META — 总数 ≥ 80 工具 (高价值子集)", () => {
   const total = Object.keys(AGENT_TOOLS_META).length;
   assert.ok(total >= 80, `expected ≥80 tools, got ${total}`);
+  // eslint-disable-next-line no-console -- 测试调试输出
   console.log(`AGENT_TOOLS_META tools: ${total}`);
 });
 
@@ -44,7 +45,6 @@ test("domain 命名空间 — 至少 14 个 tag (sendText, scanGetQR, sendFriend
     "sendText",
     "scanGetQR",
     "sendFriendRequest",
-    "publishFriendCircle",
     "setChatRoomAnnouncement",
     "revokeMsg",
     "getMyProfile",

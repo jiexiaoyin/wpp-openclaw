@@ -1,6 +1,5 @@
-// src/inbound/hongbao.ts - v1.1.7 红包 (red packet) 检测 + 业务逻辑
-// vendor 推送时, 红包消息有特定 msgType (appmsg subtype) 或 content 含特定 marker
-// 这里提供 detect + 处理建议 (不自动拆, 业务上由 AI / 用户决定)
+// src/inbound/hongbao.ts - 红包 (red packet) 检测 + 业务逻辑
+// 红包消息有特定 msgType (appmsg subtype) 或 content 含特定 marker; 提供 detect + 处理建议 (不自动拆)
 
 import { warn, info, formatErr } from "../core/logger.js";
 import type { WppInboundMessage } from "../types.js";

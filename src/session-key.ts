@@ -1,22 +1,12 @@
-// session-key.ts - 4 段设计 (防 2026-08-01 误判铁律 + 本项目 架构哲学)
-// 2026-08-04 init
+// session-key.ts - 对齐 framework parseSessionDeliveryRoute 的 sessionKey 构造
+// (framework 是 SSOT, 格式必须 100% 一致; 曾因群聊 6 段含 accountId 导致出站路由失败)
 
 import type { PeerKindValue } from "./core/constants.js";
 
 /**
- * SessionKey 4 段设计 (借鉴 本项目, 但用 wechatpadpro channelId):
- *
- *   agent:<agentId>:wechatpadpro:<accountId>:<peerKind>:<peerId>
- *
- * - agentId       OpenClaw agent 名 (boss 主 agent 是 "main")
- * - channelId     固定 "wechatpadpro" (plugin manifest 唯一)
- * - accountId     账号 ID (单账号 demo 用 "default", 后续多账号每账号独立)
- * - peerKind      "direct" 或 "group"
- * - peerId        私聊: fromWxid; 群聊: chatroomId
- *
- * 设计意图 (2026-08-01 老板立的 4 段原则):
- *   1. accountId 段对未来多账号多 agent 路由是硬性区分字段, 不能简化
- *   2. 群聊按 chatroom 聚合 (不按成员拆 session)
+ * SessionKey 设计 (framework SSOT: openclaw parseSessionDeliveryRoute):
+ *   DM/direct:  agent:<agentId>:<channelId>:<accountId>:<peerKind>:<peerId> (accountId 必需, 多账号路由字段)
+ *   group/room: agent:<agentId>:<channelId>:<peerKind>:<peerId> (无 accountId, 按 chatroom 聚合)
  */
 export function buildSessionKey(opts: {
   agentId: string;
@@ -24,23 +14,40 @@ export function buildSessionKey(opts: {
   peerKind: PeerKindValue;
   peerId: string;
 }): string {
-  return `agent:${opts.agentId}:wechatpadpro:${opts.accountId}:${opts.peerKind}:${opts.peerId}`;
+  const base = `agent:${opts.agentId}:wechatpadpro`;
+  if (opts.peerKind === "group") {
+    // 群聊 6 段含 accountId → framework 返 null → 出站路由失败 (实测确认)
+    return `${base}:${opts.peerKind}:${opts.peerId}`;
+  }
+  return `${base}:${opts.accountId}:${opts.peerKind}:${opts.peerId}`;
 }
 
 export function parseSessionKey(key: string): {
   agentId: string;
   channelId: string;
-  accountId: string;
+  accountId?: string; // 仅 DM/direct 存在
   peerKind: PeerKindValue;
   peerId: string;
 } | null {
   const parts = key.split(":");
-  if (parts.length !== 6) return null;
-  const [p0, p1, p2, p3, p4, p5] = parts;
-  if (p0 === undefined || p1 === undefined || p2 === undefined || p3 === undefined || p4 === undefined || p5 === undefined) {
-    return null;
-  }
+  if (parts.length < 5 || parts.length > 6) return null;
+  const [p0, p1, p2] = parts;
+  if (p0 === undefined || p1 === undefined || p2 === undefined) return null;
   if (p0 !== "agent" || p2 !== "wechatpadpro") return null;
+  // 5 段 (群聊类): agent:<id>:<channel>:<peerKind>:<peerId>
+  if (parts.length === 5) {
+    const [, , , p4, p5] = parts;
+    if (p4 === undefined || p5 === undefined) return null;
+    return {
+      agentId: p1,
+      channelId: p2,
+      peerKind: p4 as PeerKindValue,
+      peerId: p5,
+    };
+  }
+  // 6 段 (DM/direct): agent:<id>:<channel>:<accountId>:<peerKind>:<peerId>
+  const [, , , p3, p4, p5] = parts;
+  if (p3 === undefined || p4 === undefined || p5 === undefined) return null;
   return {
     agentId: p1,
     channelId: p2,

@@ -1,12 +1,15 @@
 // src/inbound/parser/content.ts - 按 msgType 提取 content 文本
 
 import type { MsgTypeValue } from "../../core/constants.js";
+import { safeMatch, isCatastrophicRegex } from "../../core/safe-regex.js";
 
 /** 群消息 group prefix 剥离: ":\n<sender nickname>:\n<content>" → "<content>" */
 export function stripGroupPrefix(content: string): string {
   if (!content) return "";
-  // 匹配 "xxx:\n" 两次 (sender + receiver)
-  const m = content.match(/^[^:\n]+:\n[^:\n]+:\n([\s\S]*)$/);
+  // 用 safeMatch 截断防 ReDoS (原 regex 含嵌套排除类, 极端输入 O(n²) — gewe 实测 1000 字符 hang)
+  const re = /^[^:\n]+:\n[^:\n]+:\n([\s\S]*)$/;
+  if (isCatastrophicRegex(re)) return content; // 防御性 fallback
+  const m = safeMatch(re, content);
   if (m && m[1]) return m[1].trim();
   return content;
 }
@@ -16,6 +19,7 @@ export function describeMsgType(msgType: number): string {
   const map: Record<number, string> = {
     1: "text",
     3: "image",
+    6: "file", // Excel/PDF/Word/zip 等办公文件
     34: "voice",
     43: "video",
     47: "emoji",
@@ -30,5 +34,5 @@ export function describeMsgType(msgType: number): string {
   return map[msgType] ?? `unknown(${msgType})`;
 }
 
-/** 强制类型: 仅作为 util, 不影响 ParseInbound 类型 */
+/** 强制类型: 仅作为 util */
 export type _MsgTypeKey = MsgTypeValue;

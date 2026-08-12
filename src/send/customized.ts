@@ -9,9 +9,9 @@ export function makeWppCustomized(ctx: WppAccountCtx) {
     postWppJson(ctx.baseUrl, ep, body, opts);
 
   return {
-    /** /Customized/WXCTDUniftyAuthBatch — 批量开小程序 */
-    wxctdUniftyAuthBatch: (appIds: string[]) =>
-      dispatch("/Customized/WXCTDUniftyAuthBatch", { appIds: appIds.join(",") }),
+    /** /Customized/WXCTDUniftyAuthBatch — 批量开小程序 (v1.2.1 swagger-alignment: WXCTDUniftyAuthParmDoc {Username}) */
+    wxctdUniftyAuthBatch: (username: string) =>
+      dispatch("/Customized/WXCTDUniftyAuthBatch", { Username: username }),
   };
 }
 

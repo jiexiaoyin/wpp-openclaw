@@ -1,12 +1,21 @@
 // src/dispatch/agent-tools/user-meta.ts - User tag (18)
+// v1.3.18 P1-核心1 fix (2026-08-10): 改成 lazy-evaluate ctx 模式
 
 import { Type } from "typebox";
 import type { ToolMeta } from "./_shared.js";
 import { makeWppUser } from "../../send/user.js";
-import type { WppAccountCtx } from "../../send/factory.js";
+import { getDefaultAccountRegistry } from "../../account-state.js";
 
-const ctx: WppAccountCtx = { baseUrl: "", tokenKey: "", accountId: "" };
-const api = makeWppUser(ctx);
+function getUserApi() {
+  const state = getDefaultAccountRegistry().get("default");
+  if (!state) throw new Error("account not found: default");
+  return makeWppUser({
+    baseUrl: state.config.apiBaseUrl,
+    tokenKey: state.config.tokenKey,
+    authcode: state.authcode,
+    accountId: "default",
+  });
+}
 
 export const USER_META: ToolMeta = {
   /** /User/GetContractProfile */
@@ -15,7 +24,7 @@ export const USER_META: ToolMeta = {
     Type.Object({
       wxid: Type.Optional(Type.String({ description: "留空取自己" })),
     }),
-    api.getContractProfile,
+    (wxid?: string) => getUserApi().getContractProfile(wxid),
   ],
   /** /User/UpdateProfile */
   updateMyProfile: [
@@ -25,90 +34,90 @@ export const USER_META: ToolMeta = {
       signature: Type.Optional(Type.String()),
       sex: Type.Optional(Type.Number()),
     }),
-    api.updateProfile,
+    (nickname?: string, signature?: string, sex?: number) => getUserApi().updateProfile(nickname, signature, sex),
   ],
   /** /User/UploadHeadImage */
   uploadHeadImage: [
     "修改自己头像.",
     Type.Object({ imgBase64: Type.String() }),
-    api.uploadHeadImage,
+    (imgBase64: string) => getUserApi().uploadHeadImage(imgBase64),
   ],
   /** /User/GetQRCode */
   getMyQRCode: [
     "取个人二维码.",
     Type.Object({}),
-    api.getQRCode,
+    () => getUserApi().getQRCode(),
   ],
   /** /User/GetSafetyInfo */
   getLoginSafetyInfo: [
     "登录设备管理 (列出已登录设备).",
     Type.Object({}),
-    api.getSafetyInfo,
+    () => getUserApi().getSafetyInfo(),
   ],
   /** /User/DelSafetyInfo */
   deleteLoginDevice: [
     "删除登录设备.",
     Type.Object({ uuid: Type.String() }),
-    api.delSafetyInfo,
+    (uuid: string) => getUserApi().delSafetyInfo(uuid),
   ],
   /** /User/SetAlisa */
   setAlias: [
     "设置自己的微信号 (一次性).",
     Type.Object({ alias: Type.String() }),
-    api.setAlisa,
+    (alias: string) => getUserApi().setAlisa(alias),
   ],
   /** /User/PrivacySettings */
   setPrivacy: [
     "隐私设置. opt 见 vendor 文档 (e.g. 4=加好友权限).",
     Type.Object({ opt: Type.Number(), value: Type.Number() }),
-    api.privacySettings,
+    (opt: number, value: number) => getUserApi().privacySettings(opt, value),
   ],
   /** /User/SetPasswd */
   changePassword: [
     "修改自己的微信登录密码.",
     Type.Object({ newPwd: Type.String() }),
-    api.setPasswd,
+    (newPwd: string) => getUserApi().setPasswd(newPwd),
   ],
   /** /User/VerifyPasswd */
   verifyPassword: [
     "验证当前密码 (用于敏感操作前).",
     Type.Object({ password: Type.String() }),
-    api.verifyPasswd,
+    (password: string) => getUserApi().verifyPasswd(password),
   ],
   /** /User/ReportMotion */
   reportMotion: [
     "上报步数 (微信运动).",
     Type.Object({ steps: Type.Number() }),
-    api.reportMotion,
+    (steps: number) => getUserApi().reportMotion(steps),
   ],
   /** /User/BindingMobile */
   bindMobile: [
     "换绑手机号.",
     Type.Object({ mobile: Type.String(), code: Type.String() }),
-    api.bindingMobile,
+    (mobile: string, code: string) => getUserApi().bindingMobile(mobile, code),
   ],
   /** /User/SendVerifyMobile */
   sendMobileVerifyCode: [
     "发送手机验证码.",
     Type.Object({ mobile: Type.String() }),
-    api.sendVerifyMobile,
+    (mobile: string) => getUserApi().sendVerifyMobile(mobile),
   ],
   /** /User/BindQQ */
   bindQQ: [
     "绑定 QQ 到当前微信号.",
     Type.Object({ qq: Type.String(), password: Type.String() }),
-    api.bindQQ,
+    (qq: string, password: string) => getUserApi().bindQQ(qq, password),
   ],
   /** /User/BindingEmail */
   bindEmail: [
     "绑定邮箱.",
     Type.Object({ email: Type.String() }),
-    api.bindingEmail,
+    (email: string) => getUserApi().bindingEmail(email),
   ],
   /** /User/CheckCanSetAlias (GET) */
   canSetAlias: [
     "检测当前是否可以设置微信号 (GET).",
     Type.Object({}),
-    api.checkCanSetAlias,
+    () => getUserApi().checkCanSetAlias(),
   ],
 };

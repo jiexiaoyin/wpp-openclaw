@@ -10,7 +10,7 @@
 //       因为 tsx --test 直接编译 src, dist 仅作为 build artifact 给 gateway
 //       但 manifest/字段 形状完全一致, 因为 tsc 直译
 
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 
 import * as pluginModule from "../src/index.js";
@@ -22,6 +22,21 @@ import {
   shutdown,
 } from "../src/index.js";
 import { resetDefaultRegistry } from "../src/account-state.js";
+import { resetAdapter } from "../src/storage/db/factory.js";
+
+// v1.1.33 TEST-FIX (2026-08-08 23:08 接总立 P1[4] 推进):
+//   修复卡死 — plugin.start() 测试调 initDbPool 创建 DB pool 后,
+//   finally 只 resetDefaultRegistry() (清 registry 引用), 但 DB pool 残留
+//   → node test runner 等 event loop 清空 → "Promise resolution is still pending" 卡死 7.6s
+// fix: after() 钩子统一 closeDb + resetAdapter + resetDefaultRegistry
+after(async () => {
+  try {
+    const { closeDb } = await import("../src/db.js");
+    await closeDb();
+  } catch { /* ignore */ }
+  resetAdapter();
+  resetDefaultRegistry();
+});
 
 // ===== 1. ESM 入口检测 (v2026.7.1 契约) =====
 

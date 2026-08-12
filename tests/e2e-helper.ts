@@ -12,7 +12,12 @@ export const HAS_REAL_CREDS = !!(
   process.env.WECHATPRO_AUTHCODE
 );
 
-export const USE_MOCK = !HAS_REAL_CREDS || process.env.WPP_E2E_FORCE_MOCK === "1";
+// v1.1.33 TEST-FIX (2026-08-08 23:08 接总立 P1[4] 推进):
+//   默认强制 mock — dev 环境 prod gateway 常驻 (webhook 4398 + 真 MariaDB),
+//   e2e 测试若走真实分支会跟 prod 冲突 (EADDRINUSE / setBackend already initialized)
+//   真实 e2e 需要隔离环境: 显式 WPP_E2E_REAL=1 + 停 prod gateway 才能跑
+// fix: USE_MOCK 默认 true, 只有 WPP_E2E_REAL=1 才走真实分支
+export const USE_MOCK = process.env.WPP_E2E_REAL !== "1";
 
 let mockServer: Server | null = null;
 let mockBaseUrl = "";
@@ -46,10 +51,6 @@ export function ensureMockServer(): string {
       });
     });
     // sync 启动 (在 test before() 内调, await 不需要)
-    // 注: 测试框架是 ESM 同步, 这里用同步 listen
-    // 用 sync API 但 internal async
-    const { createServerSync } = require("node:http") as { createServerSync?: typeof createServer };
-    // 退回: 用正常 listen (node:test 的 before 支持 async)
   }
   return mockBaseUrl;
 }

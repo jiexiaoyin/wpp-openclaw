@@ -24,7 +24,7 @@ const DUP_INPUT = { id: "dup-test", enabled: true, tokenKeyEnv: "X", authcodeEnv
 
 // ===== 测试 setup: 备份 + 还原 accounts/ 真实目录 =====
 
-let backup: Map<string, string> = new Map();
+const backup: Map<string, string> = new Map();
 
 function backupAccounts() {
   backup.clear();

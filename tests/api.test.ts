@@ -91,14 +91,14 @@ test("getWppJson — 网络错误", async () => {
 
 // ===== WPP_VENDOR_ENDPOINTS 完整性 =====
 
-test("WPP_VENDOR_ENDPOINTS — 总数 = 227 (v1.1.17 移除 Admin 高权限端点)", () => {
+test("WPP_VENDOR_ENDPOINTS — 总数 = 250 (v1.3.25 SWAGGER-254 补 19 个)", () => {
   let total = 0;
   for (const list of Object.values(WPP_VENDOR_ENDPOINTS)) {
     total += (list as readonly string[]).length;
   }
   // v1.1.17 (2026-08-08 老板拍板): 移除 Admin 4 端点 (GenAuthKey/DelayAuthKey/DeleteAuthKey) + User/GetAllOnline
-  //   Admin 端点需要管理 key, 权限过高, 不在插件中用
-  assert.equal(total, 232, `expected 232, got ${total}`);
+  // v1.3.25 (2026-08-10 老板拍板): 补 19 个缺失 (FriendCircle6+Search5+TenPay5+Tools2+SendApp)
+  assert.equal(total, 250, `expected 250 (v1.3.25), got ${total}`);
 });
 
 test("WPP_VENDOR_ENDPOINTS — 21 tag 覆盖", () => {
@@ -230,7 +230,7 @@ test("makeWppSend — 关键函数样本存在", () => {
 
 // ===== Function count 校对 =====
 
-test("send modules 函数总数 = 235 (v1.1.21 加 quoteXml 引用回复)", () => {
+test("send modules 函数总数 = 255 (v1.3.25 SWAGGER-254 补 19 个)", () => {
   const ctx = {
     baseUrl: "http://127.0.0.1:8062",
     tokenKey: "test",
@@ -245,8 +245,16 @@ test("send modules 函数总数 = 235 (v1.1.21 加 quoteXml 引用回复)", () =
     }
   }
   // v1.0.1 baseline: 236 个 vendor endpoint wrappers
-  // v1.1.7: +2 (sendMiniProgram + sendAppFromXml)
-  assert.equal(funcCount, 235, `expected 235 functions (v1.1.21 加 quoteXml), got ${funcCount}`);
+  // v1.1.7: +2 (sendMiniProgram + sendAppFromXml) = 238
+  // v1.1.27 GROUP-FIELD-FIX: -2 = 236
+  // v1.1.35 GROUP-GHOST-FIX: -1 + 3 = 235
+  // v1.3.12 FILE-SEND: +1 (sendFile) = 236
+  // v1.3.19 UNIFY-SEND: +1 (sendImage URL→base64→UploadImg) = 237
+  // v1.3.24 downloadVideo = 238
+  // v1.3.25 SWAGGER-254 补 19: friendcircle5+search5+tenpay5+tools2 = 17 (DownloadVideo 已在 v1.3.24) → 255
+  // v1.3.28 publishImages = 256
+  // v1.3.29 publishVideo + publishVideoViaItem = 258
+  assert.equal(funcCount, 258, `expected 258 functions (v1.3.30), got ${funcCount}`);
 });
 
 // ===== v1.1.27 SENDIMG-FIX: resolveImageToBase64 三态测试 =====
@@ -264,12 +272,21 @@ test("resolveImageToBase64 — data URI 自动剥离前缀", async () => {
   assert.equal(out, "aGVsbG8td29ybGQ=");
 });
 
-test("resolveImageToBase64 — 本地文件路径", async () => {
-  const tmpFile = "/tmp/wpp-resolve-test.bin";
-  await import("node:fs/promises").then(fs => fs.writeFile(tmpFile, Buffer.from("hello-world")));
-  const out = await resolveImageToBase64(tmpFile);
-  assert.equal(out, "aGVsbG8td29ybGQ=");
-  await import("node:fs/promises").then(fs => fs.unlink(tmpFile));
+test("resolveImageToBase64 — 本地文件路径 (白名单内 media 目录)", async () => {
+  const fs = await import("node:fs/promises");
+  const tmpFile = "/root/.openclaw/media/wpp-resolve-test.bin";
+  await fs.mkdir("/root/.openclaw/media", { recursive: true }).catch(() => {});
+  await fs.writeFile(tmpFile, Buffer.from("hello-world"));
+  try {
+    const out = await resolveImageToBase64(tmpFile);
+    assert.equal(out, "aGVsbG8td29ybGQ=");
+  } finally {
+    await fs.unlink(tmpFile).catch(() => {});
+  }
+});
+
+test("resolveImageToBase64 — 白名单外路径拒绝 (v1.2.1 P1-fix 防任意文件读)", async () => {
+  await assert.rejects(() => resolveImageToBase64("/tmp/secret.txt"), /outside allowed media dirs/);
 });
 
 test("resolveImageToBase64 — 空输入报错", async () => {

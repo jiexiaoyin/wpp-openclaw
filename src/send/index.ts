@@ -127,6 +127,8 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Msg/Quote",
     "/Msg/Revoke",
     "/Msg/ShareLink",
+    // v1.3.25 SWAGGER-254: SendApp 注册 (仅登记, 群发端点勿调)
+    "/Msg/SendApp",
     "/Msg/SendCDNFile",
     "/Msg/SendCDNImg",
     "/Msg/SendCDNVideo",
@@ -136,7 +138,6 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Msg/SendVoice",
     "/Msg/SendXCX",
     "/Msg/ShareCard",
-    "/Msg/ShareLink",
     "/Msg/ShareLocation",
     "/Msg/ShareVideo",
     "/Msg/StartAutoSync",
@@ -230,6 +231,13 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/FriendCircle/PrivacySettings",
     "/FriendCircle/PushCommnet",
     "/FriendCircle/Upload",
+    // v1.3.25 SWAGGER-254: 新增 5 个
+    "/FriendCircle/DownloadVideo",
+    "/FriendCircle/MessagesRaw",
+    "/FriendCircle/SetBackgroundImage",
+    "/FriendCircle/UploadImage",
+    "/FriendCircle/UploadImages",
+    "/FriendCircle/UploadVideo",
   ],
   search: [
     "/Search/AI",
@@ -250,6 +258,12 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Search/Stickers",
     "/Search/Underlines",
     "/Search/WeChatIndex",
+    // v1.3.25 SWAGGER-254: 新增 5 个通用搜索
+    "/Search/Capabilities",
+    "/Search/Gateway",
+    "/Search/Query",
+    "/Search/Service/{name}",
+    "/Search/Services",
   ],
   wxapp: [
     "/Wxapp/AddAvatar",
@@ -303,6 +317,9 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Tools/ThirdAppGrant",
     "/Tools/UploadFile",
     "/Tools/setproxy",
+    // v1.3.25 SWAGGER-254: 新增 2 个 (media-enrich 已用, 补注册)
+    "/Tools/DownloadFileBinary",
+    "/Tools/DownloadVoiceBinary",
   ],
   tenPay: [
     "/TenPay/GeMaSkdPayQCode",
@@ -312,6 +329,12 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/TenPay/Qrydetailwxhb",
     "/TenPay/Receivewxhb",
     "/TenPay/SjSkdPayQCode",
+    // v1.3.25 SWAGGER-254: 新增 5 个
+    "/TenPay/Collectmoney",
+    "/TenPay/ConfirmPreTransferApi",
+    "/TenPay/GeneratePayQCode",
+    "/TenPay/GetRedPacketListApi",
+    "/TenPay/WXCreateRedPacketApi",
   ],
   favorites: ["/Favor/Del", "/Favor/GetFavInfo", "/Favor/GetFavItem", "/Favor/Sync"],
   label: [

@@ -1,4 +1,7 @@
-// src/send/finder.ts - Finder tag (15 endpoints: video channel / 视频号)
+// src/send/finder.ts - Finder tag (15 endpoints)
+// v1.1.27 FINDER-FIELD-FIX (2026-08-08 P1-2): 字段名对齐 swagger
+//   之前: objectId/sessionId/topicId 等通用名 → vendor Go 匹配不上
+//   fix: Username/Id/FinderUsername/Text 等 vendor 字段名
 
 import { postWppJson } from "../api/client.js";
 import { ctxToCallOpts, type WppAccountCtx } from "./factory.js";
@@ -9,60 +12,76 @@ export function makeWppFinder(ctx: WppAccountCtx) {
     postWppJson(ctx.baseUrl, ep, body, opts);
 
   return {
-    /** /Finder/Comment — 评论 */
-    comment: (objectId: string, content: string) =>
-      dispatch("/Finder/Comment", { objectId, content }),
+    /** /Finder/Comment — 评论 (Username + Id + Content + CommentId + OpType + Scene + ...) */
+    comment: (username: string, finderId: string, content: string, opType = 1, rootCommentId = "", replyCommentId = "", replyUsername = "") =>
+      dispatch("/Finder/Comment", {
+        Username: username,
+        Id: finderId,
+        Content: content,
+        OpType: opType,
+        CommentId: "",
+        ObjectNonceId: "",
+        ReplyCommentId: replyCommentId,
+        ReplyUsername: replyUsername,
+        RootCommentId: rootCommentId,
+        Scene: 1,
+        SessionBuffer: "",
+      }),
 
-    /** /Finder/Decrypt — 评论(解密) */
+    /** /Finder/Decrypt — 评论(解密) (Content) */
     decrypt: (encryptContent: string) =>
-      dispatch("/Finder/Decrypt", { encryptContent }),
+      dispatch("/Finder/Decrypt", { Content: encryptContent }),
 
-    /** /Finder/FinderGetMsgSessionId — 获取私信会话 ID */
+    /** /Finder/FinderGetMsgSessionId — 获取私信会话 ID (FinderUsername) */
     finderGetMsgSessionId: (toFinderId: string) =>
-      dispatch("/Finder/FinderGetMsgSessionId", { toFinderId }),
+      dispatch("/Finder/FinderGetMsgSessionId", { FinderUsername: toFinderId }),
 
-    /** /Finder/FinderLiveDetail — 直播详情 */
-    finderLiveDetail: (liveId: string) =>
-      dispatch("/Finder/FinderLiveDetail", { liveId }),
+    /** /Finder/FinderLiveDetail — 直播详情 (FinderObjectID + FinderNonceID) */
+    finderLiveDetail: (finderObjectId: string, finderNonceId: string) =>
+      dispatch("/Finder/FinderLiveDetail", { FinderObjectID: finderObjectId, FinderNonceID: finderNonceId }),
 
-    /** /Finder/FinderSearchList — 搜索列表 */
-    finderSearchList: (keyword: string) =>
-      dispatch("/Finder/FinderSearchList", { keyword }),
+    /** /Finder/FinderSearchList — 搜索列表 (EmptyObject, query in path?) */
+    finderSearchList: () => dispatch("/Finder/FinderSearchList", {}),
 
-    /** /Finder/FinderSendText — 发送私信文字 */
-    finderSendText: (sessionId: string, content: string) =>
-      dispatch("/Finder/FinderSendText", { sessionId, content }),
+    /** /Finder/FinderSendText — 发送私信文字 (FinderUsername + Text) */
+    finderSendText: (finderUsername: string, text: string) =>
+      dispatch("/Finder/FinderSendText", { FinderUsername: finderUsername, Text: text }),
 
-    /** /Finder/Findergettopiclist — 主题列表 */
-    finderGetTopicList: (topicId: string) =>
-      dispatch("/Finder/Findergettopiclist", { topicId }),
+    /** /Finder/Findergettopiclist — 主题列表 (LastBuffer + TopTitle) */
+    finderGetTopicList: (topTitle = "", lastBuffer = "") =>
+      dispatch("/Finder/Findergettopiclist", { TopTitle: topTitle, LastBuffer: lastBuffer }),
 
-    /** /Finder/Follow — 关注 */
-    follow: (finderId: string, operation: "follow" | "unfollow") =>
-      dispatch("/Finder/Follow", { finderId, operation }),
+    /** /Finder/Follow — 关注 (DefaultParamDoc, 通过 query/header 携带 finderId) */
+    follow: (finderId: string) =>
+      dispatch("/Finder/Follow", { finderId }),
 
-    /** /Finder/GetCommentDetail — 评论详情 */
-    getCommentDetail: (commentId: string) =>
-      dispatch("/Finder/GetCommentDetail", { commentId }),
+    /** /Finder/GetCommentDetail — 评论详情 (v1.2.1 swagger-alignment: GetCommentDetailParamDoc {FinderUsername, Id, LastBuffer, ObjectNonceId, RootCommentId}) */
+    getCommentDetail: (finderUsername: string, id: string, rootCommentId = "") =>
+      dispatch("/Finder/GetCommentDetail", {
+        FinderUsername: finderUsername,
+        Id: id,
+        RootCommentId: rootCommentId,
+        LastBuffer: "",
+        ObjectNonceId: "",
+      }),
 
-    /** /Finder/GetCommentList — 评论列表/详情 (支持 RootCommentId 翻页) */
-    getCommentList: (objectId: string, rootCommentId?: string) =>
-      dispatch("/Finder/GetCommentList", { objectId, rootCommentId: rootCommentId ?? "" }),
+    /** /Finder/GetCommentList — 评论列表/详情 */
+    getCommentList: (finderId: string, rootCommentId = "") =>
+      dispatch("/Finder/GetCommentList", { Id: finderId, RootCommentId: rootCommentId }),
 
     /** /Finder/GetRecommend — 推荐 */
-    getRecommend: (page?: number) =>
-      dispatch("/Finder/GetRecommend", { page: page ?? 0 }),
+    getRecommend: () => dispatch("/Finder/GetRecommend", {}),
 
     /** /Finder/Like — 点赞 */
-    like: (objectId: string, operation: "like" | "unlike") =>
-      dispatch("/Finder/Like", { objectId, operation }),
+    like: (finderId: string) =>
+      dispatch("/Finder/Like", { Id: finderId }),
 
     /** /Finder/Search — 用户搜索 */
     search: (keyword: string) => dispatch("/Finder/Search", { keyword }),
 
-    /** /Finder/TargetUserPage — 查看指定人首页 */
-    targetUserPage: (finderId: string) =>
-      dispatch("/Finder/TargetUserPage", { finderId }),
+    /** /Finder/TargetUserPage — 查看指定人首页 (v1.2.1 swagger-alignment: TargetUserPageParamDoc {LastBuffer, Target}) */
+    targetUserPage: (target: string) =>
+      dispatch("/Finder/TargetUserPage", { Target: target, LastBuffer: "" }),
 
     /** /Finder/UserPrepare — 用户中心 */
     userPrepare: () => dispatch("/Finder/UserPrepare", {}),

@@ -1,4 +1,7 @@
 // src/send/translate.ts - Translate tag (2 endpoints: 翻译)
+// v1.1.27 TRANSLATE-FIELD-FIX (2026-08-08 P1-2): 字段名对齐 swagger
+//   Translate.SendRequest: text + source_lang + target_lang + to_wxid + at
+//   Translate.TextRequest: text + source_lang + target_lang
 
 import { postWppJson } from "../api/client.js";
 import { ctxToCallOpts, type WppAccountCtx } from "./factory.js";
@@ -9,13 +12,13 @@ export function makeWppTranslate(ctx: WppAccountCtx) {
     postWppJson(ctx.baseUrl, ep, body, opts);
 
   return {
-    /** /Translate/Send — 翻译并发送 */
-    send: (toWxid: string, content: string, targetLang: string) =>
-      dispatch("/Translate/Send", { toWxid, content, targetLang }),
+    /** /Translate/Send — 翻译并发送 (text + source_lang + target_lang + to_wxid + at) */
+    send: (toWxid: string, text: string, targetLang: string, sourceLang = "zh", at = "") =>
+      dispatch("/Translate/Send", { text, source_lang: sourceLang, target_lang: targetLang, to_wxid: toWxid, at }),
 
-    /** /Translate/Text — 翻译文字 */
-    text: (content: string, targetLang: string) =>
-      dispatch("/Translate/Text", { content, targetLang }),
+    /** /Translate/Text — 翻译文字 (text + source_lang + target_lang) */
+    text: (text: string, targetLang: string, sourceLang = "zh") =>
+      dispatch("/Translate/Text", { text, source_lang: sourceLang, target_lang: targetLang }),
   };
 }
 

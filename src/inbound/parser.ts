@@ -1,6 +1,4 @@
 // src/inbound/parser.ts - vendor JSON payload → normalized WppInboundMessage
-// 范式仿 本项目/src/inbound/parser/payload.ts
-// 关键: 大整数预引号化 (vendor 返回 msgId 不丢精度), 触发源暂标记 "direct" (Phase D 升级为 4-way)
 
 import { PeerKind } from "../core/constants.js";
 import type { WppInboundMessage, WppWebhookPayload } from "../types.js";
@@ -40,10 +38,8 @@ export function payloadToInboundMessage(
   try {
     const obj = payload as Record<string, unknown>;
 
-    // v1.1.15 BUSINESS-CB (2026-08-08 接总立 老板 15:19): vendor 业务回调真实 payload 结构
-    //   { Wxid, EventType, Timestamp, Data: { Code, Success, Message, Data: { AddMsgs: [...], ... } } }
-    //   消息在 AddMsgs[] 数组里 → 返回第一条 (每条一条 inbound, 多条让上层递归循环)
-    //   之前假设顶层/扁平都不对 → parser 丢全部业务回调消息
+    // vendor 业务回调: { Wxid, EventType, Timestamp, Data: { ..., Data: { AddMsgs: [...] } } }
+    // 消息在 AddMsgs[] → 取第一条
     if (obj.EventType === "sync_message" && obj.Data) {
       const dataOuter = obj.Data as Record<string, unknown>;
       const dataInner = dataOuter.Data as Record<string, unknown> | undefined;
@@ -56,7 +52,7 @@ export function payloadToInboundMessage(
       return null; // 无 AddMsgs 不认
     }
 
-    // v1.1.15 WEBHOOK-WRAP (vendor /Webhook/Set 推送): 顶层 Wxid + Data 内层消息
+    // vendor webhook 推送: 顶层 Wxid + Data 内层消息
     const wrappedData = obj.Data as Record<string, unknown> | undefined;
     const topMsgType = obj.MessageType;
     let src: Record<string, unknown> = obj;
@@ -97,6 +93,7 @@ export function payloadToInboundMessage(
     ts = Math.floor(ts);
 
     const peerKind = chatroomIdStr ? PeerKind.GROUP : PeerKind.DIRECT;
+    // 群聊 peerId = chatroomId; 私聊先 fallback fromWxid (peerId 方向修正见 handler.ts selfWxid 判断)
     const peerId = chatroomIdStr ?? fromWxid;
 
     return {
@@ -124,33 +121,10 @@ export function payloadToInboundMessage(
 export const parseInbound = payloadToInboundMessage;
 
 /**
- * v1.1.15 BUSINESS-CB (2026-08-08): 从 payload 提取所有消息 (处理 AddMsgs[] 多条)
- * 业务回调可能 AddMsgs 含 1..N 条, 普通 webhook 含 1 条
- * 返回空数组 表示跳过 (sync_message 空 / 其他类型)
- */
-
-/**
- * v1.1.17 FULL-FIX (P1, 2026-08-08 老板指令): 解析 vendor v1 真实消息格式
- * 真实 payload (17:20 日志实测, schema=wechatpad.message.v1):
- *   {
- *     content: string,             // 文本原文 / XML
- *     conversation_id: string,     // 会话 id (gh_=公众号, wxid_=好友, xxx@chatroom=群)
- *     created_at: number,          // epoch 秒
- *     direction: "incoming"|"outgoing",
- *     id: "2371605221780442944",   // 大整数 msgId (字符串)
- *     is_group: boolean,
- *     kind: "status"|"text"|"image"|...,
- *     local_id: number,
- *     recipient_id: string,        // 接收者 wxid (self 或群)
- *     sender_id: string,           // 发送者 wxid
- *     status: number,
- *     type: number                 // 1=文本, 51=系统操作, etc.
- *   }
- * 过滤规则 (只保留可交互的入站消息):
- *   - direction !== "incoming" → null (出站消息由 outbound persist 记录, 不触发 AI)
- *   - kind === "status" → null (系统状态消息, 无交互价值)
- *   - sender_id 以 gh_ 开头 → null (公众号/服务号消息, bot 不回复)
- *   - type 51 (系统操作 op) → null (XML op 消息, 非用户内容)
+ * 解析 vendor v1 消息格式 (schema=wechatpad.message.v1):
+ *   { content, conversation_id, created_at, direction, id, is_group, kind,
+ *     local_id, recipient_id, sender_id, status, type }
+ * 过滤规则 (只保留可交互入站): 非 incoming / kind=status / sender_id 以 gh_ 开头 / type=51 → null
  */
 function parseV1Message(
   accountId: string,
@@ -164,30 +138,51 @@ function parseV1Message(
   const senderId = str2(msg.sender_id) ?? "";
   const recipientId = str2(msg.recipient_id);
   const direction = str2(msg.direction);
+  /** filehelper 会话识别 (conversation_id 或 recipient_id = filehelper) */
+  const conversationIdOrFileHelper = (m: Record<string, unknown>): string | undefined =>
+    str2(m.conversation_id) ?? recipientId;
   const kind = str2(msg.kind);
   const msgType = num(msg.type, 1);
   const content = str2(msg.content) ?? "";
   const rawMsgId = str2(msg.id) ?? "";
+  const v1NewMsgId = str2(msg.new_msg_id) ?? str2(msg.svr_id) ?? "";
   const createdAt = num(msg.created_at, Date.now() / 1000);
 
   // 过滤: 非入站 / 系统状态 / 公众号 / 系统操作
-  if (direction && direction !== "incoming") return null;
+  // v1.3.21 REVOKE-FIX (2026-08-10): 放行 outgoing 图片 (kind=image / msgType=3) —
+  //   插件自己发的图片, vendor 会推送回 WPP (business callback), 过滤掉就拿不到真实 server ID,
+  //   图片撤回需要它 (UploadImg 返回的 Newmsgid 是上传凭证, 非 server 消息 ID)。
+  //   其它 outgoing (文本/语音/视频) 仍过滤 (AI 回复进上下文会混乱)。
+  const isOutgoingImage =
+    direction && direction !== "incoming" && (kind === "image" || msgType === 3);
+  // v1.3.39 FILEHELPER (老板 2026-08-11): filehelper 只放行**命令** (非命令仍过滤)
+  //   老板在机器人手机的文件传输助手里发命令 (/genpair 等) → 放行; 普通消息不放行 (不进 AI)
+  const isFileHelper = recipientId === "filehelper" || conversationIdOrFileHelper(msg) === "filehelper";
+  const isFileHelperCommand = isFileHelper && /^\s*\//.test(content);
+  if (direction && direction !== "incoming" && !isOutgoingImage && !isFileHelperCommand) return null;
   if (kind === "status") return null;
   if (!senderId) return null;
   if (senderId.startsWith("gh_")) return null;
   if (msgType === 51) return null;
 
-  const isGroup = msg.is_group === true || senderId.endsWith("@chatroom") || (recipientId ?? "").endsWith("@chatroom");
-  const chatroomWxid = senderId.endsWith("@chatroom") ? senderId : (recipientId?.endsWith("@chatroom") ? recipientId : undefined);
+  // 群聊必须按 groupId 建 session (否则按人拆, 群上下文串台): 优先级 conversation_id > recipient_id > sender_id
+  const conversationId = str2(msg.conversation_id);
+  const groupCandidates = [conversationId, recipientId, senderId].filter((v): v is string => typeof v === "string" && v.endsWith("@chatroom"));
+  const chatroomWxid = groupCandidates[0];
+  const isGroup = msg.is_group === true || chatroomWxid !== undefined;
   const peerKind = isGroup ? PeerKind.GROUP : PeerKind.DIRECT;
-  const peerId = chatroomWxid ?? senderId;
+  // v1.3.39 FILEHELPER: filehelper 特殊会话 peerId=filehelper (命令处理识别用)
+  //   (senderId 是机器人自己, 若用 senderId 作 peerId 会无法识别 filehelper 会话)
+  const isFileHelperPeer = conversationId === "filehelper" || recipientId === "filehelper";
+  // 群聊 peerId=groupId; 私聊先 fallback senderId (方向修正见 handler.ts selfWxid 判断)
+  const peerId = chatroomWxid ?? (isFileHelperPeer ? "filehelper" : senderId);
   const ts = Math.floor(createdAt);
 
   // content 是 XML 时保留原文 (上层 quoteBot / XML 解析处理)
   return {
     accountId,
     msgId: rawMsgId || `${ts}-${Math.random().toString(36).slice(2, 10)}`,
-    newMsgId: "",
+    newMsgId: v1NewMsgId,
     fromWxid: senderId,
     fromNickname: undefined,
     chatroomId: chatroomWxid,
@@ -198,6 +193,8 @@ function parseV1Message(
     raw: msg as unknown as WppWebhookPayload,
     peerKind,
     peerId,
+    // v1.3.21 REVOKE-FIX: 透传 direction (outgoing 图片需标 outbound, enrich 入库方向才正确)
+    direction: direction === "incoming" ? ("inbound" as const) : ("outbound" as const),
     trigger: "direct",
   };
 }
@@ -208,9 +205,7 @@ export function payloadToAllInboundMessages(
 ): WppInboundMessage[] {
   try {
     const obj = payload as Record<string, unknown>;
-    // 业务回调: 逐条 parse (支持两种 vendor 格式)
-    //   v1 (真实, 2026-08-08 17:20 日志实测): Data.messages[] { sender_id, recipient_id, type, id, created_at, is_group, direction, kind, content }
-    //   旧 (v1.1.15 假设): Data.Data.AddMsgs[] { FromUserName, ToUserName, MsgType, MsgId, ... }
+    // 业务回调逐条 parse, 支持两种 vendor 格式: v1 Data.messages[] / 旧 Data.Data.AddMsgs[]
     if (obj.EventType === "sync_message" && obj.Data) {
       const dataOuter = obj.Data as Record<string, unknown>;
       const out: WppInboundMessage[] = [];
@@ -246,16 +241,11 @@ export function payloadToAllInboundMessages(
 }
 
 /**
- * v1.1.15 BUSINESS-CB (2026-08-08): 解析 vendor business callback 单条消息
- * vendor 字段都是 {string: "..."} 包装 (内部 JSON 序列化) + XML 包裹 Content (MsgType=1 文本是纯文本, 其他是 XML)
- *
- * 字段处理:
- *   - FromUserName: {string: "q139198824"} → 解包为字符串
- *   - ToUserName: {string: "wxid_xxx"} / "@chatroom" → 解包
- *   - Content: {string: "..."} → 解包 (文本/XML 原文)
- *   - MsgType: 数字 (1=文本, 51=操作, 47=emoji, etc.)
- *   - NewMsgId: 大整数 (注意精度)
- *   - 群聊识别: ToUserName 结尾是 "@chatroom" + MsgSource 含 membercount
+ * 解析 vendor business callback 单条消息
+ * vendor 字段都是 {string: "..."} 包装 (内部 JSON 序列化); MsgType=1 纯文本, 其他是 XML
+ *   - FromUserName/ToUserName/Content → 解包 {string: ...} 为字符串
+ *   - NewMsgId 大整数 (注意精度)
+ *   - 群聊识别: FromUserName/ToUserName 结尾 "@chatroom"
  */
 function parseBusinessCallbackMsg(
   accountId: string,
@@ -282,7 +272,6 @@ function parseBusinessCallbackMsg(
   if (!fromWxid) return null;
 
   // 群聊识别: FromUserName 或 ToUserName 结尾是 "@chatroom"
-  // (老板 15:20 真实消息: FromUserName=57237508162@chatroom 是群id, ToUserName=q139198824 是老板自己 wxid)
   const isGroup = (fromWxid?.endsWith("@chatroom") ?? false) || (toWxid?.endsWith("@chatroom") ?? false);
   const chatroomWxid = fromWxid?.endsWith("@chatroom") ? fromWxid : (toWxid?.endsWith("@chatroom") ? toWxid : undefined);
   const peerKind = isGroup ? PeerKind.GROUP : PeerKind.DIRECT;

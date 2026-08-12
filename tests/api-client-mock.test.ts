@@ -30,7 +30,7 @@ beforeEach(() => {
 });
 
 test("FIX-A6 mock — vendor 500 触发 retry 模式 (3rd attempt 成功)", async () => {
-  let callCount = 0;
+  const callCount = 0;
   mockAgent
     .get(MOCK_ORIGIN)
     .intercept({ method: "POST", path: "/api/retry-test" })

@@ -1,37 +1,22 @@
-// src/send/quote-xml.ts - 引用回复 XML 构造 (v1.1.30 GEWE-PARITY)
-// 2026-08-08 21:19 接总立分析 gewe 实现后的修正:
-//   gewe send/quote.js 的极简结构是 vendor 服务器端期望的格式 — 我之前加的 6+字段是错的!
-//
-// gewe 实现 (dist/send/quote.js):
-//   export async function gewePostQuoteReply(account, toWxid, quoteDetails, replyContent) {
-//     const safeTitle = escapeXmlText(replyTitle);
-//     const safeSvrid = escapeXmlText(quoteDetails.msgId?.trim() || "");
-//     const refermsg = safeSvrid ? `<refermsg><svrid>${safeSvrid}</svrid></refermsg>` : "";
-//     const appMsgXml = `<appmsg><title>${safeTitle}</title><type>57</type>${refermsg}</appmsg>`;
-//     return gewePostAppMsg(account, toWxid, appMsgXml);
-//   }
-//
-// 关键洞察:
-//   1. **refermsg 只放 svrid** — 微信服务器端用 svrid 查原消息补全 (缩略图 + 定位)
-//   2. **不加 content/fromusr/displayname/createtime** — 这些字段让微信客户端解析混乱
-//   3. **svrid 用 inbound NewMsgId** (vendor 全局唯一 ID) — 不是 msgId 也不是手工映射
-//   4. **AI 多模态上下文** — gewe handler.ts:180 把原图 OSS URL push 到 mediaList → AI 看到图 → 生成内容
-//   5. **图片引用缩略图** — 微信服务器端从 svrid 查原消息 → 渲染缩略图 (因为 svrid 是真 svrid)
-//
-// 之前 WPP 实现的 4 个错误:
-//   ① 加了 refermsg.content (图片 XML 原样嵌入/转义) — vendor 不解析, 客户端混乱
-//   ② 加了 fromusr/chatusr/displayname/createtime — 客户端解析但跟服务器端冲突
-//   ③ svrid 用 resolveQuoteSvrid() 映射表/fallback msgId — 不是真 svrid
-//   ④ handler.ts 没把原图 push 到 AI 多模态上下文 — AI 看图要靠运气
+// src/send/quote-xml.ts - 引用回复 XML 构造
+// 关键: appmsg type=57 客户端主气泡读 <title> 字段, <des> 在 type=57 被吞。
+// 因此 title = AI 回复文字 (gewe 工作基线), 不能放被引用人 displayname (否则只显示 refermsg 预览)。
 
 export interface QuoteSource {
   /** 被引用消息的 svrid (= inbound NewMsgId, vendor 全局唯一) */
   svrid: string;
-  /** gewe 兼容字段 (保留字段但极简 XML 不用) */
+  /** 被引用消息的发送者 wxid */
   fromusr?: string;
+  /** 被引用消息的所属会话 wxid (群聊时 = 群id, 私聊时 = 对方 wxid) */
+  chatusr?: string;
+  /** 被引用消息的发送者昵称 (用于引用块展示) */
   displayname?: string;
+  /** 被引用消息的原文 (文本=原文, 图片=图片 XML) */
   content?: string;
+  /** 被引用消息的创建时间 (秒) */
   createtime?: number;
+  /** 被引用消息的类型 (1=text 3=image 34=voice 43=video 47=emoji 49=app) */
+  innerType?: number;
 }
 
 function escapeXml(s: string): string {
@@ -44,21 +29,28 @@ function escapeXml(s: string): string {
 }
 
 /**
- * 构造引用回复 XML (appmsg type=57 + 极简 refermsg)
- * 仿 gewe send/quote.js: 只放 svrid, 其他字段交给微信服务器端从 svrid 查原消息补全
- * @param replyContent 要发送的回复内容
- * @param quote 被引用消息信息 (svrid 是必填 = inbound NewMsgId)
+ * 引用回复 XML: title=des=AI 回复 (双填保险, 老客户端可能读 des), type=57, refermsg=svrid+fromusr
  */
 export function buildQuoteReplyXml(
   replyContent: string,
   quote: QuoteSource,
+  opts?: { innerType?: 57 | 49 },
 ): string {
-  const title = escapeXml((replyContent || "引用回复").trim().slice(0, 200));
+  const innerType = opts?.innerType ?? 57;
+  const reply = (replyContent || "引用回复").trim();
+  const title = escapeXml(reply.slice(0, 500));
+  const des = escapeXml(reply.slice(0, 500));
+
+  // refermsg 极简化 (gewe 基线): 仅 svrid 客户端已能渲染; 加 fromusr 兼容老版本回查昵称
   const svrid = escapeXml(quote.svrid.trim());
+  const fromusr = quote.fromusr ? escapeXml(quote.fromusr) : "";
 
-  // v1.1.30 GEWE-PARITY: 极简结构 — 仅 svrid
-  // 微信服务器端会用 svrid 查原消息补全 (渲染缩略图 + 提供定位跳转)
-  const refermsg = svrid ? `<refermsg><svrid>${svrid}</svrid></refermsg>` : "";
+  const refermsg = svrid
+    ? `<refermsg>` +
+      `<svrid>${svrid}</svrid>` +
+      (fromusr ? `<fromusr>${fromusr}</fromusr>` : "") +
+      `</refermsg>`
+    : "";
 
-  return `<appmsg><title>${title}</title><type>57</type>${refermsg}</appmsg>`;
+  return `<appmsg><title>${title}</title><des>${des}</des><type>${innerType}</type>${refermsg}</appmsg>`;
 }

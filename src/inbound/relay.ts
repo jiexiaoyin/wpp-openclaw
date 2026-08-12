@@ -58,17 +58,32 @@ function parseRecordItem(block: string, idx: number): RelayItem {
 }
 
 function parsePlainList(text: string): RelayItem[] {
-  // vendor 常见: "1. Alice: 我...\n2. Bob: ..."
+  // 统一处理: 先按 \n 分行, 非 "N." 开头的行合并到上一条 (条目内换行延续, 如 "2. 倪彩霞\ngt7")
+  //   再按 `\d+\.` 切分成条目 (支持单行 "1. 2. 倪彩霞 gt7 3. ..." 和无换行混合)
   const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-  return lines
-    .map((line, i): RelayItem | null => {
-      const m = line.match(/^(\d+)\.\s*(?:([^:]+):)?\s*(.*)$/);
+  // 合并: 不以 \d+. 开头的行 → 追加到上一条 (条目内换行)
+  const merged: string[] = [];
+  for (const line of lines) {
+    if (/^\d+\.\s/.test(line)) {
+      merged.push(line);
+    } else if (merged.length > 0) {
+      merged[merged.length - 1] += " " + line;
+    } else {
+      // 前导描述 (接龙标题等), 忽略
+    }
+  }
+  // 按 `\d+\.` 切分 (支持单行多条 + 已合并的多行)
+  const chunks = merged.join("\n").split(/(?=\d+\.\s)/).filter((c) => /^\d+\.\s/.test(c.trim()));
+  return chunks
+    .map((chunk, i): RelayItem | null => {
+      const m = chunk.trim().match(/^(\d+)\.\s*(.*)$/);
       if (!m) return null;
-      const [, idxStr, nickname, content] = m;
+      const [, idxStr, rest] = m;
+      // 保守解析: 只按序号切开, 整段保留原文 (老板 2026-08-11 指正:
+      //   接龙用户可改/删昵称, 不能假设首词=昵称 — 让 AI 从上下文理解)
       return {
         index: Number(idxStr ?? i + 1),
-        nickname: nickname?.trim(),
-        text: content?.trim(),
+        text: rest?.trim() || undefined,
       };
     })
     .filter((x): x is RelayItem => x !== null);

@@ -1,25 +1,35 @@
 // src/dispatch/agent-tools/finder-meta.ts - Finder tag (15)
+// v1.3.18 P1-核心1 fix (2026-08-10): 改成 lazy-evaluate ctx 模式
+// 注: follow/like/comment/finderLiveDetail 等与 api 签名差异保留 — 跟原版一样 (meta schema 描述与 api 实际参数不一致是历史问题)
 
 import { Type } from "typebox";
 import type { ToolMeta } from "./_shared.js";
 import { makeWppFinder } from "../../send/finder.js";
-import type { WppAccountCtx } from "../../send/factory.js";
+import { getDefaultAccountRegistry } from "../../account-state.js";
 
-const ctx: WppAccountCtx = { baseUrl: "", tokenKey: "", accountId: "" };
-const api = makeWppFinder(ctx);
+function getFinderApi() {
+  const state = getDefaultAccountRegistry().get("default");
+  if (!state) throw new Error("account not found: default");
+  return makeWppFinder({
+    baseUrl: state.config.apiBaseUrl,
+    tokenKey: state.config.tokenKey,
+    authcode: state.authcode,
+    accountId: "default",
+  });
+}
 
 export const FINDER_META: ToolMeta = {
   /** /Finder/Search */
   searchFinderUser: [
     "搜索视频号用户.",
     Type.Object({ keyword: Type.String() }),
-    api.search,
+    (keyword: string) => getFinderApi().search(keyword),
   ],
   /** /Finder/GetRecommend */
   getFinderRecommend: [
     "获取视频号推荐流.",
     Type.Object({ page: Type.Optional(Type.Number()) }),
-    api.getRecommend,
+    () => getFinderApi().getRecommend(),
   ],
   /** /Finder/Follow */
   followFinderUser: [
@@ -28,7 +38,7 @@ export const FINDER_META: ToolMeta = {
       finderId: Type.String(),
       operation: Type.Union([Type.Literal("follow"), Type.Literal("unfollow")]),
     }),
-    api.follow,
+    (finderId: string) => getFinderApi().follow(finderId),
   ],
   /** /Finder/Like */
   likeFinderPost: [
@@ -37,36 +47,96 @@ export const FINDER_META: ToolMeta = {
       objectId: Type.String(),
       operation: Type.Union([Type.Literal("like"), Type.Literal("unlike")]),
     }),
-    api.like,
+    (objectId: string) => getFinderApi().like(objectId),
   ],
   /** /Finder/Comment */
   commentFinderPost: [
     "评论视频号内容.",
     Type.Object({ objectId: Type.String(), content: Type.String() }),
-    api.comment,
+    // 原版 api.comment(objectId, content) (username=objectId 是历史 bug, 与 v1.3.18 修复无关 — 不优化)
+    (objectId: string, content: string) => getFinderApi().comment(objectId, "", content),
   ],
   /** /Finder/FinderSendText */
   sendFinderDm: [
     "发视频号私信.",
     Type.Object({ sessionId: Type.String(), content: Type.String() }),
-    api.finderSendText,
+    (sessionId: string, content: string) => getFinderApi().finderSendText(sessionId, content),
   ],
   /** /Finder/TargetUserPage */
   getFinderUserPage: [
     "获取指定视频号用户主页数据.",
     Type.Object({ finderId: Type.String() }),
-    api.targetUserPage,
+    (finderId: string) => getFinderApi().targetUserPage(finderId),
   ],
   /** /Finder/UserPrepare */
   getFinderMine: [
     "获取当前账号的视频号中心信息.",
     Type.Object({}),
-    api.userPrepare,
+    () => getFinderApi().userPrepare(),
   ],
   /** /Finder/FinderLiveDetail */
   getFinderLiveDetail: [
     "获取视频号直播详情.",
     Type.Object({ liveId: Type.String() }),
-    api.finderLiveDetail,
+    // 原版 api.finderLiveDetail(liveId) (finderNonceId 缺省, 是历史不一致, 不优化)
+    (liveId: string) => getFinderApi().finderLiveDetail(liveId, ""),
+  ],
+  /**
+   * v1.3.20 P3-FINDER: /Finder/Decrypt — 评论内容解密.
+   */
+  decryptFinderComment: [
+    "解密视频号评论内容 (encryptedContent 是加密串).",
+    Type.Object({ encryptedContent: Type.String() }),
+    (encryptedContent: string) => getFinderApi().decrypt(encryptedContent),
+  ],
+  /**
+   * v1.3.20 P3-FINDER: /Finder/FinderGetMsgSessionId — 获取私信会话 ID.
+   */
+  getFinderMsgSessionId: [
+    "获取视频号私信会话 ID.",
+    Type.Object({ toFinderId: Type.String() }),
+    (toFinderId: string) => getFinderApi().finderGetMsgSessionId(toFinderId),
+  ],
+  /**
+   * v1.3.20 P3-FINDER: /Finder/FinderSearchList — 搜索列表.
+   */
+  searchFinderList: [
+    "获取视频号搜索列表.",
+    Type.Object({}),
+    () => getFinderApi().finderSearchList(),
+  ],
+  /**
+   * v1.3.20 P3-FINDER: /Finder/Findergettopiclist — 主题列表.
+   */
+  getFinderTopicList: [
+    "获取视频号主题列表.",
+    Type.Object({
+      topTitle: Type.Optional(Type.String({ description: "顶部标题 (可选)" })),
+    }),
+    (topTitle?: string) => getFinderApi().finderGetTopicList(topTitle ?? ""),
+  ],
+  /**
+   * v1.3.20 P3-FINDER: /Finder/GetCommentList — 评论列表/详情.
+   */
+  getFinderCommentList: [
+    "获取视频号评论列表 (rootCommentId 可选用于翻页).",
+    Type.Object({
+      objectId: Type.String({ description: "视频号内容 Id" }),
+      rootCommentId: Type.Optional(Type.String()),
+    }),
+    (objectId: string, rootCommentId?: string) => getFinderApi().getCommentList(objectId, rootCommentId ?? ""),
+  ],
+  /**
+   * v1.3.20 P3-FINDER: /Finder/GetCommentDetail — 评论详情.
+   */
+  getFinderCommentDetail: [
+    "获取视频号评论详情.",
+    Type.Object({
+      finderUsername: Type.String(),
+      objectId: Type.String({ description: "内容 Id" }),
+      rootCommentId: Type.Optional(Type.String()),
+    }),
+    (finderUsername: string, objectId: string, rootCommentId?: string) =>
+      getFinderApi().getCommentDetail(finderUsername, objectId, rootCommentId ?? ""),
   ],
 };

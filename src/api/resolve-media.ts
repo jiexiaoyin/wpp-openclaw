@@ -1,0 +1,82 @@
+// src/api/resolve-media.ts - 媒体路径/URL/base64 → base64 统一解析
+//
+// 把本地路径 / URL / data URL 转成 base64 (/Msg/UploadImg 需要)
+//  - HTTP 下载加 30s 超时 + 15MB size cap (防 vendor 不可达挂起 / 大文件 OOM)
+//  - 错误消息脱敏 (URL 含签名 CDN query, 不能带完整 URL 上抛)
+//  - 本地路径限制到 workspace/media (防 AI 诱导读任意文件外带)
+// v1.3.18 P1-安全1: readLocalMedia 三重防御 (path.resolve + `..` 拒绝 + 精确包含校验)
+
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
+export async function resolveImageToBase64(input: string): Promise<string> {
+  if (!input) throw new Error("resolveImageToBase64: empty input");
+  const m = DATA_URI_RE.exec(input);
+  if (m && m[1]) return m[1].trim();
+  if (/^https?:\/\//i.test(input)) {
+    const MAX_BYTES = 15 * 1024 * 1024; // 15MB cap
+    let r: Response;
+    try {
+      r = await fetch(input, { signal: AbortSignal.timeout(30_000) });
+    } catch {
+      throw new Error(`resolveImageToBase64: download failed (${sanitizeHost(input)})`);
+    }
+    if (!r.ok) throw new Error(`resolveImageToBase64: HTTP ${r.status} (${sanitizeHost(input)})`);
+    const cl = Number(r.headers.get("content-length") ?? 0);
+    if (cl > MAX_BYTES) throw new Error(`resolveImageToBase64: too large ${cl}B`);
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > MAX_BYTES) throw new Error(`resolveImageToBase64: too large ${buf.length}B`);
+    return buf.toString("base64");
+  }
+  if (input.startsWith("file://")) {
+    const p = input.slice("file://".length);
+    return (await readLocalMedia(p)).toString("base64");
+  }
+  //    base64 特征: 长度 ≥16 且只含 A-Za-z0-9+/=
+  const isPureBase64 = input.length >= 16 && /^[A-Za-z0-9+/=]+$/.test(input) && input.length % 4 === 0;
+  if (isPureBase64) return input.trim();
+  if (input.startsWith("/") || input.startsWith("./") || input.startsWith("../")) {
+    return (await readLocalMedia(input)).toString("base64");
+  }
+  return input.trim();
+}
+
+/**
+ * v1.3.18 P1-安全1 fix (2026-08-10): path.resolve 归一化 + 拒绝 .. + 精确包含校验
+ *
+ * 原版仅做前缀匹配 `abs.startsWith(root)`, 攻击者构造 `/root/.openclaw/media/../../etc/passwd`
+ * 时前缀命中但真实路径是 `/etc/passwd` → 任意文件读取. v1.3.18 三重防御:
+ *   1. 拒绝任何包含 `..` 段的路径 (防御性)
+ *   2. path.resolve 归一化 (消解 `..`, 解析符号链接)
+ *   3. 精确校验 (归一化后必须真实在 allowedRoots 目录树下)
+ */
+export async function readLocalMedia(p: string): Promise<Buffer> {
+  const allowedRoots = [
+    "/root/.openclaw/media",
+    "/root/.openclaw/workspace",
+    "/root/.openclaw/shared-media",
+  ];
+  const normalized = path.normalize(p);
+  if (normalized.split(/[\\/]/).includes("..")) {
+    throw new Error("resolveImageToBase64: path contains .. segment");
+  }
+  const abs = path.resolve(p);
+  if (!allowedRoots.some((root) => {
+    const rootWithSep = root.endsWith("/") ? root : root + "/";
+    return abs === root || abs.startsWith(rootWithSep);
+  })) {
+    throw new Error("resolveImageToBase64: local path outside allowed media dirs");
+  }
+  return readFile(abs);
+}
+
+/** 错误消息脱敏: 只保留 host, 去掉 URL query (可能含签名 CDN 参数) */
+function sanitizeHost(url: string): string {
+  try {
+    return new URL(url).host || "url";
+  } catch {
+    return "url";
+  }
+}
+
+const DATA_URI_RE = /^data:[^;]+;base64,(.+)$/i;

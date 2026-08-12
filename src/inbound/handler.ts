@@ -1,5 +1,4 @@
 // src/inbound/handler.ts - 主入口 (debouncer + 4-way triggers + enrich)
-// 仿 本项目/src/inbound/handler.ts createWppInboundHandler
 
 import { info, warn, logObj as log, formatErr } from "../core/logger.js";
 import {
@@ -12,8 +11,9 @@ import {
   type WppAccountTriggerCtx,
 } from "./triggers.js";
 import { enrichBatch } from "./enrich.js";
-import { parseQuoteXml } from "./parser/quote.js";
+import { parseQuoteXml, extractReferencedFromReplyContext, extractReferencedFromApp } from "./parser/quote.js";
 import { captureQuoteSvrid } from "./quote-svrid.js";
+import { extractPairCode } from "../pairing-store.js";
 import { getMessageById } from "../storage/db/messages.js";
 import { getMessageByMsgIdOrNewId } from "../db.js";
 import { parseRelayText } from "./relay.js";
@@ -21,9 +21,56 @@ import { isRedPacketMessage, processRedPacket } from "./hongbao.js";
 import { extractAtUserList } from "./parser/mention.js";
 import { payloadToAllInboundMessages } from "./parser.js";
 import { SeenTracker, buildDedupeKey } from "../webhook-receiver.js";
-import { enrichImageMessage } from "./media-enrich.js";
+import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1Cdn, enrichFileMessage, enrichFileMessageFromV1Binary, enrichVideoMessage, enrichVideoMessageFromV1, isV1SchemaVideo, enrichVoiceMessage, enrichVoiceMessageFromV1, isV1SchemaVoice, enrichFileMessageViaMcp, isV1SchemaImage, isV1SchemaFile, type ImageEnrichResult, type MediaEnrichResult } from "./media-enrich.js";
+import { getDefaultAccountRegistry } from "../account-state.js";
 import type { WppInboundMessage, WppWebhookPayload } from "../types.js";
 import type { WppAccountCtx } from "../send/factory.js";
+import { stringifyLargeInts } from "../util/bigint.js"; // v1.3.27 P2-2: 调试日志防 16+ 位整数丢精度
+
+// 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
+// 解法: enrich 时 trackEnrich 记录 promise, 触发 dispatch 前 waitForPendingEnrich 等待同 sender 的 enrich 完成。
+const pendingEnrichs = new Map<string, Promise<void>>();
+
+/** 追踪一次 enrich (key = accountId:sender, 同 sender 串行) */
+function trackEnrich<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const p = fn().finally(() => pendingEnrichs.delete(key));
+  // 存 Promise<void> 变体 (只等完成), waitForPendingEnrich 用
+  pendingEnrichs.set(key, p.then(() => undefined));
+  return p;
+}
+
+/**
+ * 等待同 sender 的 pending enrich 完成 (触发 dispatch 前调, 防 AI 看不到刚发的文件/图)。
+ * 超时降级: 极端大文件下载超时 → 不阻塞触发 (AI 少看到该文件, 可接受)。
+ */
+export async function waitForPendingEnrich(
+  accountId: string,
+  sender: string,
+  timeoutMs = 10_000,
+): Promise<void> {
+  const p = pendingEnrichs.get(`${accountId}:${sender}`);
+  if (!p) return;
+  try {
+    await Promise.race([p, new Promise<void>((r) => setTimeout(r, timeoutMs))]);
+  } catch {
+    /* enrich 失败不阻塞 */
+  }
+}
+
+/** 测试用: 清空 pending enrich (隔离) */
+export function clearPendingEnrichs(): void {
+  pendingEnrichs.clear();
+}
+
+/**
+ * 测试用: 模拟一个 pending enrich (用于 waitForPendingEnrich 真测)
+ * 镜像私有 trackEnrich: 注册一个 promise, 完成后清理
+ * v1.3.18: 加此 helper 让 tests/pending-enrich.test.ts 能真测 "有 pending 时等待完成"
+ */
+export function __testSetPendingEnrich(key: string, fn: () => Promise<unknown>): void {
+  const p = fn().finally(() => pendingEnrichs.delete(key));
+  pendingEnrichs.set(key, p.then(() => undefined));
+}
 
 export interface WppInboundHandlerOpts {
   accountId: string;
@@ -31,20 +78,24 @@ export interface WppInboundHandlerOpts {
   triggerCtx: WppAccountTriggerCtx;
   /** 是否真发 (false = debug 模式, enrich 但不 dispatch) */
   enableDispatch?: boolean;
-  /** 外部 dispatcher hook (Phase F 接入 OpenClaw runtime) — 暂记日志 */
+  /** 外部 dispatcher hook (接入 OpenClaw runtime) — 暂记日志 */
   onDispatch?: (msg: WppInboundMessage, batch: WppInboundMessage[]) => void | Promise<void>;
+  /** v1.2.3 PAIRING: 账号是否启用 DM 配对 (accounts/<id>.json 显式 dmPairingEnabled: true) — 热切走 triggerCtx, 此为创建时快照兜底 */
+  dmPairingEnabled?: boolean;
+  /** v1.2.4 GROUP-CONTEXT: 是否缓冲非触发群消息进上下文 (默认 false, 显式 true 才开启) — 热切走 triggerCtx */
+  groupContextEnabled?: boolean;
+  /** v1.2.3 PAIRING: 配对拦截回调 — 由 index.ts wire. handler 只识别/解析/调用, 不做 fs/发送副作用 */
+  onPairingAttempt?: (ctx: { msg: WppInboundMessage; code: string }) => void | Promise<void>;
+  /** v1.3.39 FILEHELPER: filehelper 命令回调 (只处理命令, 非命令仍过滤) — 由 index.ts wire */
+  onFileHelperCommand?: (ctx: { msg: WppInboundMessage; command: string }) => void | Promise<void>;
   /** 是否把 chat-history (type=53) 解析成接龙 items 注入 prompt */
   parseRelay?: boolean;
-  /**
-   * v1.1.20 IMAGE-ENRICH (2026-08-08 接总立): 图片消息自动下载+OSS 上传的 vendor ctx
-   * (baseUrl/tokenKey/authcode — 调 /Tools/CdnDownloadImage 用)
-   */
+  /** vendor ctx (baseUrl/tokenKey/authcode) — 媒体下载/OSS 上传用 */
   vendorCtx?: WppAccountCtx;
-  /**
-   * v1.1.16 P0-FIX (2026-08-08): DM allowFrom 白名单 (从 accounts/<id>.json 读, 透传给 trigger)
-   * handler 读这个字段而不是自己再 get config, 让 caller (index.ts startAllAccounts) 负责加载
-   */
+  /** DM allowFrom 白名单 (caller 加载, handler 透传给 trigger) */
   allowFrom?: string[];
+  /** v1.2.0 VENDOR-MCP: 是否启用 MCP 文件增强 (默认 true; false 则纯确定性回复兜底) */
+  mcpEnabled?: boolean;
 }
 
 /**
@@ -56,32 +107,236 @@ export function createWppInboundHandler(
 ): { handle: (payload: WppWebhookPayload) => Promise<void>; flushAll: () => Promise<void> } {
   const debouncer = new WppInboundDebouncer({
     onFlush: async (batch) => {
-      // v1.1.29 ENRICH-ORDER-FIX (2026-08-08 21:10 接总立: DB 不存 OSS URL):
-      //   之前顺序: enrichBatch (DB save 原始 m.content) → enrich (内存修改 m.content)
-      //   问题: DB 存的是原始 XML, AI 看的是 enrich 后的 m.content (内存引用同步, OK)
-      //   但 21:00:15 enrich 失败那次 AI 看不到 URL 且 DB 也无 URL
-      //   fix: 先 enrich (失败也跳, 不阻塞 DB save) → enrichBatch (DB 落 enrich 后的 content)
-      // Step 1: image enrich (先 enrich 再 save, 让 DB 也带 OSS URL)
+      // 先 enrich (DB 也带 OSS URL) 再 save; enrich 失败不阻塞 (非致命)
       for (const m of batch) {
-        // v1.1.20 IMAGE-ENRICH (2026-08-08 接总立): 图片消息 (msg_type=3) 自动下载 + OSS 上传
-        // 仿 gewe enrich.js: vendor CdnDownloadImage → ossutil → 公网 URL → 注入 content
-        //   AI 视觉模型看到 URL 即识别内容 (老板 18:42 拍板, 18:46 参考 gewe 模式)
-        if (m.msgType === 3 && opts.vendorCtx && m.content.includes("<img")) {
-          try {
-            const imgR = await enrichImageMessage(opts.vendorCtx, m.content);
-            if (imgR.mediaUrl) {
-              // 注入 content 尾部 — DB 落库 + dispatch Body 都带 URL
-              m.content = `${m.content}\n[图片] ${imgR.mediaUrl}`;
-              log.info(`[WPP v1.1.20] image enrich ok: msgId=${m.msgId} url=${imgR.mediaUrl}`);
+        // 图片: v0 schema (content 含 <img> XML) 走 CdnDownloadImage 完整大图; v1 schema (无 XML) 走 DownloadImg 64KB
+        if (m.msgType === 3 && opts.vendorCtx) {
+          const v0Path = m.content.includes("<img");
+          if (v0Path) {
+            try {
+              const imgR = await enrichImageMessage(opts.vendorCtx, m.content);
+              if (imgR.mediaUrl) {
+                m.content = `${m.content}\n[图片] ${imgR.mediaUrl}`;
+                log.info(`[WPP v1.2.0] image enrich ok: msgId=${m.msgId} url=${imgR.mediaUrl}`);
+              }
+            } catch (e) {
+              log.warn(`[WPP v1.2.0] image enrich failed (non-fatal): ${formatErr(e)}`, { msgId: m.msgId });
             }
-          } catch (e) {
-            log.warn(`[WPP v1.1.20] image enrich failed (non-fatal, continue to save): ${formatErr(e)}`, {
-              msgId: m.msgId,
-            });
+          } else {
+            // v1 schema 图片: v1.2.5 新版推送带 cdn_download_contexts → CdnDownloadImage 完整大图 (优先)
+            //   失败 → DownloadImg 64KB 兜底 (旧路径)
+            const v1Info = isV1SchemaImage(m.raw);
+            if (v1Info.isV1 && v1Info.localId && v1Info.toWxid) {
+              let imgR: ImageEnrichResult | null = null;
+              // 路径 1 (v1.2.5 首选): cdn_download_contexts → CdnDownloadImage 完整大图
+              if (v1Info.cdnDownloadCtx) {
+                try {
+                  imgR = await trackEnrich(`${m.accountId}:${m.fromWxid}`, () =>
+                    enrichImageMessageFromV1Cdn(opts.vendorCtx!, v1Info.cdnDownloadCtx!, v1Info.md5),
+                  );
+                  if (imgR.mediaUrl) {
+                    m.content = `${m.content}\n[图片] ${imgR.mediaUrl}`;
+                    log.info(`[WPP v1.2.5 IMAGE-CDN-DOWNLOAD] image enrich ok: msgId=${m.msgId} url=${imgR.mediaUrl} size=${imgR.mediaSize}`);
+                  } else {
+                    log.info(`[WPP v1.2.5 IMAGE-CDN-DOWNLOAD] miss (fallback DownloadImg): msgId=${m.msgId} err=${imgR.error}`);
+                    imgR = null;
+                  }
+                } catch (e) {
+                  log.warn(`[WPP v1.2.5 IMAGE-CDN-DOWNLOAD] exception (fallback): ${formatErr(e)}`, { msgId: m.msgId });
+                  imgR = null;
+                }
+              }
+              // 路径 2 (旧): DownloadImg 64KB 兜底
+              if (!imgR) {
+                try {
+                  imgR = await enrichImageMessageFromV1(
+                    opts.vendorCtx,
+                    v1Info.localId,
+                    v1Info.toWxid,
+                    v1Info.md5,
+                  );
+                  if (imgR.mediaUrl) {
+                    m.content = `${m.content}\n[图片] ${imgR.mediaUrl} (注: vendor v1 schema 推送, 仅下载首 64KB, 大图部分可能截断)`;
+                    log.info(`[WPP v1.2.0 V1-SCHEMA-ENRICH] image enrich ok: msgId=${m.msgId} localId=${v1Info.localId} url=${imgR.mediaUrl} size=${imgR.mediaSize}`);
+                  } else {
+                    log.warn(`[WPP v1.2.0] v1 schema image enrich returned no url: msgId=${m.msgId} localId=${v1Info.localId} error=${imgR.error}`, { msgId: m.msgId });
+                  }
+                } catch (e) {
+                  log.warn(`[WPP v1.2.0] v1 schema image enrich failed (non-fatal): ${formatErr(e)}`, { msgId: m.msgId });
+                }
+              }
+            }
           }
         }
 
-        // v1.1.24 QUOTE-SVRID (2026-08-08 接总立): 捕获引用消息 svrid → 存映射表
+        // 视频: msgType=43 → 新版 video.download_context → DownloadVideo (优先); 旧 videomsg XML 兜底
+        if (m.msgType === 43 && opts.vendorCtx) {
+          let vR: MediaEnrichResult | null = null;
+          const v1Video = isV1SchemaVideo(m.raw);
+          if (v1Video.isV1 && v1Video.videoCtx) {
+            try {
+              vR = await trackEnrich(`${m.accountId}:${m.fromWxid}`, () =>
+                enrichVideoMessageFromV1(opts.vendorCtx!, v1Video.videoCtx!),
+              );
+              if (!vR.mediaUrl) {
+                log.info(`[WPP v1.3.8 VIDEO-DOWNLOAD] miss (fallback XML): msgId=${m.msgId} err=${vR.error}`);
+                vR = null;
+              }
+            } catch (e) {
+              log.warn(`[WPP v1.3.8 VIDEO-DOWNLOAD] exception (fallback): ${formatErr(e)}`, { msgId: m.msgId });
+              vR = null;
+            }
+          }
+          // 旧路径: <videomsg> XML
+          if (!vR && (m.content.includes("<videomsg") || m.content.includes("videomsg"))) {
+            try {
+              vR = await enrichVideoMessage(opts.vendorCtx, m.content);
+            } catch (e) {
+              log.warn(`[WPP v1.2.0] video enrich exception: ${formatErr(e)}`, { msgId: m.msgId });
+              vR = null;
+            }
+          }
+          if (vR?.mediaUrl) {
+            m.content = `${m.content}\n[视频] ${vR.mediaUrl}`;
+            log.info(`[WPP v1.3.8] video enrich ok: msgId=${m.msgId} url=${vR.mediaUrl}`);
+          } else if (vR?.error) {
+            log.warn(`[WPP v1.3.8] video enrich failed (non-fatal): err=${vR.error}`, { msgId: m.msgId });
+          }
+        }
+
+        // 名片: msgType=42 (contact_card) → 从 push_content 提取名片名 (如 "[名片]龙脉") 注入 content, AI 知道是谁的名片
+        if (m.msgType === 42) {
+          const pushContent = (m.raw as Record<string, unknown> | null)?.push_content as string | undefined;
+          const cardMatch = pushContent?.match(/\[名片\]\s*([^\s:：]+)/);
+          const cardName = cardMatch?.[1]?.trim();
+          if (cardName) {
+            m.content = `${m.content}\n[名片] ${cardName}`;
+            log.info(`[WPP v1.3.12 CARD] contact card: msgId=${m.msgId} name=${cardName}`);
+          } else {
+            log.info(`[WPP v1.3.12 CARD] contact card (无名称): msgId=${m.msgId}`);
+          }
+        }
+
+        // 语音: msgType=34 → 下载 + OSS + SiliconFlow STT 转写文字注入 content (AI 看到文本)
+        if (m.msgType === 34 && opts.vendorCtx) {
+          let vR: MediaEnrichResult | null = null;
+          // 路径 1 (v1.2.6 首选): 新版 voice.download_context → DownloadVoiceBinary
+          const v1Voice = isV1SchemaVoice(m.raw);
+          if (v1Voice.isV1 && v1Voice.voiceCtx) {
+            try {
+              // v1.3.22 VENDOR-TRANSCRIPT: 透传 vendor 自带转写 (voice.transcript), 免插件 STT
+              const rawVoice = (m.raw as Record<string, unknown> | undefined)?.voice as
+                | Record<string, unknown>
+                | undefined;
+              const vendorTranscript =
+                typeof rawVoice?.transcript === "string" && rawVoice.transcript.length > 0
+                  ? (rawVoice.transcript as string)
+                  : undefined;
+              vR = await trackEnrich(`${m.accountId}:${m.fromWxid}`, () =>
+                enrichVoiceMessageFromV1(opts.vendorCtx!, v1Voice.voiceCtx!, vendorTranscript),
+              );
+              if (!vR.mediaUrl) {
+                log.info(`[WPP v1.2.6 VOICE-DOWNLOAD-BINARY] miss (fallback): msgId=${m.msgId} err=${vR.error}`);
+                vR = null;
+              }
+            } catch (e) {
+              log.warn(`[WPP v1.2.6 VOICE-DOWNLOAD-BINARY] exception (fallback): ${formatErr(e)}`, { msgId: m.msgId });
+              vR = null;
+            }
+          }
+          // 路径 2 (旧): <voicemsg> XML → DownloadVoice
+          if (!vR && m.content.includes("<voicemsg")) {
+            try {
+              vR = await enrichVoiceMessage(opts.vendorCtx, m.content);
+            } catch (e) {
+              log.warn(`[WPP v1.2.0] voice enrich exception: ${formatErr(e)}`, { msgId: m.msgId });
+              vR = null;
+            }
+          }
+          // 处理结果
+          if (vR?.mediaUrl) {
+            const sttText = vR.filename ?? "";
+            const sttSuffix = sttText ? `\n[转写] ${sttText}` : "";
+            m.content = `${m.content}\n[语音] ${vR.mediaUrl}${sttSuffix}`;
+            log.info(`[WPP v1.2.6] voice enrich ok: msgId=${m.msgId} url=${vR.mediaUrl} stt=${sttText ? "yes" : "no"}`);
+          } else if (vR?.error) {
+            log.warn(`[WPP v1.2.6] voice enrich failed (non-fatal): err=${vR.error}`, { msgId: m.msgId });
+          }
+        }
+
+        // 文件: v0 schema (msgType 6 或 appmsg 含 <type>6/8</type>) 走 enrichFileMessage 完整下载;
+        //       v1 schema 无下载参数 (见下方 fallback)
+        const isV0FileContent =
+          m.content.includes("<appmsg") &&
+          (m.content.includes("<type>6</type>") || m.content.includes("<type>8</type>"));
+        if (opts.vendorCtx && (m.msgType === 6 || (m.msgType === 49 && isV0FileContent))) {
+          try {
+            const fR = await enrichFileMessage(opts.vendorCtx, m.content);
+            if (fR.mediaUrl) {
+              m.content = `${m.content}\n[文件] ${fR.filename} (${fR.size ?? "?"} bytes) ${fR.mediaUrl}`;
+              log.info(`[WPP v1.2.0] file enrich ok: msgId=${m.msgId} name=${fR.filename} url=${fR.mediaUrl} (msgType=${m.msgType})`);
+            } else {
+              m.content = `${m.content}\n[文件] ${fR.filename} (${fR.size ?? "?"} bytes, 下载失败: ${fR.error ?? "unknown"})`;
+              log.warn(`[WPP v1.2.0] file enrich failed (non-fatal): name=${fR.filename} err=${fR.error}`, {
+                msgId: m.msgId,
+              });
+            }
+          } catch (e) {
+            log.warn(`[WPP v1.2.0] file enrich exception: ${formatErr(e)}`, { msgId: m.msgId });
+          }
+        } else if (m.msgType === 49) {
+          // v1 schema 文件 (kind=app, app.category=file)
+          //   失败 → v1.2.0 MCP 兜底 → 最后确定性回复 (禁 AI 猜路径读文件)
+          const v1File = isV1SchemaFile(m.raw);
+          if (v1File.isV1) {
+            const filename = v1File.filename ?? "(未知文件名)";
+            const ext = v1File.ext ?? "";
+            const localId = (m.raw as { local_id?: number })?.local_id;
+            let gotUrl = false;
+
+            // 路径 1 (v1.2.5 首选): DownloadFileBinary 完整下载 (新版推送自带 download_context)
+            if (opts.vendorCtx && v1File.downloadCtx) {
+              try {
+                const fR = await trackEnrich(`${m.accountId}:${m.fromWxid}`, () =>
+                  enrichFileMessageFromV1Binary(opts.vendorCtx!, v1File.downloadCtx!, filename, ext),
+                );
+                if (fR.mediaUrl) {
+                  m.content = `${m.content}\n[文件] ${filename} (${ext ? ext.toUpperCase() : "未知格式"}, ${fR.size ?? "?"} bytes) ${fR.mediaUrl}`;
+                  log.info(`[WPP v1.2.5 FILE-DOWNLOAD-BINARY] ok: msgId=${m.msgId} name=${filename} url=${fR.mediaUrl}`);
+                  gotUrl = true;
+                } else {
+                  log.info(`[WPP v1.2.5 FILE-DOWNLOAD-BINARY] miss (fallback to MCP): msgId=${m.msgId} name=${filename} err=${fR.error}`);
+                }
+              } catch (e) {
+                log.warn(`[WPP v1.2.5 FILE-DOWNLOAD-BINARY] exception (fallback): ${formatErr(e)}`, { msgId: m.msgId });
+              }
+            }
+
+            // 路径 2: MCP 增强 (旧路径, 只调只读工具, 不碰写)
+            if (!gotUrl && opts.vendorCtx && localId && opts.mcpEnabled !== false) {
+              try {
+                const fR = await enrichFileMessageViaMcp(localId, filename);
+                if (fR.mediaUrl) {
+                  m.content = `${m.content}\n[文件] ${filename} (${ext ? ext.toUpperCase() : "未知格式"}) ${fR.mediaUrl}`;
+                  log.info(`[WPP v1.2.0 VENDOR-MCP] file via MCP ok: msgId=${m.msgId} localId=${localId} url=${fR.mediaUrl}`);
+                  gotUrl = true;
+                } else {
+                  log.info(`[WPP v1.2.0 VENDOR-MCP] file via MCP miss (fallback): msgId=${m.msgId} localId=${localId} err=${fR.error}`);
+                }
+              } catch (e) {
+                log.warn(`[WPP v1.2.0 VENDOR-MCP] file via MCP exception: ${formatErr(e)}`, { msgId: m.msgId });
+              }
+            }
+
+            // 兜底: 都失败 → 确定性回复 (禁 AI 猜路径)
+            if (!gotUrl) {
+              m.content = `${m.content}\n[系统提示-文件限制] 此文件消息仅有文件名元数据, vendor 当前不提供文件内容下载 (MCP 增强未命中), 你无法读取文件内容。\n禁止: 用 find/ls 搜索 *.pdf 或任何文件、猜测/拼接文件路径、读取系统里任何现有文件 (可能是旧文件误导)。\n只需: 基于文件名回复用户 (例如"收到文件 ${filename}, 但当前平台无法读取文件内容, 需要内容请换图片或文本发送"), 或询问用户是否改用文本/图片发送。`;
+              log.info(`[WPP v1.2.0 NO-PATH-GUESS] file msg (v1 schema) fallback: msgId=${m.msgId} name=${filename} ext=${ext}`);
+            }
+          }
+        }
+
+        // 捕获引用消息 svrid → 存映射表 (供未来引用定位)
         if (m.content.includes("<refermsg")) {
           try {
             await captureQuoteSvrid(m.content, m.accountId);
@@ -90,25 +345,34 @@ export function createWppInboundHandler(
           }
         }
 
-        // v1.1.30 GEWE-PARITY (2026-08-08 21:20 接总立: 分析 gewe 后补齐的关键路径):
-        //   gewe handler.ts:170-194: inbound 是 QUOTE 消息 (msgType=49) → parse refermsg → imgMd5/msgId
-        //   → 查 DB 拿原图 media_url (OSS URL) → push 到 mediaList + quoteDetails.mediaUrl
-        //   → AI 多模态看到原图 → 生成准确回复 → 走 pendingQuoteDetails 引用回复
-        //   fix: WPP 同样在 inbound 拼上原图 OSS URL 给 AI 看 (关键 — 之前 AI 看图靠运气)
-        //   实现: 不用新加 media_url 字段 (DB schema 改动大), 直接从 quoted.content 末尾用正则提取
-        //         v1.1.20 enrich 已把 OSS URL 写到 inbound content 末尾 (`[图片] URL`), 查 DB 拿到 content 即可
-        if (m.msgType === 49 && m.content.includes("<refermsg")) {
+        // 引用消息: 查 DB 被引用消息, 把原媒体 OSS URL 注入 content → AI 看到原图/原资源
+        if (m.msgType === 49) {
+          let quotedMsgId = "";
           try {
-            const parsed = parseQuoteXml(m.content);
-            if (parsed?.msgId) {
-              const quoted = await getMessageById(parsed.msgId, m.accountId);
+            const appRef = extractReferencedFromApp(m.raw);
+            if (appRef) {
+              quotedMsgId = appRef.newMsgId ?? appRef.svrId ?? "";
+            } else if (m.content.includes("<refermsg")) {
+              const parsed = parseQuoteXml(m.content);
+              quotedMsgId = parsed?.msgId ?? "";
+            } else {
+              // 旧 reply_context (msg_id 常对不上, 保留兜底)
+              const rc = extractReferencedFromReplyContext(m.raw);
+              if (rc?.svrId || rc?.newMsgId) {
+                quotedMsgId = rc.svrId ?? rc.newMsgId ?? "";
+              }
+            }
+            if (quotedMsgId) {
+              const quoted = await getMessageByMsgIdOrNewId(quotedMsgId, undefined, m.accountId)
+                ?? (await getMessageById(quotedMsgId, m.accountId));
               if (quoted?.content) {
-                // 提取被引用消息的 OSS URL (v1.1.20 enrich 写入的格式: [图片] URL)
-                const imgUrlMatch = quoted.content.match(/\[图片\]\s+(https?:\/\/\S+)/);
-                if (imgUrlMatch) {
-                  const ossUrl = imgUrlMatch[1] ?? "";
-                  info(`[WPP v1.1.30] QUOTE media inject: msgId=${m.msgId} quoted.msgId=${parsed.msgId} ossUrl=${ossUrl}`);
-                  m.content = `${m.content}\n[引用图片] ${ossUrl}`;
+                // 匹配 enrich 注入的 [图片]/[视频]/[语音]/[文件] URL, 取第一个注入
+                const mediaMatch = quoted.content.match(/\[(图片|视频|语音|文件)\]\s+(?:[^\n]*?)\s*(https?:\/\/\S+)/);
+                if (mediaMatch) {
+                  const tag = mediaMatch[1] ?? "媒体";
+                  const ossUrl = mediaMatch[2] ?? "";
+                  info(`[WPP v1.2.0] QUOTE media inject: msgId=${m.msgId} quoted.msgId=${quotedMsgId} type=${tag} ossUrl=${ossUrl}`);
+                  m.content = `${m.content}\n[引用${tag}] ${ossUrl}`;
                 }
               }
             }
@@ -118,10 +382,19 @@ export function createWppInboundHandler(
         }
       }
 
-      // Step 2: persist (DB 落 enrich 后的 content)
-      const r = await enrichBatch(batch);
+      // Step 2: persist (DB 落 enrich 后的 content) — v1.2.4 老板拍板 "只入白名单":
+      //   黑名单群/非 allowlist 群/DM 白名单外/自回环 (shouldTrigger via=blocked) 不入库 (隐私)
+      //   白名单内消息 (含触发 + 白名单群非触发) 入库 → DB 按人查历史依赖
+      const ctxForTriggerEarly = { ...opts.triggerCtx, allowFrom: opts.triggerCtx.allowFrom };
+      const persistResults = new Map<WppInboundMessage, ReturnType<typeof shouldTrigger>>();
+      for (const m of batch) {
+        const t = shouldTrigger(m, opts.triggerConfig, ctxForTriggerEarly);
+        persistResults.set(m, t);
+      }
+      const persistBatch = batch.filter((m) => persistResults.get(m)?.via !== "blocked");
+      const r = await enrichBatch(persistBatch);
       if (r.failed > 0) {
-        warn(`inbound batch persist: ${r.failed}/${batch.length} failed`);
+        warn(`inbound batch persist: ${r.failed}/${persistBatch.length} failed (skipped ${batch.length - persistBatch.length} blocked)`);
       }
 
       // Step 3: relay 解析 (chat-history 53): 给 prompt 注入 items
@@ -145,20 +418,18 @@ export function createWppInboundHandler(
           }
         }
 
-        // v1.1.7: 红包消息检测 + 提取 (业务逻辑, 默认仅 log)
-        // v1.1.17 FULL-FIX: 红包消息处理后 continue, 不继续 dispatch (防红包触发 AI 回复)
+        // 红包消息: 处理后 continue, 不触发 AI 回复
         if (isRedPacketMessage(m)) {
           processRedPacket(m);  // log + 提取 url/key, 未来可接 auto-open
           continue;
         }
       }
 
-      // 3. dispatch (per message 走 trigger)
+      const triggerResults = persistResults; // Step 2 已算 (same ctxForTrigger + shouldTrigger)
       const dispatched: WppInboundMessage[] = [];
-      // v1.1.16 P0-FIX: triggerCtx.allowFrom 合并 (优先 opts.allowFrom, fallback triggerCtx.allowFrom)
-      const ctxForTrigger = { ...opts.triggerCtx, allowFrom: opts.allowFrom ?? opts.triggerCtx.allowFrom };
-      for (const m of batch) {
-        const t = shouldTrigger(m, opts.triggerConfig, ctxForTrigger);
+      for (const [m, t] of triggerResults) {
+        // v1.3.39 FILEHELPER: filehelper 命令不 dispatch (只走命令回调, 不进 AI)
+        if (m.peerId === "filehelper" && /^\s*\//.test(m.content)) continue;
         if (t.triggered && t.via !== "blocked") {
           m.trigger = t.via ?? "at";
           if (t.via === "at" || t.via === "keyword" || t.via === "msgType" ||
@@ -167,6 +438,43 @@ export function createWppInboundHandler(
           }
         }
       }
+
+      if (opts.enableDispatch !== false && opts.onPairingAttempt &&
+          (opts.dmPairingEnabled || opts.triggerCtx.dmPairingEnabled)) {
+        for (const m of batch) {
+          if (m.peerKind !== "direct") continue; // 只拦私聊 (群聊配对无意义)
+          const t = triggerResults.get(m);
+          if (t?.via !== "blocked") continue; // 已在白名单 → 正常触发, 不拦
+          if (opts.triggerCtx.botWxid && m.fromWxid === opts.triggerCtx.botWxid) continue; // 自回环 guard
+          const code = extractPairCode(m.content);
+          if (code) {
+            try {
+              await opts.onPairingAttempt({ msg: m, code });
+              log.info(`[WPP v1.2.3 PAIRING] attempt handled: account=${opts.accountId} from=${m.fromWxid}`);
+            } catch (e) {
+              log.warn(`[WPP v1.2.3] pairing attempt failed (non-fatal): ${formatErr(e)}`, { accountId: opts.accountId, fromWxid: m.fromWxid });
+            }
+          }
+        }
+      }
+
+      // v1.3.39 FILEHELPER: 只处理命令, 非命令不处理 (老板 2026-08-11)
+      //   识别 filehelper 会话 (peer_id=filehelper) 的命令 → 回调, 不进 AI dispatch
+      if (opts.enableDispatch !== false && opts.onFileHelperCommand) {
+        for (const m of batch) {
+          if (m.peerId !== "filehelper") continue;
+          const cmd = m.content.trim();
+          if (!/^\//.test(cmd)) continue; // 非命令跳过 (仍不处理)
+          try {
+            await opts.onFileHelperCommand({ msg: m, command: cmd });
+            log.info(`[WPP v1.3.39 FILEHELPER] command handled: ${cmd.split(/\s+/)[0]}`);
+          } catch (e) {
+            log.warn(`[WPP v1.3.39 FILEHELPER] command failed: ${formatErr(e)}`);
+          }
+        }
+      }
+
+      // 无可触发 → 早退 (防空转)
       if (dispatched.length === 0) return;
 
       info(`inbound dispatch: ${dispatched.length}/${batch.length} triggered (vias: ${dispatched.map((d) => d.trigger).join(",")})`);
@@ -182,29 +490,45 @@ export function createWppInboundHandler(
     },
   });
 
-  // v1.1.17 FULL-FIX (P0-G): SeenTracker 去重 — 同一条消息从 webhook/business-callback/WS 3 条路径进入时只处理一次
-  // 之前去重代码写了但零调用 (src/webhook-receiver.ts:209 定义, handler 入口无引用) → 三通道重复回复
+  // SeenTracker 去重: 同一条消息从 webhook/business-callback/WS 3 条路径进入时只处理一次
   const seenTracker = new SeenTracker();
 
   return {
     handle: async (payload: WppWebhookPayload): Promise<void> => {
-      // v1.1.15 BUSINESS-CB: business callback 可能是 AddMsgs[] 多条, 逐条 parse
+      // business callback 可能是 AddMsgs[] 多条, 逐条 parse
       const msgs = payloadToAllInboundMessages(opts.accountId, payload);
+
+      // 私聊 peerId 修正: bot 自己发的私聊 (fromWxid===selfWxid) → 对方是 toWxid, 否则是自己 (sessionKey 串位)
+      try {
+        const acct = getDefaultAccountRegistry().get(opts.accountId);
+        const selfWxid = acct?.selfWxid;
+        if (selfWxid) {
+          for (const m of msgs) {
+            if (m.peerKind === "direct") {
+              if (m.fromWxid === selfWxid && m.toWxid) {
+                // 老板自己发的私聊 → 对方是 toWxid
+                m.peerId = m.toWxid;
+              }
+              // 别人发的私聊: peerId 已经是 fromWxid (对方), 无需改
+            }
+          }
+        }
+      } catch (e) {
+        warn(`peerId fixup skipped (non-fatal): ${formatErr(e)}`);
+      }
+
       if (msgs.length === 0) {
-        // v1.1.15 DEBUG-WH (2026-08-08): payload 解析失败静默丢弃 → 改为 warn 打印摘要
-        // 根因: vendor webhook payload 结构与 parser 期望不匹配 (13:49 后 0 条入库)
-        // v1.1.15 DEBUG-WH (2026-08-08 临时扩, 3 修复后改回 300): 取 2000 字装下 XML 消息
-        const jsonStr = JSON.stringify(payload);
-        const msgCount = Array.isArray((payload as any)?.Data?.messages) ? (payload as any).Data.messages.length : undefined;
-        warn(`inbound parse dropped: account=${opts.accountId} payloadKeys=${Object.keys((payload ?? {}) as object).join(",")} dataKeys=${Object.keys(((payload as any)?.Data ?? {}) as object).join(",")} messagesLen=${msgCount ?? "n/a"} payload=${jsonStr?.slice(0, 2000)}`);
+        // payload 解析失败: warn 打印摘要供排查
+        const jsonStr = stringifyLargeInts(JSON.stringify(payload));
+        const payloadData = (payload as Record<string, unknown>)?.Data as Record<string, unknown> | undefined;
+        const payloadMsgs = payloadData?.messages;
+        const msgCount = Array.isArray(payloadMsgs) ? (payloadMsgs as unknown[]).length : undefined;
+        warn(`inbound parse dropped: account=${opts.accountId} payloadKeys=${Object.keys((payload ?? {}) as object).join(",")} dataKeys=${Object.keys(payloadData ?? {}).join(",")} messagesLen=${msgCount ?? "n/a"} payload=${jsonStr?.slice(0, 2000)}`);
         return;
       }
       for (const m of msgs) {
-        // v1.1.17 FULL-FIX (P0-G): 去重 — 同 msgId/newMsgId 已处理过则跳过
-        // v1.1.19 DB-DEDUP (2026-08-08 接总立方案 A): SeenTracker 内存态, gateway 重启即清空;
-        //   vendor 重放消息 (Synckey="" 全量拉) 重启后重新触发 dispatch → 重复 AI 回复。
-        //   加 DB 持久化去重: msg_id/new_msg_id 已存在 inbound → 跳过 (wpp_messages UNIQUE 索引保证物理唯一)
-        const dk = buildDedupeKey(undefined, m.newMsgId, m.msgId);
+        // 双重去重: SeenTracker 内存态 + DB 持久化 (vendor 重放消息 / gateway 重启后防重复 dispatch)
+        const dk = buildDedupeKey(undefined, m.newMsgId, m.msgId, m.content);
         if (!seenTracker.check(dk)) {
           continue;
         }
@@ -213,7 +537,6 @@ export function createWppInboundHandler(
           try {
             const existing = await getMessageByMsgIdOrNewId(m.msgId, m.newMsgId, m.accountId);
             if (existing) {
-              // v1.1.25 PERF: info→debug 降日志 IO (重启风暴一次几百条 skip, info 刷屏 + 阻塞)
               log.debug(`inbound dedup (db): skip msgId=${m.msgId} newMsgId=${m.newMsgId} (already persisted)`);
               continue;
             }

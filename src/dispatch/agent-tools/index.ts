@@ -14,15 +14,14 @@ import { WXAPP_META } from "./wxapp-meta.js";
 import { OFFICIAL_ACCOUNTS_META } from "./officialaccounts-meta.js";
 import { TOOLS_META } from "./tools-meta.js";
 import { TEN_PAY_META } from "./tenpay-meta.js";
-import {
-  FAVORITES_META,
-  LABEL_META,
-  VOICE_META,
-  SAY_HELLO_META,
-  TRANSLATE_META,
-  CUSTOMIZED_META,
-  QW_CONTACT_META,
-} from "./misc-meta.js";
+// v1.3.19 MISC-SPLIT: 7 小 tag 各自独立文件 (不再经 misc-meta barrel)
+import { FAVORITES_META } from "./favorites-meta.js";
+import { LABEL_META } from "./label-meta.js";
+import { VOICE_META } from "./voice-meta.js";
+import { SAY_HELLO_META } from "./sayhello-meta.js";
+import { TRANSLATE_META } from "./translate-meta.js";
+import { CUSTOMIZED_META } from "./customized-meta.js";
+import { QW_CONTACT_META } from "./qwcontact-meta.js";
 
 /** 全部 vendor tag meta 合并为 AGENT_TOOLS_META */
 export const AGENT_TOOLS_META = {

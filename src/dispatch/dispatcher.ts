@@ -1,21 +1,38 @@
-// src/dispatch/dispatcher.ts - inbound → OpenClaw runtime dispatch (v1.1.6 接入 channelRuntime)
-// 仿 gewe v1.4.4 dispatcher 范式: session.recordInboundSession + reply.dispatchReplyWithBufferedBlockDispatcher
-// v1.1.6 实现真正的 AI dispatch (Phase D stub → 真)
-// v1.1.15 P0-DISPATCH (2026-08-08 老板 15:27): 仿 GeWe plugin 范式
-//   之前 dispatcher.signature 跟 framework 真实签名不一致:
-//     { sessionKey, inbound, onReply } → framework 期望 { ctx, cfg, dispatcherOptions.deliver, ... }
-//   → framework finalizeInboundContext(ctx) 取 ctx.SupplementalContext 时 ctx=undefined
-//   → TypeError unhandled rejection → gateway 崩溃 → crash-loop breaker
-//   fix: 构造完整 ctxPayload (Body/RawBody/From/To/SessionKey/...) + dispatcherOptions.deliver 回调
+// src/dispatch/dispatcher.ts - inbound → OpenClaw runtime dispatch
+// 仿 gewe v1.4.4 dispatcher 范式: recordInboundSession + dispatchReplyWithBufferedBlockDispatcher
 
 import { info, warn, debug, formatErr } from "../core/logger.js";
+// 文件消息 (v1 schema 无内容) → 固定回复纯函数, 供 dispatcher + 测试用
+export function buildFileAutoReply(
+  content: string | undefined,
+): { isFileMsg: boolean; replyText?: string } | null {
+  if (!content) return null;
+  const isFileMsg =
+    content.includes("[文件]") && content.includes("[系统提示-文件限制]");
+  if (!isFileMsg) return { isFileMsg: false };
+  const fileLine = content.match(/\[文件\]\s*(.+?)(?:\n|$)/)?.[1] ?? "文件";
+  return {
+    isFileMsg: true,
+    replyText: `收到「${fileLine}」📎 但我当前无法读取文件内容。你可以把文件内容转成文本或图片发给我，或直接告诉我你想让我做什么～`,
+  };
+}
 import { buildSessionKey } from "../session-key.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
 import { sendText } from "./outbound.js";
 import { quoteReply } from "../send/quote-reply.js";
 import { buildQuoteContext } from "./reply-helpers.js";
 import type { WppInboundMessage } from "../types.js";
-import { CHANNEL_ID } from "../core/constants.js";
+import { CHANNEL_ID, GROUP_CONTEXT_WINDOW, GROUP_CONTEXT_MAX_IMAGES } from "../core/constants.js";
+import { getMessages, getMessageByMsgIdOrNewId } from "../storage/db/messages.js";
+import { waitForPendingEnrich } from "../inbound/handler.js";
+import { extractReferencedFromReplyContext, extractReferencedFromApp } from "../inbound/parser/quote.js";
+import { classifyGroupIntent, decideIntentWithLlm, needsLlm, normalizeTriggerText, toIntentCandidate } from "./intent-llm.js";
+import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
+import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
+// re-export (兼容旧测试/外部引用) — classifyGroupIntent/GroupIntent 定义在 intent-llm.ts
+export { classifyGroupIntent, type GroupIntent } from "./intent-llm.js";
+// 写内存 chat info cache, outbound 路径读 (见 state.ts setSessionChatInfo)
+import { setSessionChatInfo } from "../state.js";
 
 /**
  * OpenClaw channelRuntime 接口 (wpp 期望的子集)
@@ -23,14 +40,14 @@ import { CHANNEL_ID } from "../core/constants.js";
  */
 export interface WppChannelRuntime {
   session: {
-    /** v1.1.15 P0-DISPATCH: framework 真实签名 recordInboundSession({ storePath, sessionKey, ctx }) */
+    /** framework 真实签名: recordInboundSession({ storePath, sessionKey, ctx }) */
     recordInboundSession(opts: { storePath: string; sessionKey: string; ctx: unknown }): Promise<void>;
-    /** v1.1.15 STORE-PATH: framework 真实签名 resolveStorePath(store: string, opts) */
+    /** framework 真实签名: resolveStorePath(store, opts) */
     resolveStorePath?(store: string, opts?: { accountId?: string; agentId?: string; env?: NodeJS.ProcessEnv }): string;
   };
   reply: {
     /**
-     * v1.1.15 P0-DISPATCH: framework 真实签名 dispatchReplyWithBufferedBlockDispatcher({ ctx, cfg, dispatcherOptions, ... })
+     * framework 真实签名: dispatchReplyWithBufferedBlockDispatcher({ ctx, cfg, dispatcherOptions, ... })
      * dispatcherOptions.deliver(payload, info) 由我们实现, 负责把 AI reply 发到 vendor
      */
     dispatchReplyWithBufferedBlockDispatcher(opts: {
@@ -58,12 +75,8 @@ const NOOP_RUNTIME: WppChannelRuntime = {
 let currentRuntime: WppChannelRuntime | null = null;
 
 /**
- * v1.1.18 CFG-DISPATCH (2026-08-08 18:05 老板 401 根因): 保存 OpenClaw 完整配置
- * 仿 gewe-multi-agent/src/core/state.ts setOpenClawConfig/getOpenClawConfig 范式。
- * 根因: dispatch 时 cfg: ctx.cfg ?? {} 传空对象 → framework resolveConfiguredModelRef
- *   从 cfg.agents.defaults.model 解析 model → 空 cfg 解析失败 → fallback 默认 openai/gpt-5.5
- *   → wpp-wechat 每次 channel dispatch 都请求 gpt-5.5 → 无 openai key → 401。
- *   (heartbeat/main session 由框架自己填 cfg → MiniMax 正常; channel dispatch 走插件传 cfg → 空)
+ * 保存 OpenClaw 完整配置供 dispatch 时传给 framework。
+ * 若不传 (ctx.cfg ?? {}) 空对象 → framework resolveConfiguredModelRef 解析失败 → fallback gpt-5.5 → 401。
  */
 let openClawConfig: unknown = null;
 
@@ -85,22 +98,405 @@ export function getChannelRuntime(): WppChannelRuntime {
 }
 
 /**
- * v1.1.15 P0-DISPATCH: 构造 ctxPayload (framework finalizeInboundContext 消费的入参)
- * 仿 GeWe plugin ctxPayload 范式 (Body/RawBody/From/To/SessionKey/... 等必填字段)
+ * 解析消息对应的 agentId (registry 优先, 兜底 "main") + 构造 sessionKey。
+ * dispatchInboundToOpenClaw / dispatchOne / recordGroupContext 共用, 保证 3 处 sessionKey 一致。
  */
-function buildCtxPayload(msg: WppInboundMessage, sessionKey: string): Record<string, unknown> {
+function buildSessionKeyForMsg(msg: WppInboundMessage): string {
+  const registry = getDefaultAccountRegistry();
+  const accountCtx = registry.get(msg.accountId);
+  let agentId: string = "main"; // 兜底 fallback (正常不会走这里)
+  if (!accountCtx) {
+    warn(`dispatch: account not found in registry: ${msg.accountId} — fallback to "main" (startAccountById 应已拦截, 如看到这条说明走了别的路径, 立即查!)`);
+  } else if (accountCtx.config.agent) {
+    agentId = accountCtx.config.agent;
+  } else {
+    warn(`dispatch: account.agent missing for ${msg.accountId} — fallback to "main" (startAccountById 应已拦截)`);
+  }
+  return buildSessionKey({
+    agentId,
+    accountId: msg.accountId,
+    peerKind: msg.peerKind,
+    peerId: msg.peerId,
+  });
+}
+
+/**
+ * v1.2.4 GROUP-CONTEXT-DB (老板拍板): 不内存缓冲, 触发时从 DB 查触发人最近消息注入。
+ *
+ * 为什么改 DB: 所有消息已全量落库 (enrichBatch 在 handler Step 2), DB 数据全、可按人查、
+ * 不受内存窗口限制。删掉内存缓冲 → 触发时查 wpp_messages (from_wxid 列)。
+ */
+
+/** 读账号 groupContextEnabled (默认 false, 显式 true 才注入群聊上下文) */
+function resolveGroupContextEnabled(msg: WppInboundMessage): boolean {
+  try {
+    return getDefaultAccountRegistry().get(msg.accountId)?.config.groupContextEnabled === true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveLlmIntentEnabled(msg: WppInboundMessage): boolean {
+  try {
+    const cfg = getDefaultAccountRegistry().get(msg.accountId)?.config;
+    return cfg?.llmIntentEnabled !== false;
+  } catch {
+    return true;
+  }
+}
+function resolveLlmModel(msg: WppInboundMessage): string {
+  try {
+    return getDefaultAccountRegistry().get(msg.accountId)?.config.llmIntentModel ?? "MiniMax-M2.5";
+  } catch {
+    return "MiniMax-M2.5";
+  }
+}
+function resolveLlmTimeoutMs(msg: WppInboundMessage): number {
+  try {
+    return getDefaultAccountRegistry().get(msg.accountId)?.config.llmIntentTimeoutMs ?? 5000;
+  } catch {
+    return 5000;
+  }
+}
+function resolveMinimaxApiKey(): string {
+  return process.env.MINIMAX_API_KEY ?? "";
+}
+
+function resolveEmbedIntentEnabled(msg: WppInboundMessage): boolean {
+  try {
+    return getDefaultAccountRegistry().get(msg.accountId)?.config.embedIntentEnabled !== false;
+  } catch {
+    return true;
+  }
+}
+function resolveEmbedTopN(msg: WppInboundMessage): number {
+  try {
+    return getDefaultAccountRegistry().get(msg.accountId)?.config.embedIntentTopN ?? 5;
+  } catch {
+    return 5;
+  }
+}
+function resolveEmbedThreshold(msg: WppInboundMessage): number {
+  try {
+    return getDefaultAccountRegistry().get(msg.accountId)?.config.embedIntentThreshold ?? 0.3;
+  } catch {
+    return 0.3;
+  }
+}
+function resolveBailianEmbeddingKey(): string {
+  return process.env.BAILIAN_EMBEDDING_API_KEY ?? "";
+}
+
+/** 读账号的 groupContextWindow 配置 (per-account, 默认 GROUP_CONTEXT_WINDOW) */
+function resolveGroupWindow(msg: WppInboundMessage): number {
+  try {
+    const ctx = getDefaultAccountRegistry().get(msg.accountId);
+    const w = ctx?.config.groupContextWindow;
+    if (typeof w === "number" && w >= 1 && w <= 100) return w;
+  } catch {
+    /* registry 异常 → 默认 */
+  }
+  return GROUP_CONTEXT_WINDOW;
+}
+
+/**
+ * v1.3.5 QUOTE-REFERENCED: 触发消息引用时, 多种方式定位被引用消息 (优先注入 AI 上下文)。
+ * v1.3.6: 新增 app.reference (category=quote) — 被引用信息在这里, 不在 reply_context!
+ * 尝试: app.reference.new_msg_id/svr_id → reply_context.svr_id/new_msg_id → local_id 匹配 DB; 查不到返回 null。
+ */
+async function resolveReferencedMessage(
+  msg: WppInboundMessage,
+): Promise<import("../storage/db/types.js").MessageRecord | null> {
+  const appRef = extractReferencedFromApp(msg.raw);
+  if (appRef) {
+    try {
+      if (appRef.newMsgId) {
+        // v1.3.18 P1-核心2: 引用解析查全部方向 (被引用消息可能是 bot  outbound)
+        const byNew = await getMessageByMsgIdOrNewId(undefined, appRef.newMsgId, msg.accountId, { direction: "any" });
+        if (byNew) return byNew;
+      }
+      if (appRef.svrId) {
+        const bySvr = await getMessageByMsgIdOrNewId(appRef.svrId, undefined, msg.accountId, { direction: "any" });
+        if (bySvr) return bySvr;
+      }
+    } catch {
+      /* app.reference 查询失败 → 继续试其它 */
+    }
+  }
+
+  const rc = extractReferencedFromReplyContext(msg.raw);
+  if (!rc) return null;
+  try {
+    if (rc.svrId) {
+      const bySvr = await getMessageByMsgIdOrNewId(rc.svrId, undefined, msg.accountId, { direction: "any" });
+      if (bySvr) return bySvr;
+    }
+    if (rc.newMsgId) {
+      const byNew = await getMessageByMsgIdOrNewId(undefined, rc.newMsgId, msg.accountId, { direction: "any" });
+      if (byNew) return byNew;
+    }
+    if (rc.msgId) {
+      // 查群内消息找 local_id = rc.msgId 的
+      const recent = await getMessages({
+        accountId: msg.accountId,
+        peerKind: "group",
+        peerId: msg.peerId,
+        limit: 30,
+        beforeTs: msg.ts,
+      });
+      const byLocalId = recent.find((m) => {
+        const raw = m.raw_payload as Record<string, unknown> | undefined;
+        return raw?.local_id === rc.msgId;
+      });
+      if (byLocalId) return byLocalId;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * v1.3.4: 从 DB 查群内最近消息 → 注入 AI 上下文 (老板拍板: 群内最近 10 条, 不限发送人, 媒体优先)。
+ *   v1.2.4 原为"只看 @ 人上下文", v1.3.4 改"群内最近媒体权重最高" (老板新要求)。
+ *
+ * - DB 查 `wpp_messages` (peer_id=群ID, from_wxid=触发人) 最近 GROUP_CONTEXT_WINDOW 条
+ * - 图片 ≤3 张直接塞 MediaUrls 看图, 超过丢最旧
+ * - v1.3.4: 查询群内最近 window 条 (不限发送人, 媒体优先)
+ * - v1.3.5: 引用消息优先注入被引用消息
+ * - DB 查询失败 → 返回 null (不阻塞 AI 回复)
+ *
+ * 返回上下文块字符串 (或 null), 由 buildCtxPayload 前置进 Body — 不 mutate msg.content。
+ */
+async function buildGroupContextFromDb(msg: WppInboundMessage): Promise<string | null> {
+  if (msg.peerKind !== "group") return null;
+  const window = resolveGroupWindow(msg);
+  try {
+    //   群聊触发消息中使用了引用消息 = 明确指定被引用消息加入上下文 → 只注入被引用消息,
+    //   不再看其它上下文 (跳过窗口查询 + embedding/LLM 选择)。
+    //   根因: v1.3.5 把被引用消息 prepend 进 msgs 后, 后续 embedding/LLM filter 可能把
+    //   它再过滤掉 (老板实测 "AI 依然去找其它的图") — 引用即指定, 必须短路其它逻辑。
+    const referencedMsg = await resolveReferencedMessage(msg);
+    if (referencedMsg) {
+      return buildReferencedContextLines(msg, referencedMsg);
+    }
+
+    const intent = classifyGroupIntent(msg.content);
+    if (intent === "no-op") {
+      debug(`[WPP v1.3.0 INTENT] no-op: 不注入上下文 msgId=${msg.msgId} content="${msg.content.slice(0, 30)}"`);
+      return null;
+    }
+    //   (v1.2.8: beforeTs 排除触发消息自身, 避免空 @ 混入上下文)
+    let msgs = await getMessages({
+      accountId: msg.accountId,
+      peerKind: "group",
+      peerId: msg.peerId,
+      limit: window,
+      beforeTs: msg.ts,
+    });
+    if (msgs.length === 0) return null;
+
+    //   规则预筛 (已在上方 no-op 拦截) → 命令类走 LLM → 非命令 embedding 快路径 → 降级 LLM → 降级注入全部
+    const llmEnabled = resolveLlmIntentEnabled(msg) && !!resolveMinimaxApiKey();
+    const embedEnabled = resolveEmbedIntentEnabled(msg) && !!resolveBailianEmbeddingKey();
+    const triggerText = normalizeTriggerText(msg.content);
+    if (llmEnabled && needsLlm(msg.content)) {
+      let decision: Awaited<ReturnType<typeof decideIntentWithLlm>> = null;
+      //   用 embedSelected 区分"embedding 已选好"与"LLM 失败需保守降级"
+      let embedSelected = false;
+
+      if (isCommandIntent(triggerText)) {
+        // 命令类意图 (删/发/转/帮) → embedding 判断不了 → LLM
+        debug(`[WPP v1.3.2 EMBED-INTENT] command intent → LLM: "${triggerText.slice(0, 20)}"`);
+        decision = await decideIntentWithLlm(
+          { triggerText, candidates: msgs.map(toIntentCandidate) },
+          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+        );
+      } else if (embedEnabled) {
+        // 非命令 → embedding 快路径 (ms 级)
+        const relevantIds = await selectTopNByEmbedding(
+          triggerText,
+          msgs.map(toIntentCandidate),
+          {
+            apiKey: resolveBailianEmbeddingKey(),
+            topN: resolveEmbedTopN(msg),
+            threshold: resolveEmbedThreshold(msg),
+          },
+        );
+        if (relevantIds !== null && relevantIds.length > 0) {
+          const idSet = new Set(relevantIds);
+          const filtered = msgs.filter((m) => idSet.has(m.msg_id ?? "") || idSet.has(m.new_msg_id ?? ""));
+          if (filtered.length > 0) {
+            debug(`[WPP v1.3.2 EMBED-INTENT] embedding selected ${filtered.length}: ${relevantIds.join(",")}`);
+            msgs = filtered;
+            embedSelected = true;
+          }
+        } else if (relevantIds !== null && relevantIds.length === 0) {
+          // 相似度全低于阈值 → LLM 兜底
+          debug(`[WPP v1.3.2 EMBED-INTENT] embedding 无相关 → LLM 兜底`);
+          decision = await decideIntentWithLlm(
+            { triggerText, candidates: msgs.map(toIntentCandidate) },
+            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+          );
+        }
+        if (relevantIds === null) {
+          debug(`[WPP v1.3.2 EMBED-INTENT] embedding 失败 → LLM 兜底`);
+          decision = await decideIntentWithLlm(
+            { triggerText, candidates: msgs.map(toIntentCandidate) },
+            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+          );
+        }
+      } else {
+        decision = await decideIntentWithLlm(
+          { triggerText, candidates: msgs.map(toIntentCandidate) },
+          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+        );
+      }
+
+      // 处理 LLM decision (no-op → 不注入; inject → filter 相关)
+      if (decision?.action === "no-op") {
+        debug(`[WPP v1.3.2 LLM-INTENT] no-op: 不注入 msgId=${msg.msgId}`);
+        return null;
+      }
+      if (decision?.action === "inject") {
+        const idSet = new Set(decision.relevantIds);
+        const filtered = msgs.filter((m) => idSet.has(m.msg_id ?? "") || idSet.has(m.new_msg_id ?? ""));
+        if (filtered.length === 0) {
+          debug(`[WPP v1.3.2 LLM-INTENT] inject 但无匹配候选, 不注入 msgId=${msg.msgId}`);
+          return null;
+        }
+        msgs = filtered;
+      }
+      //     media 意图 → 兜底只注入媒体 (用户明确在看媒体, 该带媒体)
+      //     topic 意图 → 不注入 (宁可 AI 只看触发消息本身, 也不塞一堆无关上下文)
+      //   (embedSelected=true → embedding 已选好相关, decision null 是正常完成, 走下方图片≤3)
+      if (!decision && !embedSelected) {
+        if (intent === "media") {
+          const mediaOnly = msgs.filter((m) => /\[(图片|文件|语音|视频)\]/.test(m.content ?? ""));
+          if (mediaOnly.length === 0) {
+            debug(`[WPP v1.3.15 INTENT] LLM null + media 但无媒体消息, 不注入 msgId=${msg.msgId}`);
+            return null;
+          }
+          msgs = mediaOnly;
+          debug(`[WPP v1.3.15 INTENT] LLM null + media → 兜底只注入媒体 ${mediaOnly.length} 条 msgId=${msg.msgId}`);
+        } else {
+          debug(`[WPP v1.3.15 INTENT] LLM null + topic → 不注入 (不强拉) msgId=${msg.msgId}`);
+          return null;
+        }
+      }
+    } else if (intent === "media") {
+      // 规则兜底 (llmIntentEnabled=false 或无 key): 只注入含媒体标记的消息
+      // 语音带 [转写] 也当文本注入 (老板观点: 语音当文本)
+      msgs = msgs.filter((m) => /\[(图片|文件|语音|视频)\]/.test(m.content ?? ""));
+      if (msgs.length === 0) {
+        debug(`[WPP v1.3.0 INTENT] media 意图但无媒体消息, 不注入 msgId=${msg.msgId}`);
+        return null;
+      }
+    } else {
+      //   (原行为: msgs 保持全量 = 强制拉上下文, AI 被无关文本带偏)
+      debug(`[WPP v1.3.15 INTENT] topic + 无 LLM/embedding key → 不注入 (不强拉) msgId=${msg.msgId} content="${msg.content.slice(0, 20)}"`);
+      return null;
+    }
+
+    // 图片 ≤3 张: 保留最近 3 张含 [图片] 的, 更旧含图消息剔除
+    // DB 返回 ts DESC (最新在前) → 前 N 个含图的 = 最近的
+    const imageIndexes: number[] = [];
+    for (let i = 0; i < msgs.length; i++) {
+      if (msgs[i]?.content?.includes("[图片]")) imageIndexes.push(i);
+    }
+    if (imageIndexes.length > GROUP_CONTEXT_MAX_IMAGES) {
+      const keep = new Set(imageIndexes.slice(0, GROUP_CONTEXT_MAX_IMAGES));
+      msgs = msgs.filter((_, idx) => !(msgs[idx]?.content?.includes("[图片]") && !keep.has(idx)));
+    }
+    if (msgs.length === 0) return null;
+
+    const lines: string[] = [
+      `[系统提示-群聊上下文] 以下是群聊中相关成员最近 ${msgs.length} 条消息 (仅作背景, 不要回复它们)。用户@了你, 你的回复针对下方最新消息, 必须回复 (禁止输出 NO_REPLY 或静默不回复):`,
+    ];
+    for (const gm of msgs) {
+      const sender = gm.from_wxid ?? "?";
+      const text = (gm.content ?? "").replace(/\n+/g, " ").trim() || "(无文本内容)";
+      lines.push(`${sender}: ${text}`);
+    }
+    lines.push("[系统提示-群聊上下文结束]");
+
+    // 否则 AI 只看到文件 URL, 不知道要读内容 (实测只调 image 看图, 不读 xls)
+    const hasFile = msgs.some((m) => m.content?.includes("[文件]"));
+    if (hasFile) {
+      lines.push(
+        "\n[系统提示-文件读取] 上方群聊上下文中有用户发送的文件 ([文件] 后是公网 URL)。\n" +
+        "用户@你是为了处理这个文件。请用文件读取工具 (如 document-extract / clawpdf) 下载并读取文件内容, 基于文件内容回复用户。\n" +
+        "禁止: 用 find/ls 搜索本地文件、猜测文件路径。只用上方提供的 URL 读取。",
+      );
+    }
+    info(`[WPP v1.2.4 GROUP-CONTEXT-DB] injected ${msgs.length} ctx msgs (limit=${window}) → session=${buildSessionKeyForMsg(msg)} msgId=${msg.msgId} (触发人+@指定)`);
+    return lines.join("\n");
+  } catch (e) {
+    warn(`[WPP v1.2.4 GROUP-CONTEXT-DB] query failed (non-fatal, skip ctx): ${formatErr(e)}`, { msgId: msg.msgId });
+    return null;
+  }
+}
+
+/**
+ * v1.3.14 QUOTE-FORCE-CONTEXT: 引用消息 = 明确指定上下文 (老板拍板)。
+ * 触发消息用了引用 → 只注入被引用消息, 不看其它上下文。
+ * 复用 buildGroupContextFromDb 的 lines 构建 + [文件] 读取引导。
+ */
+function buildReferencedContextLines(
+  msg: WppInboundMessage,
+  referencedMsg: import("../storage/db/types.js").MessageRecord,
+): string {
+  const lines: string[] = [
+    `[系统提示-群聊上下文] 用户明确引用了以下 1 条消息 (引用 = 明确指定)。你针对被引用的这条消息回复, 必须回复 (禁止输出 NO_REPLY 或静默不回复):`,
+  ];
+  const sender = referencedMsg.from_wxid ?? "?";
+  const text = (referencedMsg.content ?? "").replace(/\n+/g, " ").trim() || "(无文本内容)";
+  lines.push(`${sender}: ${text}`);
+  lines.push("[系统提示-群聊上下文结束]");
+
+  if (referencedMsg.content?.includes("[文件]")) {
+    lines.push(
+      "\n[系统提示-文件读取] 用户引用的被引用消息是文件 ([文件] 后是公网 URL)。\n" +
+      "用户@你是为了处理这个文件。请用文件读取工具 (如 document-extract / clawpdf) 下载并读取文件内容, 基于文件内容回复用户。\n" +
+      "禁止: 用 find/ls 搜索本地文件、猜测文件路径。只用上方提供的 URL 读取。",
+    );
+  }
+  info(`[WPP v1.3.14 QUOTE-FORCE-CONTEXT] injected referenced ctx (1 msg: ${referencedMsg.msg_id}) → session=${buildSessionKeyForMsg(msg)} msgId=${msg.msgId}`);
+  return lines.join("\n");
+}
+
+/**
+ * 构造 ctxPayload (framework finalizeInboundContext 消费的入参, 仿 GeWe 范式必填字段)
+ * @param injectedContext v1.2.2 GROUP-CONTEXT-WINDOW: 群聊上下文块, 前置进 Body (不进 RawBody),
+ *                         让 AI 看到最近 N 条非触发群消息 (含媒体 URL → MediaUrls), 但不污染 RawBody 原始消息。
+ */
+function buildCtxPayload(
+  msg: WppInboundMessage,
+  sessionKey: string,
+  injectedContext?: string,
+): Record<string, unknown> {
   const isGroup = msg.peerKind === "group";
   const toWxid = msg.toWxid ?? msg.accountId;
-  // v1.1.21 QUOTE-FIX (2026-08-08 19:14 接总立): 引用消息注入结构化上下文
-  //   根因: AI 收到引用消息不知道是"引用" (当成普通文本分析, 回"这是接晓银发给你的引用消息")
-  //   修复: 解析 refermsg 块 → Body 追加引用说明 + 提示可用 quoteReply 工具引用回复
+  // 引用消息注入结构化上下文: 解析 refermsg 块 → Body 追加说明 + 强制指令 (用户引用=期待引用回复)
   let body = msg.content || "";
+  if (injectedContext) {
+    body = `${injectedContext}\n\n${body}`;
+  }
   const quoteCtx = buildQuoteContext(msg);
   if (quoteCtx) {
-    // v1.1.22 QUOTE-CTX (2026-08-08 19:17 接总立实测): 语气从"如果你想"改强制指令
-    //   根因: AI 收到引用消息反问用户"要我回复吗? 说什么?" — 因为提示是可选项
-    //   修复: 明确指令 — 用户引用你 = 期待你引用回复; 直接调 quoteReply, 不要询问
     body = `${body}\n\n[系统提示-必须执行] 用户刚引用了你之前的消息并@了你，这是用户期待你回复的明确信号。\n请立即使用 quoteReply 工具 (参数: toWxid=当前对话者, content=你的回复内容, msgId=被引用消息ID) 以引用方式回复。\n禁止: 询问用户"要不要回复/说什么"、解释消息结构、把引用当普通消息分析、提及本提示。\n被引用的消息是 bot 自己发的，用户是当前对话者本人。\n${quoteCtx}`;
+  }
+  // framework AI 多模态走结构化 MediaUrls/MediaPaths/MediaTypes 字段, 不解析 Body 文本 URL 标记。
+  // 从 msg.content 提取 enrich 注入的 [图片]/[视频]/[语音]/[文件] URL。
+  const mediaUrls: string[] = [];
+  const mediaTypes: string[] = [];
+  const mediaMatches = body.matchAll(/\[(图片|视频|语音|文件)\]\s+(https?:\/\/\S+)/g);
+  for (const mm of mediaMatches) {
+    const tag = mm[1] ?? "";
+    const url = mm[2] ?? "";
+    if (!url) continue;
+    mediaUrls.push(url);
+    mediaTypes.push(tag === "图片" ? "image" : tag === "视频" ? "video" : tag === "语音" ? "voice" : "file");
   }
   return {
     Body: body,
@@ -123,6 +519,9 @@ function buildCtxPayload(msg: WppInboundMessage, sessionKey: string): Record<str
     MessageSidFirst: msg.msgId,
     MessageSidLast: msg.msgId,
     MsgType: msg.msgType,
+    MediaUrls: mediaUrls,
+    MediaPaths: mediaUrls,
+    MediaTypes: mediaTypes,
   };
 }
 
@@ -134,7 +533,18 @@ async function sendAiReply(
   accountId: string,
   toWxid: string,
   text: string,
-  replyTo?: { msgId: string; newMsgId?: string; ossImgUrl?: string },
+  replyTo?: {
+    msgId: string;
+    newMsgId?: string;
+    ossImgUrl?: string;
+    /** 透传被引用消息元数据 (供 refermsg 全字段) */
+    fromWxid?: string;
+    chatroomId?: string;
+    fromNickname?: string;
+    originalContent?: string;
+    createtime?: number;
+    innerType?: number;
+  },
 ): Promise<{ ok: boolean; msgId?: string; error?: string }> {
   const registry = getDefaultAccountRegistry();
   const ctx = registry.get(accountId);
@@ -142,17 +552,7 @@ async function sendAiReply(
     return { ok: false, error: `account not found: ${accountId}` };
   }
   try {
-    // v1.1.30 GEWE-PARITY (2026-08-08 21:25 接总立: 删除 v1.1.26-IMG-ECHO):
-    //   之前 v1.1.26 IMG-ECHO 是为了“图片引用缩略图”达不到，反着主动 sendImage 发原图
-    //   但 v1.1.20 enrich 已把 OSS URL 注入 AI 多模态上下文，AI 实际能看到原图
-    //   而 v1.1.30 GEWE-PARITY (极简 refermsg svrid) 让微信服务器端能查原消息渲染缩略图
-    //   问题: 老板主动发图后 AI 文本回复 — 不该再 echo 原图（老板明说“图片又发给我了”）
-    //   fix: 去掉 v1.1.26-IMG-ECHO 所有逻辑，只保留 shouldQuote + 文本/引用回复
-    //   注意: ossImgUrl 参数保留但不用 (避免调用方错口)
-    // v1.1.24 QUOTE-DEFAULT (2026-08-08 19:42 接总立): 参考 gewe 业务逻辑 — 回复必须引用被回复的消息
-    //   gewe: inbound 收到消息 → rememberReply(msgId) → AI 回复时 pendingQuoteDetails 自动带被回复消息
-    //   → gewePostQuoteReply (type=57 引用卡片) 发送
-    //   WPP: deliver 回调带 replyTo (被回复消息) → quoteReply 自动引用; 无 replyTo 才退普通 sendText
+    // 有被回复消息 → 走引用回复 (quoteReply 自动构造 refermsg); 无 replyTo 才退普通 sendText
     if (replyTo?.msgId) {
       const qr = await quoteReply({
         toWxid,
@@ -160,6 +560,13 @@ async function sendAiReply(
         msgId: replyTo.msgId,
         newMsgId: replyTo.newMsgId,
         accountId,
+        // 透传被引用消息全字段 → 完整 refermsg 渲染
+        fromWxid: replyTo.fromWxid,
+        chatroomId: replyTo.chatroomId,
+        fromNickname: replyTo.fromNickname,
+        originalContent: replyTo.originalContent,
+        createtime: replyTo.createtime,
+        innerType: replyTo.innerType,
       });
       return qr.ok
         ? { ok: true, msgId: (qr.data as { msgId?: string } | undefined)?.msgId }
@@ -174,39 +581,27 @@ async function sendAiReply(
 }
 
 /**
- * 接收已 trigger 入队消息, 转换为 OpenClaw runtime 调用.
- * v1.1.6: 接入 channelRuntime.session.recordInboundSession + reply.dispatchReplyWithBufferedBlockDispatcher
- * v1.1.16 P0-FIX (2026-08-08 16:00:38 老板主号污染事件): 改硬编码 `agentId: "main"` → 从 account state 读 config.agent
- *   根因: dispatcher.ts:130 之前 hardcode "main", 完全忽略 accounts/<id>.json 的 agent 字段
- *   → 老板主号所有微信联系人 (25+) 全部被路由到 main agent → AI auto-reply 准备 → 401/502 错误消息发出去
- *   fix: 从 registry.get(msg.accountId).config.agent 读, 没读到抛 `account.agent missing`
- * v1.1.26 CONCURRENCY-FIX (2026-08-08 接总立 20:06 图片回复丢失): per-session 串行队列
- *   根因: 同一 session 并发多次 dispatch (业务回调重复推送 + debouncer 分批 flush)
- *     → 框架 foregroundReplyFence stale-foreground suppression → 先到 AI turn 的 deliver 被静默丢弃
- *     → AI 回复生成了但永远发不出去 (老板 19:53/20:06 两次“图片引用失败”实为回复未发送)
- *   修复: dispatchInboundToOpenClaw 按 sessionKey 排队串行执行 — 前一个 AI turn 完成发完回复,
- *     下一个才 dispatch; 同 session 并发时后续消息进队列等待, 不丢消息也不并发互踩
+ * 接收已 trigger 入队消息, 转换为 OpenClaw runtime 调用。
+ * - agentId 从 account state 读 (不能硬编码 main, 防多账号串号)
+ * - 按 sessionKey 排队串行执行, 防同 session 并发丢回复 (framework foregroundReplyFence 会静默丢弃 stale turn)
+ * - v1.2.2 GROUP-CONTEXT-WINDOW: 触发时 injectGroupContext 把最近 N 条非触发群消息注入上下文
+ *   (群聊发图无 @ → 缓冲, 后续 @ 文本 dispatch 时 AI 能看到图; 上限 GROUP_CONTEXT_WINDOW=10)
  */
 export async function dispatchInboundToOpenClaw(
   msg: WppInboundMessage,
-  ctx: { channelRuntime?: WppChannelRuntime } = {},
+  ctx: DispatchCtx = {},
 ): Promise<void> {
-  const registry = getDefaultAccountRegistry();
-  const accountCtx = registry.get(msg.accountId);
-  let agentId: string = "main"; // 兜底 fallback (正常不会走这里)
-  if (!accountCtx) {
-    warn(`dispatch: account not found in registry: ${msg.accountId} — fallback to "main"`);
-  } else if (accountCtx.config.agent) {
-    agentId = accountCtx.config.agent;
-  }
-  const sessionKey = buildSessionKey({
-    agentId,
-    accountId: msg.accountId,
-    peerKind: msg.peerKind,
+  const sessionKey = buildSessionKeyForMsg(msg);
+
+  // 写内存 chat info cache (outbound 路径读), msg.peerId 即 chatId
+  setSessionChatInfo(sessionKey, {
+    chatId: msg.peerId,
+    chatType: msg.peerKind === "group" ? "group" : "single",
     peerId: msg.peerId,
+    accountId: msg.accountId,
   });
 
-  // v1.1.26: 队列串行 — 同 session 的 dispatch 排队, 前一个完成再跑下一个
+  // 队列串行: 同 session 的 dispatch 排队, 前一个完成再跑下一个
   const q = dispatchQueues.get(sessionKey) ?? [];
   q.push({ msg, ctx });
   dispatchQueues.set(sessionKey, q);
@@ -218,59 +613,61 @@ export async function dispatchInboundToOpenClaw(
   try {
     while ((dispatchQueues.get(sessionKey) ?? []).length > 0) {
       const job = dispatchQueues.get(sessionKey)!.shift()!;
-      await dispatchOne(job.msg, job.ctx);
+      try {
+        await dispatchOne(job.msg, job.ctx);
+      } catch (e) {
+        warn(`dispatch: job failed (continue queue): ${formatErr(e)}`, { sessionKey, msgId: job.msg.msgId });
+      }
     }
   } finally {
     dispatchRunning.delete(sessionKey);
-    dispatchQueues.delete(sessionKey);
+    // 仅删空队列; 若有残留 (理论不会, 因 while 消费完) 保留防泄漏
+    if ((dispatchQueues.get(sessionKey) ?? []).length === 0) {
+      dispatchQueues.delete(sessionKey);
+    }
   }
 }
 
-/** per-session 队列状态 (v1.1.26) */
-const dispatchQueues = new Map<string, Array<{ msg: WppInboundMessage; ctx: { channelRuntime?: WppChannelRuntime } }>>();
+/** per-session 队列状态 */
+/** dispatch 调用上下文 */
+export interface DispatchCtx {
+  channelRuntime?: WppChannelRuntime;
+}
+
+const dispatchQueues = new Map<string, Array<{ msg: WppInboundMessage; ctx: DispatchCtx }>>();
 const dispatchRunning = new Set<string>();
 
-/** 实际执行一次 dispatch (v1.1.26 从 dispatchInboundToOpenClaw 抽出的原函数体) */
+/** 实际执行一次 dispatch (从 dispatchInboundToOpenClaw 抽出的函数体) */
 async function dispatchOne(
   msg: WppInboundMessage,
-  ctx: { channelRuntime?: WppChannelRuntime } = {},
+  ctx: DispatchCtx = {},
 ): Promise<void> {
-  // v1.1.16 P0-FIX: 从 registry 读 account.config.agent (单账号 demo 必填)
-  const registry = getDefaultAccountRegistry();
-  const accountCtx = registry.get(msg.accountId);
-  let agentId: string = "main"; // 兜底 fallback (正常不会走这里)
-  if (!accountCtx) {
-    // fallback "main" + warn log (兼容单元测试 + startAccountById 已 throw 拦截生产)
-    warn(`dispatch: account not found in registry: ${msg.accountId} — fallback to "main" (startAccountById 应已拦截, 如看到这条说明走了别的路径, 立即查!)`);
-  } else {
-    if (accountCtx.config.agent) {
-      agentId = accountCtx.config.agent;
-    } else {
-      warn(`dispatch: account.agent missing for ${msg.accountId} — fallback to "main" (startAccountById 应已拦截)`);
-    }
-  }
+  // 从 registry 读 account.config.agent (单账号 demo 必填)
+  const sessionKey = buildSessionKeyForMsg(msg);
+  // (否则群聊发文件+@ 时文件还没入库, buildGroupContextFromDb 查不到 → AI 看不到文件)
+  await waitForPendingEnrich(msg.accountId, msg.fromWxid);
+  info(`dispatch: account=${msg.accountId} session=${sessionKey} trigger=${msg.trigger}`);
 
-  const sessionKey = buildSessionKey({
-    agentId,
-    accountId: msg.accountId,
-    peerKind: msg.peerKind,
-    peerId: msg.peerId,
-  });
-  info(`dispatch: account=${msg.accountId} agent=${agentId} session=${sessionKey} trigger=${msg.trigger}`);
+  // v1.3.38 PENDING-REPLY (借鉴 gewe): 记录 msgId → 路由上下文, 供 AI 回复工具兜底还原目标
+  //   (防 AI 回复误用 sender wxid 发到 DM, 群@应回群)
+  const isGroupMsg = msg.peerKind === "group";
+  const roomId = msg.chatroomId ?? msg.peerId;
+  const senderId = msg.fromWxid ?? "";
+  const replyKey = msg.newMsgId || msg.msgId;
+  if (replyKey) {
+    rememberReply(replyKey, {
+      isGroup: isGroupMsg,
+      roomId: isGroupMsg ? (roomId ?? "") : senderId,
+      senderId,
+      accountId: msg.accountId,
+    });
+    if (isGroupMsg && roomId) rememberLastGroupMention(msg.accountId, roomId, replyKey);
+  }
 
   const runtime = ctx.channelRuntime ?? getChannelRuntime();
   const isNoop = runtime === NOOP_RUNTIME;
 
-  // v1.1.15 STORE-PATH (2026-08-08 老板 15:27): 仿 GeWe 范式解析 storePath
-  // 根因: vendor 推完整消息触发 dispatcher → 框架需 storePath (session storage path)
-  //   之前 v1.1.6 漏传 → runExclusiveSessionStoreWrite 抛 "storePath must be a non-empty string"
-  //   → unhandled rejection → gateway 崩溃 → systemd Restart=always 循环
-  //   → 3 次 unclean boot 触发 restart-loop breaker → 3 channel 全部抑制
-  // fix: 仿 GeWe 调 resolveStorePath?.("", { accountId }) 拿 path → 传入 recordInboundSession + dispatchReply
-  // v1.1.15 P0-fix (老板 15:45): framework resolveStorePath(store: string, opts) 参数顺序
-  //   store 是会话存储路径字符串 (空字符串=让框架走 default), opts 含 accountId/agentId
-  //   之前 v1.1.15 错传 ({ accountId }) 当第一个参数 → 框架 .includes("{agentId}") 抛 TypeError
-  //   → 再次 unhandled rejection → 又崩一次
+  // 仿 GeWe 解析 storePath (漏传会导致 gateway 崩溃): resolveStorePath("", { accountId }) → session storage path
   let storePath = "";
   try {
     storePath = runtime.session.resolveStorePath?.("", { accountId: msg.accountId } as Parameters<NonNullable<typeof runtime.session.resolveStorePath>>[1]) ?? "";
@@ -278,8 +675,15 @@ async function dispatchOne(
     warn(`dispatch: resolveStorePath failed: ${formatErr(e)}`);
   }
 
-  // Step 1: 记录入站消息 (AI 上下文) — v1.1.15 P0-DISPATCH: ctx 必填 (仿 GeWe 范式)
-  const ctxPayload = buildCtxPayload(msg, sessionKey);
+  // (群聊同 session, 只看 @ 人自己的上下文; 图片≤3 直接 MediaUrls 看图)
+  // groupContextEnabled 开关 (默认 false, 显式 true 才注入群聊上下文, 从 registry 读)
+  const groupCtxEnabled = resolveGroupContextEnabled(msg);
+  const injectedGroupContext = groupCtxEnabled
+    ? await buildGroupContextFromDb(msg)
+    : null;
+
+  // Step 1: 记录入站消息 (AI 上下文), ctx 必填
+  const ctxPayload = buildCtxPayload(msg, sessionKey, injectedGroupContext ?? undefined);
   try {
     await runtime.session.recordInboundSession({ storePath, sessionKey, ctx: ctxPayload });
   } catch (e) {
@@ -287,9 +691,22 @@ async function dispatchOne(
     if (!isNoop) throw e;
   }
 
-  // Step 2: 调 AI 生成回复 — v1.1.15 P0-DISPATCH: framework 真实签名
-  //   { ctx, cfg, dispatcherOptions.deliver, replyOptions, ... }
-  //   deliver 回调负责把 AI reply 发到 vendor (仿 GeWe beforeDeliver+deliver 范式)
+  // 文件消息 (v1 schema, handler 已注入 [文件] + [系统提示-文件限制]) → 绕过 AI 直接回固定模板:
+  // 文件内容读不了, AI 自由发挥无价值; 固定模板 100% 不出错、零模型调用、响应最快
+  if (msg.msgType === 49) {
+    const autoReply = buildFileAutoReply(msg.content);
+    if (autoReply?.isFileMsg && autoReply.replyText) {
+      try {
+        const r = await sendAiReply(msg.accountId, msg.peerId, autoReply.replyText);
+        info(`[WPP v1.2.0 FILE-DETERMINISTIC] file auto-reply done: msgId=${msg.msgId} ok=${r.ok} error=${r.error ?? "none"}`);
+      } catch (e) {
+        warn(`[WPP v1.2.0 FILE-DETERMINISTIC] file auto-reply failed: ${formatErr(e)}`, { msgId: msg.msgId });
+      }
+      return;
+    }
+  }
+
+  // Step 2: 调 AI 生成回复, deliver 回调负责把 AI reply 发到 vendor
   try {
     await runtime.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -298,29 +715,24 @@ async function dispatchOne(
       dispatcherOptions: {
         deliver: async (payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string }, _info: unknown) => {
           const text = payload?.text ?? "";
-          // v1.1.26-IMG-ECHO: 从 inbound msg.content 提取已被 enrich 的图片 OSS URL
-          //   enrich (v1.1.20) 在 msg.content 追加 "[图片] https://...oss..."
-          //   AI 多模态识别图但 deliver 没结构化拿到 url → 主动发原图给老板 (不依赖 svrid)
+          // 从 inbound msg.content 提取 enrich 注入的图片 OSS URL (AI 回复若有图时, deliver 结构化 mediaUrl 兜底)
           const imgUrlMatch = msg.content?.match(/\[图片\]\s+(https?:\/\/\S+)/);
           const ossImgUrl = imgUrlMatch?.[1] ?? payload?.mediaUrls?.[0] ?? payload?.mediaUrl ?? "";
-          // v1.1.28 NO-QUOTE-IMG (2026-08-08 20:56 接总立 preference: 图片不要引用):
-          //   老板 20:56 preference: 图片消息以后不要引用 — 旧象: svrid 不准 → 缩略图不显示
-          //   老板 21:19 反转 (v1.1.30 GEWE-PARITY): 分析 gewe 后以为极简 refermsg svrid 能行
-          //   老板 21:30 撤销 20:56 决定 (v1.1.31 REVOKE): "图片我还是希望可以被引用回复"
-          //   老板 21:38 恢复 20:56 决定 + 拓展 (v1.1.32 TEXT-ONLY-QUOTE): "除了文本消息，其它全部不需要引用回复了"
-          //   根因: WPP vendor NewMsgId ≠ 微信 svrid → 21:32 老板实测 "该消息类型暂不能展示"
-          //         即使极简 refermsg svrid 服务器端也查不到 (vendor 设计 vs gewe 设计不同)
-          // v1.1.32 TEXT-ONLY-QUOTE (2026-08-08 21:38 接总立偏好):
-          //   fix: shouldQuote 只对 msg.msgType === 1 (文本) 启用
-          //         图片 (3) / 语音 (34) / 视频 (43) / 文件 (49) / 位置 (48) / 名片 (42) 全不引用
-          //         AI 看到原图 (v1.1.20 enrich) 走文本回复即可
-          const shouldQuote = msg.msgType === 1;
-          info(`[WPP DEBUG-DELIVER] deliver called: textLen=${text.length} hasOssImg=${!!ossImgUrl} msgType=${msg.msgType} shouldQuote=${shouldQuote} replyTo=${msg.msgId}/${msg.newMsgId ?? ""}`);
+          // 当前全 msgType 引用回复 (老板 v1.1.50 拍板放开)
+          const shouldQuote = true;
+          info(`deliver called: textLen=${text.length} hasOssImg=${!!ossImgUrl} msgType=${msg.msgType} shouldQuote=${shouldQuote} replyTo=${msg.msgId}/${msg.newMsgId ?? ""}`);
           if (!text && !ossImgUrl) return { ok: true, msgId: "" };
+          // 把被引用消息的元数据传透给 quoteReply (构建完整 refermsg)
           const result = await sendAiReply(msg.accountId, msg.peerId, text, {
             msgId: shouldQuote ? msg.msgId : "",
             newMsgId: shouldQuote ? msg.newMsgId : "",
             ossImgUrl: ossImgUrl || undefined,
+            fromWxid: shouldQuote ? msg.fromWxid : undefined,
+            chatroomId: shouldQuote ? msg.chatroomId : undefined,
+            fromNickname: shouldQuote ? msg.fromNickname : undefined,
+            originalContent: shouldQuote ? msg.content : undefined,
+            createtime: shouldQuote ? msg.ts : undefined,
+            innerType: shouldQuote ? msg.msgType : undefined,
           });
           info(`[WPP DEBUG-DELIVER] sendAiReply done: ok=${result.ok} error=${result.error ?? "none"} msgId=${result.msgId ?? ""}`);
           return result;

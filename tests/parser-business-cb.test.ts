@@ -231,3 +231,122 @@ test("v1.1.17 — v1 格式群聊 is_group=true → 群聊解析", () => {
   assert.equal(msgs[0].chatroomId, "57237508162@chatroom");
   assert.equal(msgs[0].peerId, "57237508162@chatroom");
 });
+
+// ===== v1.3.6: parseV1Message 提取 new_msg_id (snake_case) 入库 =====
+test("v1.3.6 — v1 消息 new_msg_id/svr_id 提取入库", () => {
+  const fixture = {
+    Wxid: "q139198824",
+    EventType: "sync_message",
+    Timestamp: 1786180821,
+    Data: {
+      count: 1,
+      messages: [
+        {
+          content: "收到一张图片",
+          conversation_id: "57737516566@chatroom",
+          created_at: 1786180821,
+          direction: "incoming",
+          id: "5739862881048543172",
+          is_group: true,
+          kind: "image",
+          local_id: 1665109781,
+          new_msg_id: "5739862881048543172",
+          svr_id: "5739862881048543172",
+          recipient_id: "q139198824",
+          sender_id: "wxid_eezdbu1ytws422",
+          type: 3,
+        },
+      ],
+      schema: "wechatpad.message.v1",
+    },
+  };
+  const msgs = payloadToAllInboundMessages("default", fixture as never);
+  assert.equal(msgs.length, 1);
+  // v1.3.6: newMsgId 应提取 new_msg_id (不再硬编码空)
+  assert.equal(msgs[0].newMsgId, "5739862881048543172", "newMsgId 应 = new_msg_id");
+  assert.equal(msgs[0].msgId, "5739862881048543172", "msgId = vendor id");
+});
+
+test("v1.3.6 — v1 消息无 new_msg_id → newMsgId 空 (不崩)", () => {
+  const fixture = {
+    Wxid: "q139198824",
+    EventType: "sync_message",
+    Timestamp: 1786180821,
+    Data: {
+      count: 1,
+      messages: [
+        {
+          content: "hello",
+          conversation_id: "wxid_dbdmq8riblxo12",
+          created_at: 1786180821,
+          direction: "incoming",
+          id: "12345",
+          kind: "text",
+          recipient_id: "q139198824",
+          sender_id: "wxid_dbdmq8riblxo12",
+          type: 1,
+        },
+      ],
+      schema: "wechatpad.message.v1",
+    },
+  };
+  const msgs = payloadToAllInboundMessages("default", fixture as never);
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].newMsgId, "", "无 new_msg_id → 空");
+});
+
+// ============ v1.3.21 REVOKE-FIX: outgoing 图片放行 (拿真实 server ID) ============
+
+test("v1.3.21 — outgoing 图片 (kind=image/msgType=3) 放行解析", () => {
+  const fixture = {
+    Wxid: "q139198824", EventType: "sync_message", Timestamp: Math.floor(Date.now() / 1000),
+    Data: { count: 1, messages: [{
+      content: "收到一张图片", conversation_id: "57737516566@chatroom",
+      created_at: Math.floor(Date.now() / 1000), direction: "outgoing",
+      id: "8888888888888888888",
+      image: { aes_key: "x", download_context: { data_len: 100, endpoint: "/api/Tools/DownloadImg", msg_id: 1 }, md5: "abc", thumbnail: { embedded: true, embedded_bytes: 100 } },
+      image_bytes: 100, image_status: 2, is_group: true, kind: "image",
+      local_id: 123, msg_id: 123, new_msg_id: "8888888888888888888",
+      recipient_id: "57737516566@chatroom", sender_id: "q139198824",
+      sequence: 1, source: "wechat_pad", status: 3, svr_id: "8888888888888888888", type: 3,
+    }], schema: "wechatpad.message.v2" },
+  };
+  const msgs = payloadToAllInboundMessages("default", fixture);
+  assert.equal(msgs.length, 1, "outgoing 图片应放行");
+  assert.equal(msgs[0].msgType, 3);
+  assert.equal(msgs[0].peerKind, "group");
+  assert.equal(msgs[0].newMsgId, "8888888888888888888", "应拿到真实 server ID");
+});
+
+test("v1.3.21 — outgoing 文本仍过滤 (AI 回复不进上下文)", () => {
+  const fixture = {
+    Wxid: "q139198824", EventType: "sync_message", Timestamp: Math.floor(Date.now() / 1000),
+    Data: { count: 1, messages: [{
+      content: "你好", conversation_id: "57737516566@chatroom", created_at: Math.floor(Date.now() / 1000),
+      direction: "outgoing", id: "7777777777777777777", image_bytes: 0, image_status: 1,
+      is_group: true, kind: "text", local_id: 124, msg_id: 124, new_msg_id: "7777777777777777777",
+      recipient_id: "57737516566@chatroom", sender_id: "q139198824", sequence: 2,
+      source: "wechat_pad", status: 3, svr_id: "7777777777777777777", type: 1,
+    }], schema: "wechatpad.message.v2" },
+  };
+  const msgs = payloadToAllInboundMessages("default", fixture);
+  assert.equal(msgs.length, 0, "outgoing 文本应过滤");
+});
+
+test("v1.3.21 — incoming 图片仍正常解析 (不影响)", () => {
+  const fixture = {
+    Wxid: "q139198824", EventType: "sync_message", Timestamp: Math.floor(Date.now() / 1000),
+    Data: { count: 1, messages: [{
+      content: "收到一张图片", conversation_id: "57737516566@chatroom",
+      created_at: Math.floor(Date.now() / 1000), direction: "incoming",
+      id: "6666666666666666666",
+      image: { aes_key: "x", download_context: { data_len: 100, endpoint: "/api/Tools/DownloadImg", msg_id: 1 }, md5: "abc", thumbnail: { embedded: true, embedded_bytes: 100 } },
+      image_bytes: 100, image_status: 2, is_group: true, kind: "image",
+      local_id: 125, msg_id: 125, new_msg_id: "6666666666666666666",
+      recipient_id: "57737516566@chatroom", sender_id: "wxid_sender", sequence: 3,
+      source: "wechat_pad", status: 3, svr_id: "6666666666666666666", type: 3,
+    }], schema: "wechatpad.message.v2" },
+  };
+  const msgs = payloadToAllInboundMessages("default", fixture);
+  assert.equal(msgs.length, 1, "incoming 图片应正常解析");
+});

@@ -22,9 +22,9 @@ export function makeWppOfficialAccounts(ctx: WppAccountCtx) {
     /** /OfficialAccounts/GetAppMsgExtLike */
     getAppMsgExtLike: (url: string) => dispatch("/OfficialAccounts/GetAppMsgExtLike", { url }),
 
-    /** /OfficialAccounts/GetMpHistory */
-    getMpHistory: (biz: string, offset?: number) =>
-      dispatch("/OfficialAccounts/GetMpHistory", { biz, offset: offset ?? 0 }),
+    /** /OfficialAccounts/GetMpHistory (v1.2.1 swagger-alignment: GetMpHistoryMsgParam {url, wxid}) */
+    getMpHistory: (url: string, wxid: string = "") =>
+      dispatch("/OfficialAccounts/GetMpHistory", { url, wxid }),
 
     /** /OfficialAccounts/GetMpHistoryMessage */
     getMpHistoryMessage: (url: string) =>

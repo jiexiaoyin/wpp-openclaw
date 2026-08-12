@@ -43,16 +43,20 @@ export interface DbAdapter {
     accountId?: string;
     peerKind?: string;
     peerId?: string;
+    /** v1.2.4: 按发送者过滤 (群聊查触发人历史) */
+    fromWxid?: string;
     limit?: number;
     beforeTs?: number;
   }): Promise<MessageRecord[]>;
   getMessageById(msgId: string, accountId: string): Promise<MessageRecord | null>;
   findMessageByMd5(md5: string, accountId: string): Promise<MessageRecord | null>;
-  /** v1.1.19 DB-DEDUP: 按 msg_id 或 new_msg_id 查已存在 inbound 消息 (持久化去重) */
+  /** v1.1.19 DB-DEDUP: 按 msg_id 或 new_msg_id 查已存在消息 (持久化去重) */
   getMessageByMsgIdOrNewId(
     msgId: string | undefined,
     newMsgId: string | undefined,
     accountId: string,
+    /** v1.3.18 P1-核心2 fix: 默认 inbound (保持向后兼容, dedup 用), 引用解析路径传 any (查全部方向) */
+    opts?: { direction?: "inbound" | "outbound" | "any" },
   ): Promise<MessageRecord | null>;
 
   // ====== v1.1.24 Quote svrid 映射 ======
@@ -113,6 +117,8 @@ export interface MessageRecord {
   msg_type?: string | null;
   content?: string | null;
   raw_payload?: unknown;
+  /** v1.2.4: inbound 发送者 wxid (群聊按人查历史) */
+  from_wxid?: string | null;
   ts?: number; // unix seconds; default NOW()
 }
 

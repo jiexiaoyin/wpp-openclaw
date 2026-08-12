@@ -11,6 +11,9 @@ import { createWppInboundHandler, type WppInboundHandlerOpts } from "./handler.j
 import { defaultTriggerConfig, shouldTrigger } from "./triggers.js";
 import { WppInboundDebouncer } from "./debouncer.js";
 import { extractAtUserList, isBotMentionedByText } from "./parser/mention.js";
+import { checkGroupPolicy } from "./group-policy.js";
+import { checkDmPolicy } from "./dm-policy.js";
+import { checkCommandAllowlist } from "./commands.js";
 import { parseQuoteXml } from "./parser/quote.js";
 import { stripGroupPrefix, describeMsgType } from "./parser/content.js";
 import { isValidWxid, isGroupWxid, isValidAtUser } from "./parser/wxid.js";
@@ -53,36 +56,51 @@ export async function handleWebhookPayload(
   const state = getDefaultAccountRegistry().get(accountId);
   if (!state) return msg;
 
-  // DM 白名单
-  if (msg.peerKind === "direct") {
-    const allow = state.config.allowFrom ?? [];
-    if (allow.length > 0 && !allow.includes(msg.fromWxid)) {
-      log.info(`dm blocked: ${msg.fromWxid} not in allowFrom`);
+  // v1.1.39 SUNNOY-COMMANDS: 命令白名单检查 (sunnoy/wecom commands.js 范式)
+  //   检查顺序: 命令白名单在 group/DM policy 之前
+  //   命令且不在白名单 → return null 阻止 dispatch
+  //   注: 当前不发 blockMessage (无 sendReply 通道), 仅静默拒绝
+  //     未来可接入 sendReply 发友好提示 (v1.1.40+ 待评估)
+  const cmdConfig = state.config.commandAllowlist;
+  if (cmdConfig) {
+    const cmdResult = checkCommandAllowlist(msg.content, cmdConfig);
+    if (cmdResult.isCommand && !cmdResult.allowed) {
+      log.info(`command blocked: ${cmdResult.name} reason=${cmdResult.reason}`);
       return null;
     }
   }
 
-  // Group 策略 (简单的 disabled/allowlist, 不走 4-way trigger)
-  if (msg.peerKind === "group") {
-    const policy = state.config.groupPolicy;
-    if (policy === "disabled") return null;
-    if (policy === "allowlist") {
-      const allow = state.config.groupAllowFrom ?? [];
-      if (
-        allow.length > 0 &&
-        msg.chatroomId &&
-        !allow.includes(msg.chatroomId)
-      ) {
-        log.info(`group blocked: ${msg.chatroomId} not in groupAllowFrom`);
-        return null;
-      }
+  // v1.1.39 SUNNOY-DM-POLICY: DM 策略 (sunnoy/wecom dm-policy.js 范式)
+  if (msg.peerKind === "direct") {
+    const dmResult = checkDmPolicy({
+      msg,
+      allowFrom: state.config.allowFrom ?? [],
+      adminUsers: state.config.adminUsers ?? [],
+    });
+    if (!dmResult.allowed) {
+      log.info(`dm blocked: ${msg.fromWxid} reason=${dmResult.reason}`);
+      return null;
     }
-    // requireAtMention: 群聊默认需要 @ 才触发 — Phase D 加简易 at 校验
-    if (state.config.requireAtMention) {
-      if (!isBotMentionedByText(msg.content, state.selfWxid)) {
-        log.debug(`group at-required skip: ${msg.content.slice(0, 30)}`);
-        return null;
-      }
+  }
+
+  // v1.1.39 SUNNOY-GROUP-POLICY: 群聊策略 (sunnoy/wecom group-policy.js 范式)
+  if (msg.peerKind === "group") {
+    const grpResult = checkGroupPolicy({
+      msg,
+      policy: state.config.groupPolicy,
+      groupAllowFrom: state.config.groupAllowFrom ?? [],
+      requireAtMention: state.config.requireAtMention,
+      selfWxid: state.selfWxid,
+    });
+    if (!grpResult.allowed) {
+      log.info(`group blocked: ${msg.chatroomId} reason=${grpResult.reason}`);
+      return null;
+    }
+    // SUNNOY-GROUP-CONTENT 范式: 应用清洗后的 content (给 AI 看)
+    if (grpResult.cleanedContent !== undefined) {
+      const originalContent = msg.content;
+      msg.content = grpResult.cleanedContent;
+      log.debug(`group content cleaned: "${originalContent.slice(0, 40)}" → "${msg.content.slice(0, 40)}"`);
     }
   }
 

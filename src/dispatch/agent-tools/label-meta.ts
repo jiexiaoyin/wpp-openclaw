@@ -1,0 +1,44 @@
+// src/dispatch/agent-tools/label-meta.ts - Label tag (标签, 5)
+
+import { Type } from "typebox";
+import type { ToolMeta } from "./_shared.js";
+import { makeWppLabel } from "../../send/index.js";
+import { getDefaultAccountRegistry } from "../../account-state.js";
+
+function getLab() {
+  const state = getDefaultAccountRegistry().get("default");
+  if (!state) throw new Error("account not found: default");
+  return makeWppLabel({
+    baseUrl: state.config.apiBaseUrl,
+    tokenKey: state.config.tokenKey,
+    authcode: state.authcode,
+    accountId: "default",
+  });
+}
+
+export const LABEL_META: ToolMeta = {
+  labelAdd: [
+    "添加标签 (v1.2.1 swagger-alignment: 只传 LabelName).",
+    Type.Object({
+      labelName: Type.String(),
+    }),
+    (labelName: string) => getLab().add(labelName),
+  ],
+  labelDelete: ["删除标签.", Type.Object({ labelId: Type.String() }), (labelId: string) => getLab().delete(labelId)],
+  labelGetList: ["获取标签列表.", Type.Object({}), () => getLab().getList()],
+  labelUpdateName: [
+    "修改标签名.",
+    Type.Object({ labelId: Type.String(), labelName: Type.String() }),
+    (labelId: string, labelName: string) => getLab().updateName(labelId, labelName),
+  ],
+  labelUpdateList: [
+    "更新标签的成员列表.",
+    Type.Object({
+      labelId: Type.String(),
+      wxidList: Type.String({ description: "wxid 数组 join(',')" }),
+    }),
+    // 原版 api.updateList(labelId, wxidList) — 但 api.updateList 签名是 (labelId, wxidList: string[])
+    // 历史不一致, 不优化
+    (labelId: string, wxidList: string) => getLab().updateList(labelId, [wxidList]),
+  ],
+};

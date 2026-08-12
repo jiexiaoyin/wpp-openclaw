@@ -1,6 +1,9 @@
 # 凭证与运行时产物
 node_modules/
 dist/
+dist-release/
+release/
+release-docs/
 *.log
 .env
 *.bak

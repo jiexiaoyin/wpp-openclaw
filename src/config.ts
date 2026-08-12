@@ -1,20 +1,19 @@
 // config.ts - B 方案配置加载器
 // 单账号: accounts/default.json, 多账号: accounts/<id>.json
-// 2026-08-04 init, 2026-08-04 v1.0.4 FIX-B1: 加 LRU cache (P2-1 sync I/O 优化)
+// src/config.ts - 配置加载 (带 LRU cache 减少 sync I/O)
 
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { logObj as log } from "./core/logger.js";
 import { DEFAULT_ACCOUNT_ID } from "./core/constants.js";
 import { findPluginRoot } from "./core/paths.js";
 import { LruCache } from "./core/lru.js";
 import type { WppAccountConfig, WppGlobalConfig } from "./types.js";
+import { stringifyLargeInts } from "./util/bigint.js"; // v1.3.27 P2-1: 写配置防 16+ 位整数丢精度
 
 // 仿 模式: 不再硬编码 PLUGIN_ROOT, 走 findPluginRoot walks 6 levels
 // 避免 import.meta.dirname 在 dist/ 被打包时偏移导致 silent file-not-found
 
-// v1.0.4 FIX-B1: LRU cache 避免每次 startAccountById 重读 disk
-// maxSize=8 (1 global + 7 accounts), ttlMs=60s (credential rotation 60s 内能感知)
 const configCache = new LruCache<WppAccountConfig | WppGlobalConfig>({
   maxSize: 8,
   ttlMs: 60_000,
@@ -37,11 +36,11 @@ export async function loadGlobalConfig(): Promise<WppGlobalConfig> {
   try {
     const text = await readFile(p, "utf8");
     raw = JSON.parse(text) as WppGlobalConfig;
-  } catch (e: any) {
-    if (e?.code === "ENOENT") throw new Error(`config.json not found: ${p}`);
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException; if (err.code === "ENOENT") throw new Error(`config.json not found: ${p}`);
     throw e;
   }
-  // 密码从环境变量取 (B 方案 + 老板 2026-08-01 铁律: token/password 单一来源)
+  // 密码从环境变量取 (token/password 单一来源铁律)
   if (raw.storage?.db?.mariadb?.passwordEnv) {
     const envPwd = process.env[raw.storage.db.mariadb.passwordEnv];
     if (envPwd) {
@@ -57,13 +56,7 @@ export async function loadGlobalConfig(): Promise<WppGlobalConfig> {
 }
 
 /**
- * v1.1.8 FIX-S1: 异步版本 loadGlobalConfig
- * 用 fs/promises readFile, 不阻塞 event loop
- * 同步版本保留 (兼容 CLI tools / tests)
- */
-/**
- * @deprecated v1.1.9 P1-3: 异步迁移完成, loadGlobalConfig() 本身就是 async
- * 保留此别名仅为向后兼容 (CLI tools / tests 可能仍 import 此名)
+ * 异步版本 loadGlobalConfig (fs/promises readFile, 不阻塞 event loop)
  */
 export const loadGlobalConfigAsync = loadGlobalConfig;
 
@@ -80,7 +73,6 @@ export async function loadAccountConfig(accountId: string = DEFAULT_ACCOUNT_ID):
   if (!isValidAccountId(accountId)) {
     throw new Error(`invalid accountId (must match /^[a-zA-Z0-9_-]{1,64}$/): ${JSON.stringify(accountId)}`);
   }
-  // v1.0.4 FIX-B1: 查 cache (但 env credential 注入不能用 cache, 永远重读)
   const cached = configCache.get(accountId);
   if (cached && "nickname" in cached) {
     const raw = { ...cached };
@@ -92,6 +84,11 @@ export async function loadAccountConfig(accountId: string = DEFAULT_ACCOUNT_ID):
       const envAuth = process.env[raw.authcodeEnv];
       if (envAuth) raw.authcode = envAuth;
     }
+    // v1.3.18 B-8 fix: cache 层也补 webhookSecret env 注入 (跟 disk 路径一致)
+    if (typeof raw.webhookSecretEnv === "string" && raw.webhookSecretEnv && !raw.webhookSecret) {
+      const envSecret = process.env[raw.webhookSecretEnv];
+      if (envSecret) raw.webhookSecret = envSecret;
+    }
     return raw;
   }
   const p = join(await findPluginRoot(), "accounts", `${accountId}.json`);
@@ -99,25 +96,51 @@ export async function loadAccountConfig(accountId: string = DEFAULT_ACCOUNT_ID):
   try {
     const text = await readFile(p, "utf8");
     raw = JSON.parse(text) as WppAccountConfig;
-  } catch (e: any) {
-    if (e?.code === "ENOENT") throw new Error(`account config not found: ${p}`);
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException; if (err.code === "ENOENT") throw new Error(`account config not found: ${p}`);
     throw e;
   }
   // 凭证优先从环境变量取
   if (raw.tokenKeyEnv) {
+    // v1.3.18 P3-D-2: tokenKeyEnv 优先级日志 - 明确告知用户哪个字段生效 (防止两个都填不知谁生效)
+    if (raw.tokenKey) {
+      log.warn(
+        `account=${accountId}: both tokenKey and tokenKeyEnv set, env wins (tokenKey ignored for security)`,
+      );
+    }
     const envToken = process.env[raw.tokenKeyEnv];
-    if (envToken) raw.tokenKey = envToken;
+    if (envToken) {
+      raw.tokenKey = envToken;
+      log.info(`account=${accountId}: tokenKey loaded from env ${raw.tokenKeyEnv}`);
+    } else if (!raw.tokenKey) {
+      log.warn(
+        `account=${accountId}: tokenKeyEnv=${raw.tokenKeyEnv} but env empty AND tokenKey empty — plugin will fail to start`,
+      );
+    }
+  } else if (raw.tokenKey) {
+    log.info(`account=${accountId}: tokenKey loaded (plaintext, recommend tokenKeyEnv)`);
   }
   if (raw.authcodeEnv) {
     const envAuth = process.env[raw.authcodeEnv];
     if (envAuth) raw.authcode = envAuth;
   }
-  // v1.1.12 (2026-08-08): webhookPublicUrl env var fallback (跟 tokenKey/authcode 同模式)
+  // v1.3.18 B-8 fix (2026-08-10): webhookSecretEnv 真接入 — 不再死配, webhook HMAC 验签才能 ON
+  //   (跟 tokenKeyEnv/authcodeEnv 同模式: raw.webhookSecret 优先, 缺失才从 env 取)
+  if (typeof raw.webhookSecretEnv === "string" && raw.webhookSecretEnv && !raw.webhookSecret) {
+    const envSecret = process.env[raw.webhookSecretEnv];
+    if (envSecret) {
+      raw.webhookSecret = envSecret;
+      log.info(`account=${accountId}: webhookSecret loaded from env ${raw.webhookSecretEnv}`);
+    } else {
+      log.warn(`account=${accountId}: webhookSecretEnv=${raw.webhookSecretEnv} but env empty — HMAC verification OFF`);
+    }
+  }
+  // webhookPublicUrl env var fallback (跟 tokenKey/authcode 同模式)
   if (raw.webhookPublicUrlEnv) {
     const envUrl = process.env[raw.webhookPublicUrlEnv];
     if (envUrl) raw.webhookPublicUrl = envUrl;
   }
-  // v1.1.12: autoSetWebhook 默认 true (跟其他 boolean 配置一致的 falsy fallback)
+  // autoSetWebhook 默认 true (跟其他 boolean 配置一致的 falsy fallback)
   if (raw.autoSetWebhook === undefined) raw.autoSetWebhook = true;
   if (!raw.setWebhookRetries || raw.setWebhookRetries < 1) raw.setWebhookRetries = 3;
   log.info(`loaded account config: ${accountId} (apiBase=${raw.apiBaseUrl}, ws=${raw.wsUrl})`);
@@ -126,8 +149,7 @@ export async function loadAccountConfig(accountId: string = DEFAULT_ACCOUNT_ID):
 }
 
 /**
- * @deprecated v1.1.9 P1-3: 异步迁移完成, loadAccountConfig() 本身就是 async
- * 保留此别名仅为向后兼容 (CLI tools / tests 可能仍 import 此名)
+ * 异步版本 loadAccountConfig
  */
 export const loadAccountConfigAsync = loadAccountConfig;
 
@@ -136,8 +158,8 @@ export async function listAccountIds(): Promise<string[]> {
   let entries: string[];
   try {
     entries = await readdir(dir);
-  } catch (e: any) {
-    if (e?.code === "ENOENT") return [];
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException; if (err.code === "ENOENT") return [];
     throw e;
   }
   return entries
@@ -147,18 +169,8 @@ export async function listAccountIds(): Promise<string[]> {
 }
 
 /**
- * v1.1.10 P0-1 (2026-08-05 修复): isConfigured 必须支持 env var fallback
- *
- * 根因:老板 21:00 拍 '缺 channel + agent 绑定' → 启 gateway restart 后 OpenClaw 调
- *      plugin.config.isConfigured(account, cfg) 验证才能 startAccount.
- *      原实现只检查 raw cfg.tokenKey (空字符串),没用 env var (tokenKeyEnv/authcodeEnv).
- *      → OpenClaw 标记 account 为 unconfigured, 永远不调 gateway.startAccount, webhook server 永远不起.
- *
- * 修复: env var fallback — 如果 raw tokenKey/authcode 为空, 但有 tokenKeyEnv/authcodeEnv,
- *      从 process.env 读值. 跟 loadAccountConfig 一样逻辑.
- *
- * 测试: 用 accounts/default.json (tokenKey="" + tokenKeyEnv="WECHATPRO_TOKEN_KEY",
- *        env var 已配) → 返回 true.
+ * 判断账号是否已配置 (OpenClaw 验证通过才调 gateway.startAccount)
+ * 必须支持 env var fallback (否则 tokenKey 为空字符串 → 误判 unconfigured → webhook 永不启动)
  */
 export function isConfigured(cfg: WppAccountConfig): boolean {
   // env var fallback (跟 loadAccountConfig 缓存层逻辑一致)
@@ -167,15 +179,16 @@ export function isConfigured(cfg: WppAccountConfig): boolean {
   return !!(cfg.enabled && tokenKey && cfg.apiBaseUrl && authcode);
 }
 
-// ===================== HOT-RELOAD (v1.1.15 方案 A, 2026-08-08 接总立) =====================
-// 目标: 改 accounts/<id>.json 运行时字段 (allowFrom/groupPolicy/requireAtMention/debounce 等)
-//      零重启生效. 机制: fs.watch(accounts/) → 防抖 → 清 cache → 重读 → 回调.
-// 注意: fs.watch 在不同平台事件语义不同 (Linux inotify: rename/change 都触发),
-//     编辑器保存常先 rename (tmp file) 再 change → 防抖 + 重读磁盘双保险.
+// ===================== HOT-RELOAD =====================
+// 改 accounts/<id>.json 运行时字段零重启生效: fs.watch → 防抖 → 清 cache → 重读 → 回调。
+// 注意: 编辑器保存常先 rename (tmp) 再 change → 防抖 + 重读磁盘双保险。
 
 let watchTimer: NodeJS.Timeout | null = null;
 let watchDebounceMs = 300;
 let watchActive = false;
+// v1.3.18 P2-B-6: 独立 timer/debounce/active (避免 watchGlobalConfig 与 watchAccountConfigs 共用状态互相干扰)
+let globalWatchTimer: NodeJS.Timeout | null = null;
+let globalWatchActive = false;
 
 /** 测试用: 清缓存 (热重载后 loadAccountConfig 才读新文件) */
 export function invalidateConfigCache(accountId?: string): void {
@@ -191,6 +204,11 @@ export function setWatchDebounceMs(ms: number): void {
 /** 测试用: 当前是否在 watch */
 export function isWatchingAccounts(): boolean {
   return watchActive;
+}
+
+/** v1.3.18 P2-B-6: 测试用 - 当前是否在 watch config.json */
+export function isWatchingGlobalConfig(): boolean {
+  return globalWatchActive;
 }
 
 /**
@@ -213,8 +231,8 @@ export async function watchAccountConfigs(
         const cfg = await loadAccountConfig(accountId);
         log.info(`config hot-reload detected: ${accountId} (${eventType})`);
         await onChange(accountId, cfg);
-      } catch (e: any) {
-        log.warn(`config hot-reload failed: ${accountId}: ${e?.message ?? e}`);
+      } catch (e) {
+        const err = e as NodeJS.ErrnoException; log.warn(`config hot-reload failed: ${accountId}: ${err.message ?? String(e)}`);
       }
     }, watchDebounceMs);
   };
@@ -228,8 +246,8 @@ export async function watchAccountConfigs(
     watcher = await import("node:fs").then((fs) => fs.watch(dir, handleChange));
     watchActive = true;
     log.info(`watching accounts dir: ${dir} (hot-reload enabled)`);
-  } catch (e: any) {
-    log.warn(`watchAccountConfigs: fs.watch failed (${e?.message ?? e}), hot-reload disabled`);
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException; log.warn(`watchAccountConfigs: fs.watch failed (${err.message ?? String(e)}), hot-reload disabled`);
     watchActive = false;
     return () => {};
   }
@@ -244,4 +262,231 @@ export async function watchAccountConfigs(
     if (watchTimer) clearTimeout(watchTimer);
     log.info(`stopped watching accounts dir`);
   };
+}
+
+/**
+ * v1.3.18 P2-B-6: 监听 config.json (WppGlobalConfig) 变化 → 重读 → 回调 (onChange(cfg))
+ *
+ * 与 watchAccountConfigs 的区别:
+ * - watch 的是 config.json (单文件), 不是 accounts/ 目录
+ * - 回调签名: (cfg: WppGlobalConfig) → 无 accountId (全局只有 1 个 global config)
+ * - 独立 timer/active 状态 (避免与 watchAccountConfigs 互相干扰)
+ * - 回调里典型动作: setGlobalRuntimeConfig(...) 立即生效 (但已 init 的 mariadb pool 不热重连)
+ *
+ * 返回 unwatch 函数. 失败 (fs.watch 不可用) 时返回 no-op unwatch.
+ */
+export async function watchGlobalConfig(
+  onChange: (cfg: WppGlobalConfig) => void | Promise<void>,
+): Promise<() => void> {
+  const path = join(await findPluginRoot(), "config.json");
+  let watcher: import("node:fs").FSWatcher | null = null;
+
+  const handleChange = (): void => {
+    if (globalWatchTimer) clearTimeout(globalWatchTimer);
+    globalWatchTimer = setTimeout(async () => {
+      try {
+        invalidateConfigCache("__global__");
+        const cfg = await loadGlobalConfig();
+        log.info(`config.json hot-reload detected`);
+        await onChange(cfg);
+      } catch (e) {
+        log.warn(`config.json hot-reload failed: ${(e as Error).message ?? String(e)}`);
+      }
+    }, watchDebounceMs);
+  };
+
+  if (globalWatchActive) {
+    log.warn(`watchGlobalConfig: already watching, returning no-op unwatch`);
+    return () => {};
+  }
+
+  try {
+    watcher = await import("node:fs").then((fs) => fs.watch(path, handleChange));
+    globalWatchActive = true;
+    log.info(`watching config.json: ${path} (hot-reload enabled)`);
+  } catch (e) {
+    log.warn(`watchGlobalConfig: fs.watch failed (${(e as Error).message}), hot-reload disabled`);
+    globalWatchActive = false;
+    return () => {};
+  }
+
+  return () => {
+    try {
+      watcher?.close();
+    } catch {
+      /* ignore */
+    }
+    globalWatchActive = false;
+    if (globalWatchTimer) clearTimeout(globalWatchTimer);
+    log.info(`stopped watching config.json`);
+  };
+}
+
+/**
+ * v1.2.3 PAIRING: 把 wxid 追加进 accounts/<id>.json 的 allowFrom (配对成功落盘)。
+ *
+ * 关键 (多账号一致性):
+ * - 目录用 findPluginRoot()/accounts (与 loadAccountConfig/watchAccountConfigs 同一解析 → watcher 热重载可见)
+ * - 用 readFile 读原始 JSON round-trip 全字段, 不走 loadAccountConfig (60s LRU cache 会读到旧 allowFrom 冲掉并发写入)
+ * - 原子写 (tmp+rename) + invalidateConfigCache 清缓存
+ * - 账号文件不存在 → { ok:false } (不抛, 调用方决定回复文案)
+ *
+ * @returns { ok, allowFrom, filePath } ok=true 合并成功 (含 no-op: wxid 已存在)
+ */
+export async function appendAllowFrom(
+  accountId: string,
+  wxid: string,
+): Promise<{ ok: boolean; allowFrom: string[]; filePath: string; reason?: string }> {
+  const dir = join(await findPluginRoot(), "accounts");
+  const filePath = join(dir, `${accountId}.json`);
+  let raw: Record<string, unknown>;
+  try {
+    const text = await readFile(filePath, "utf8");
+    raw = JSON.parse(text) as Record<string, unknown>;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    log.warn(`appendAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    return { ok: false, allowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+  }
+
+  // 合并 allowFrom (缺省 [], 已包含则 no-op)
+  const allowFrom: string[] = Array.isArray(raw.allowFrom) ? (raw.allowFrom as string[]) : [];
+  if (allowFrom.includes(wxid)) {
+    return { ok: true, allowFrom, filePath }; // 已配对, 无变化
+  }
+  allowFrom.push(wxid);
+  raw.allowFrom = allowFrom;
+
+  // 原子写回
+  try {
+    const tmpPath = `${filePath}.tmp`;
+    await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+    await rename(tmpPath, filePath);
+  } catch (e) {
+    log.warn(`appendAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
+    return { ok: false, allowFrom, filePath, reason: "write-failed" };
+  }
+  // 清 LRU cache → 下次 loadAccountConfig 读到新 allowFrom (热重载 watcher 也会触发)
+  invalidateConfigCache(accountId);
+  log.info(`appendAllowFrom: account=${accountId} allowFrom=${allowFrom.length} (+${wxid})`);
+  return { ok: true, allowFrom, filePath };
+}
+
+/**
+ * v1.3.40 GROUP-ALLOW (老板 2026-08-11): 追加群聊白名单 groupAllowFrom.
+ * 同 appendAllowFrom 范式 (原子写回 + 热重载).
+ */
+export async function appendGroupAllowFrom(
+  accountId: string,
+  chatroomId: string,
+): Promise<{ ok: boolean; groupAllowFrom: string[]; filePath: string; reason?: string }> {
+  const dir = join(await findPluginRoot(), "accounts");
+  const filePath = join(dir, `${accountId}.json`);
+  let raw: Record<string, unknown>;
+  try {
+    const text = await readFile(filePath, "utf8");
+    raw = JSON.parse(text) as Record<string, unknown>;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    log.warn(`appendGroupAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    return { ok: false, groupAllowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+  }
+
+  // 合并 groupAllowFrom (缺省 [], 已包含则 no-op)
+  const groupAllowFrom: string[] = Array.isArray(raw.groupAllowFrom) ? (raw.groupAllowFrom as string[]) : [];
+  if (groupAllowFrom.includes(chatroomId)) {
+    return { ok: true, groupAllowFrom, filePath }; // 已包含, 无变化
+  }
+  groupAllowFrom.push(chatroomId);
+  raw.groupAllowFrom = groupAllowFrom;
+
+  // 原子写回
+  try {
+    const tmpPath = `${filePath}.tmp`;
+    await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+    await rename(tmpPath, filePath);
+  } catch (e) {
+    log.warn(`appendGroupAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
+    return { ok: false, groupAllowFrom, filePath, reason: "write-failed" };
+  }
+  // 清 LRU cache → 热重载生效
+  invalidateConfigCache(accountId);
+  log.info(`appendGroupAllowFrom: account=${accountId} groupAllowFrom=${groupAllowFrom.length} (+${chatroomId})`);
+  return { ok: true, groupAllowFrom, filePath };
+}
+
+/**
+ * v1.3.40 GROUP-ALLOW (老板 2026-08-11): 移除私聊白名单 allowFrom.
+ */
+export async function removeAllowFrom(
+  accountId: string,
+  wxid: string,
+): Promise<{ ok: boolean; allowFrom: string[]; filePath: string; reason?: string }> {
+  const dir = join(await findPluginRoot(), "accounts");
+  const filePath = join(dir, `${accountId}.json`);
+  let raw: Record<string, unknown>;
+  try {
+    const text = await readFile(filePath, "utf8");
+    raw = JSON.parse(text) as Record<string, unknown>;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    log.warn(`removeAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    return { ok: false, allowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+  }
+  const allowFrom: string[] = Array.isArray(raw.allowFrom) ? (raw.allowFrom as string[]) : [];
+  const idx = allowFrom.indexOf(wxid);
+  if (idx === -1) {
+    return { ok: true, allowFrom, filePath }; // 不在白名单, 无变化
+  }
+  allowFrom.splice(idx, 1);
+  raw.allowFrom = allowFrom;
+  try {
+    const tmpPath = `${filePath}.tmp`;
+    await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+    await rename(tmpPath, filePath);
+  } catch (e) {
+    log.warn(`removeAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
+    return { ok: false, allowFrom, filePath, reason: "write-failed" };
+  }
+  invalidateConfigCache(accountId);
+  log.info(`removeAllowFrom: account=${accountId} allowFrom=${allowFrom.length} (-${wxid})`);
+  return { ok: true, allowFrom, filePath };
+}
+
+/**
+ * v1.3.40 GROUP-ALLOW (老板 2026-08-11): 移除群聊白名单 groupAllowFrom.
+ */
+export async function removeGroupAllowFrom(
+  accountId: string,
+  chatroomId: string,
+): Promise<{ ok: boolean; groupAllowFrom: string[]; filePath: string; reason?: string }> {
+  const dir = join(await findPluginRoot(), "accounts");
+  const filePath = join(dir, `${accountId}.json`);
+  let raw: Record<string, unknown>;
+  try {
+    const text = await readFile(filePath, "utf8");
+    raw = JSON.parse(text) as Record<string, unknown>;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    log.warn(`removeGroupAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    return { ok: false, groupAllowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+  }
+  const groupAllowFrom: string[] = Array.isArray(raw.groupAllowFrom) ? (raw.groupAllowFrom as string[]) : [];
+  const idx = groupAllowFrom.indexOf(chatroomId);
+  if (idx === -1) {
+    return { ok: true, groupAllowFrom, filePath }; // 不在白名单, 无变化
+  }
+  groupAllowFrom.splice(idx, 1);
+  raw.groupAllowFrom = groupAllowFrom;
+  try {
+    const tmpPath = `${filePath}.tmp`;
+    await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+    await rename(tmpPath, filePath);
+  } catch (e) {
+    log.warn(`removeGroupAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
+    return { ok: false, groupAllowFrom, filePath, reason: "write-failed" };
+  }
+  invalidateConfigCache(accountId);
+  log.info(`removeGroupAllowFrom: account=${accountId} groupAllowFrom=${groupAllowFrom.length} (-${chatroomId})`);
+  return { ok: true, groupAllowFrom, filePath };
 }

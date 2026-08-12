@@ -1,8 +1,8 @@
 # Migration Guide (MIGRATION.md)
 
-WeChatPadPro OpenClaw Plugin v0.1.0 → v1.0.1 升级指南.
+> **历史说明**: 本文档记录早期 v0.1.0 → v1.0.1 的迁移细节 (plugin entry API / config / DB schema)。当前生产版本为 **v1.2.0**, 新装请直接看 [GETTING_STARTED.md](./GETTING_STARTED.md)。
 
-## 1. 升级路径
+## 1. 升级路径 (历史)
 
 ```
 v0.1.0 (Phase A-F PoC)
@@ -10,11 +10,15 @@ v0.1.0 (Phase A-F PoC)
 v1.0.0 (Phase G 完工, 2026-08-04)
   ↓
 v1.0.1 (Audit 修复, 2026-08-04)
+  ↓
+... (v1.1.x 持续迭代)
+  ↓
+v1.2.0 (当前, 2026-08-09, 生产已部署)
 ```
 
-**当前生产**: 0 (2026-08-04 之前已撤回, 备份 `/data/wechatpadpro-removed-20260804-104900/`)
+**当前生产**: v1.2.0 (`/root/.openclaw/extensions/wechatpadpro/`)
 
-**首次部署**: 直接部署 v1.0.1 (无需 v0.1.0 → v1.0.1 迁移, 视作 fresh install)
+**首次部署**: 直接部署当前版本 (视作 fresh install, 无需历史迁移)
 
 **已部署 v0.1.0 环境的升级**: 见 [§3 升级步骤](#3-升级步骤)
 
@@ -102,7 +106,7 @@ cp /root/.openclaw/openclaw.json /data/openclaw.json.v0.1.0.bak
 cd /root/dev/wechatpadpro-openclaw
 git pull   # 或手动 sync 到 v1.0.1
 npm ci
-npm test   # 207 tests 全绿
+npm test   # 全绿 (当前 534)
 bash deploy.sh  # 退出 0 = 通过
 ```
 
@@ -117,8 +121,8 @@ bash deploy-swap.sh --force   # 跳过 dry-run gate
 
 ```bash
 # 1. plugin 加载
-journalctl --user -u openclaw-gateway -n 50 | grep "WPP v1.0.1"
-# 应见: "plugin.register: registering wppChannelPlugin (v1.0.1)"
+journalctl --user -u openclaw-gateway -n 50 | grep "WPP v"
+# 应见: "plugin.register: registering wppChannelPlugin (v<当前版本>)"
 
 # 2. 6 plugins 列表
 journalctl --user -u openclaw-gateway -n 30 | grep "http server listening"
@@ -143,12 +147,12 @@ journalctl --user -u openclaw-gateway -n 30 | grep "loaded account config"
 | 并发 start | 潜在 race | inFlight 锁串行化 |
 | Webhook 验签 | 无 | placeholder (配 secret 必需要 sig header) |
 | 错误信息 | `account not found: X` | `account not found: X (known: A, B)` |
-| Log 格式 | `[WPP v0.1.0] ... ${var}` | `ISO-timestamp LEVEL [WPP v1.0.1] msg key=value` |
+| Log 格式 | `[WPP v0.1.0] ... ${var}` | `ISO-timestamp LEVEL [WPP v1.x] msg key=value` |
 
 ## 4. 老板的 OpenClaw 上下文 (历史教训)
 
 - v0.1.0 之前曾部署 prod, 因 manifest 缺 id 爆网关 status=78, 2026-08-04 已撤回
-- v1.0.0 + v1.0.1 是修复版, 跟 OpenClaw v2026.7.1+ 同等 OpenClaw v2026.7.1+ 兼容
+- v1.0.0 + v1.0.1 是修复版, 与 OpenClaw v2026.7.1+ 兼容
 - 4 轮 dry-run + 5 轮 real deploy 验证 (Phase G + v1.0.1), 每次 rollback 字节级一致 (SHA 校验)
 
 ## 5. 不兼容 / Breaking Changes

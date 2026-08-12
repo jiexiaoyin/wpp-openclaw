@@ -1,15 +1,5 @@
-// src/accounts/account-registry.ts - Phase G2 多账号 registry class
-// 替代 account-state.ts:15 module Map singleton, 提供显式 start/stop/get/list API
-//
+// src/accounts/account-registry.ts - 多账号 registry class (显式 start/stop/get/list API)
 // 关键设计:
-//   1. Pure in-memory — 不依赖 DB / 网络 → 测试 0 mock
-//   2. DB init 由 caller 负责 (account-state.ts 模块 API 在 startAccount 里调用 initDbPool)
-//      → G2-3 持久化时再决定是否下沉到 registry
-//   3. 多实例隔离 — 测试可建独立 registry 不污染 default
-//   4. 1 accountId = 1 AccountContext (start 重复 ID 返回 existing, 幂等)
-//   5. 本项目 v1.4.3 fullfix P0 教训:
-//      - account_id 漏写 → AccountContext 是 1 个完整实例, 注册时绑定 ID
-//      - 模块单例覆盖 → class 实例化, 默认 registry 走 module API, 但隔离测试用独立 instance
 
 import { logObj as log } from "../core/logger.js";
 import { upsertAccount, getAccounts, getAccount } from "../db.js";
@@ -19,12 +9,7 @@ import type { WppAccountConfig } from "../types.js";
 
 export class AccountRegistry {
   private readonly contexts = new Map<string, AccountContext>();
-  /**
-   * v1.0.1 P2-1: inFlight Map 序列化并发 start
-   * 修复 race: 多个 caller 同时 start 同 accountId, 都过 has() check, 然后都 new AccountContext
-   *          + set, 第二个会覆盖第一个导致 ctxA 泄漏
-   * 锁策略: inFlight 优先 → contexts (已 start) → 验证 → 真正创建
-   */
+  /** inFlight Map 序列化并发 start (防多个 caller 同时 start 同 accountId → 后建覆盖先建导致泄漏) */
   private readonly inFlight = new Map<string, Promise<AccountContext>>();
 
   // ============ CRUD ============
@@ -35,20 +20,17 @@ export class AccountRegistry {
    * 抛错条件: enabled=false / tokenKey 空.
    */
   async start(accountId: string, cfg: WppAccountConfig): Promise<AccountContext> {
-    // 1. inFlight 优先 (concurrent dedup)
     const inflight = this.inFlight.get(accountId);
     if (inflight) {
       log.debug(`registry.start: inFlight hit for ${accountId}, awaiting`);
       return inflight;
     }
 
-    // 2. 已注册 (idempotent fast path)
     if (this.contexts.has(accountId)) {
       log.warn(`registry: account already started: ${accountId}, returning existing`);
       return this.contexts.get(accountId)!;
     }
 
-    // 3. 验证
     if (!cfg.enabled) {
       throw new Error(`account disabled: ${accountId}`);
     }
@@ -56,7 +38,6 @@ export class AccountRegistry {
       throw new Error(`account tokenKey missing: ${accountId} (set ${cfg.tokenKeyEnv ?? "env"})`);
     }
 
-    // 4. 标记 inFlight + 实际创建
     const promise = this._doStart(accountId, cfg);
     this.inFlight.set(accountId, promise);
     try {
@@ -92,10 +73,8 @@ export class AccountRegistry {
    */
   resolve(query: string | null | undefined): AccountContext | null {
     if (!query) return null;
-    // 1. 精确匹配 (O(1))
     const exact = this.contexts.get(query);
     if (exact) return exact;
-    // 2. 大小写不敏感 (O(n), n=账号数, 一般 < 10)
     const lower = query.toLowerCase();
     for (const [id, ctx] of this.contexts) {
       if (id.toLowerCase() === lower) return ctx;

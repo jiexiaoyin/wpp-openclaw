@@ -31,6 +31,21 @@ test("listAccountIds — OpenClaw cfg 参数忽略 (签名兼容)", async () => 
   assert.deepEqual(ids1, ids3);
 });
 
+// ===== v1.3.26 P0 回归: 必须 SYNC 返回数组 =====
+// 根因: OpenClaw health-p6SutBnt.js:364 同步调 plugin.config.listAccountIds(cfg)
+//       不 await, 下一行 `...accountIds` 展开. async 版返 Promise → "accountIds is not iterable".
+// 关键: 这里**不 await**, 直接断言返回值就是数组 (await 会 unwrap Promise, 测不出这个 bug)
+test("listAccountIds — SYNC 回归: 不 await 直接返数组 (OpenClaw 同步契约)", () => {
+  const ids = listAccountIds();
+  assert.ok(Array.isArray(ids), `应直接返数组, 实际=${Object.prototype.toString.call(ids)} (async 版会返 Promise)`);
+  // OpenClaw 的用法: Array.from(new Set([...accountIds])) — 展开不能抛
+  assert.doesNotThrow(() => {
+    const expanded = Array.from(new Set([...ids]));
+    assert.ok(Array.isArray(expanded));
+  }, "展开 accountIds 不应抛 'is not iterable'");
+  assert.ok(ids.includes("default"), "应含 default 账号 (项目默认 fixture)");
+});
+
 // ===== 2. resolveAccount =====
 
 test("resolveAccount — 已知 ID 返配置对象", async () => {
@@ -104,10 +119,18 @@ test("defaultAccountId — 返回 'default'", () => {
 
 test("isConfigured — 真实 default 账号 (有 tokenKeyEnv 但 tokenKey 空) → false (B 方案 凭证走 env)", async () => {
   // accounts/default.json 中 tokenKey="", tokenKeyEnv="WECHATPRO_TOKEN_KEY"
-  // 当前测试环境无 WECHATPRO_TOKEN_KEY env var, 所以 tokenKey 仍空
-  const cfg = await resolveAccount({}, "default");
-  assert.ok(cfg);
-  assert.equal(isConfigured(cfg), false, "无 tokenKey 视为未配置");
+  // v1.1.33 TEST-FIX: 当前 dev 环境有 WECHATPRO_TOKEN_KEY env (prod gateway 注入),
+  //   不删 env 则 resolveAccount 从 env 读到 tokenKey → isConfigured=true 误判
+  // fix: 显式删 env 模拟 "无凭证环境"
+  const orig = process.env.WECHATPRO_TOKEN_KEY;
+  delete process.env.WECHATPRO_TOKEN_KEY;
+  try {
+    const cfg = await resolveAccount({}, "default");
+    assert.ok(cfg);
+    assert.equal(isConfigured(cfg), false, "无 tokenKey 视为未配置");
+  } finally {
+    if (orig !== undefined) process.env.WECHATPRO_TOKEN_KEY = orig;
+  }
 });
 
 test("isConfigured — null/undefined → false", () => {
@@ -154,13 +177,20 @@ test("unconfiguredReason — disabled → 提示启用", async () => {
 });
 
 test("unconfiguredReason — tokenKey 缺失 → 提示 env var 名称", async () => {
-  const cfg = await resolveAccount({}, "default");
-  assert.ok(cfg);
-  // tokenKey="" 触发, tokenKeyEnv="WECHATPRO_TOKEN_KEY" 应在错误信息中
-  const reason = unconfiguredReason(cfg);
-  assert.ok(reason);
-  assert.match(reason!, /tokenKey/);
-  assert.match(reason!, /WECHATPRO_TOKEN_KEY/, "应提示具体 env var 名称");
+  // v1.1.33 TEST-FIX: 同上 — 删 env 模拟无凭证环境
+  const orig = process.env.WECHATPRO_TOKEN_KEY;
+  delete process.env.WECHATPRO_TOKEN_KEY;
+  try {
+    const cfg = await resolveAccount({}, "default");
+    assert.ok(cfg);
+    // tokenKey="" 触发, tokenKeyEnv="WECHATPRO_TOKEN_KEY" 应在错误信息中
+    const reason = unconfiguredReason(cfg);
+    assert.ok(reason);
+    assert.match(reason!, /tokenKey/);
+    assert.match(reason!, /WECHATPRO_TOKEN_KEY/, "应提示具体 env var 名称");
+  } finally {
+    if (orig !== undefined) process.env.WECHATPRO_TOKEN_KEY = orig;
+  }
 });
 
 test("unconfiguredReason — 完整配置 → null (无警告)", async () => {

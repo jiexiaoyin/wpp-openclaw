@@ -51,7 +51,6 @@ export function verifySignature(
   if (!signature) return false;
   if (!secret) return false;
 
-  // 1. 自动检测 algorithm: 优先从 signature 前缀 (sha256=/sha1=/md5=)
   let detected: SignatureAlgorithm = algo;
   let sigValue = signature;
   for (const [a, prefix] of Object.entries(ALGO_PREFIX) as [SignatureAlgorithm, string][]) {
@@ -62,11 +61,9 @@ export function verifySignature(
     }
   }
 
-  // 2. 长度预检 (timingSafeEqual 要求等长)
   const expectedHex = createHmac(detected, secret).update(body).digest("hex");
   if (sigValue.length !== expectedHex.length) return false;
 
-  // 3. timingSafeEqual 防 timing attack
   try {
     return timingSafeEqual(Buffer.from(sigValue, "hex"), Buffer.from(expectedHex, "hex"));
   } catch {

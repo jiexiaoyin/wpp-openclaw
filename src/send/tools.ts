@@ -9,13 +9,13 @@ export function makeWppTools(ctx: WppAccountCtx) {
     postWppJson(ctx.baseUrl, ep, body, opts);
 
   return {
-    /** /Tools/CdnDownloadImage — CDN 下载高清图片 */
+    /** /Tools/CdnDownloadImage — CDN 下载高清图片 (v1.2.1 P1-fix: 字段对齐 swagger {fileAesKey, fileNo}) */
     cdnDownloadImage: (aesKey: string, fileId: string) =>
-      dispatch("/Tools/CdnDownloadImage", { aesKey, fileId }),
+      dispatch("/Tools/CdnDownloadImage", { fileAesKey: aesKey, fileNo: fileId }),
 
-    /** /Tools/DownloadFile */
-    downloadFile: (aesKey: string, fileId: string) =>
-      dispatch("/Tools/DownloadFile", { aesKey, fileId }),
+    /** /Tools/DownloadFile — 文件下载 (v1.2.1 P1-fix: swagger 字段是 appID/attachId, 非 aesKey/fileId) */
+    downloadFile: (appID: string, attachId: string, userName: string) =>
+      dispatch("/Tools/DownloadFile", { appID, attachId, userName }),
 
     /** /Tools/DownloadImg */
     downloadImg: (aesKey: string, fileId: string) =>
@@ -61,6 +61,20 @@ export function makeWppTools(ctx: WppAccountCtx) {
 
     /** /Tools/setproxy — 修改微信步数 */
     setStep: (steps: number) => dispatch("/Tools/setproxy", { steps }),
+
+    /**
+     * v1.3.25 SWAGGER-254: /Tools/DownloadFileBinary — 完整下载微信文件 (二进制).
+     * (media-enrich 已直接用, 补 wrapper + 注册)
+     */
+    downloadFileBinary: (fileNo: string, fileName = "", toWxid = "") =>
+      dispatch("/Tools/DownloadFileBinary", { fileNo, fileName, toWxid }),
+
+    /**
+     * v1.3.25 SWAGGER-254: /Tools/DownloadVoiceBinary — 下载微信语音原文件 (二进制).
+     * (media-enrich 已直接用, 补 wrapper + 注册)
+     */
+    downloadVoiceBinary: (msgId: number, newMsgId: string, toWxid = "") =>
+      dispatch("/Tools/DownloadVoiceBinary", { msg_id: msgId, new_msg_id: newMsgId, to_wxid: toWxid }),
   };
 }
 

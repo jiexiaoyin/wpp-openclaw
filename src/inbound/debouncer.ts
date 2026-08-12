@@ -1,6 +1,5 @@
 // src/inbound/debouncer.ts - 1.5s timer-based batch flush
-// 范式仿 本项目/src/inbound/debouncer.ts
-// 关键: VOICE 消息和系统消息 bypass; key = `${acc}:${fromId}:${toId}`; .unref() 防保活
+// 关键: VOICE/系统消息 bypass; key = accountId:peerKind:peerId:fromWxid; .unref() 防保活
 
 import { info, warn, formatErr } from "../core/logger.js";
 import { DEFAULT_DEBOUNCE_MS } from "../core/constants.js";

@@ -18,6 +18,7 @@ import {
 import {
   extractAtUserList,
   isBotMentionedByText,
+  stripAtMentions,
 } from "../src/inbound/parser/mention.js";
 import { parseQuoteXml } from "../src/inbound/parser/quote.js";
 import { isValidWxid, isGroupWxid, isValidAtUser } from "../src/inbound/parser/wxid.js";
@@ -25,7 +26,7 @@ import {
   createWppInboundHandler,
 } from "../src/inbound/handler.js";
 import { enrichAndSaveMessage } from "../src/inbound/enrich.js";
-import { resetAdapter, setBackend } from "../src/storage/db/factory.js";
+import { resetAdapter, setBackend, setAdapterForTest } from "../src/storage/db/factory.js";
 import { resolveDbConfig } from "../src/storage/db/factory.js";
 import type { WppInboundMessage, WppWebhookPayload } from "../src/types.js";
 
@@ -107,7 +108,10 @@ test("stripGroupPrefix — 群消息前缀剥离", () => {
 
 test("describeMsgType — 数字 → human", () => {
   assert.equal(describeMsgType(1), "text");
+  assert.equal(describeMsgType(3), "image");
+  assert.equal(describeMsgType(6), "file", "v1.1.27 FILE-MSG");
   assert.equal(describeMsgType(34), "voice");
+  assert.equal(describeMsgType(43), "video");
   assert.equal(describeMsgType(53), "chat-history");
   assert.equal(describeMsgType(99999), "unknown(99999)");
 });
@@ -336,8 +340,9 @@ test("parseRelayText — 字面 \\n 转真换行后分多条", () => {
   const r = parseRelayText(raw);
   assert.equal(r.title, "接龙题目");
   assert.equal(r.items.length, 2);
-  assert.equal(r.items[0]?.text, "第一条");
-  assert.equal(r.items[1]?.nickname, "Bob");
+  // v1.3.37 保守解析 (老板 2026-08-11): 只切序号, 不猜昵称 — 整段保留
+  assert.equal(r.items[0]?.text, "Alice: 第一条");
+  assert.equal(r.items[1]?.text, "Bob: 第二条");
 });
 
 test("parseRelayText — 空返回 {title:'', items:[]}", () => {
@@ -357,16 +362,20 @@ test("enrichAndSaveMessage — 没有 adapter 抛错捕获", async () => {
 
 // ===== handler end-to-end (mock adapter + dispatch hook) =====
 
-test("createWppInboundHandler — 入队 + flush + dispatch", async () => {
+test("v1.3.18 P1-假绿2 修 — createWppInboundHandler: 入队 + flush + dispatch (FakeDb 真验证 dispatched)", async () => {
   resetAdapter();
-  let dispatched: WppInboundMessage[] = [];
+  // 注入真 fake adapter (handler 内部 enrichAndSaveMessage 走 getAdapter())
+  const fake = new FakeDbForEnrich();
+  setAdapterForTest(fake);
+
+  const dispatched: WppInboundMessage[] = [];
   const handler = createWppInboundHandler({
     accountId: "default",
     triggerConfig: {
       ...defaultTriggerConfig(),
       keywordTrigger: { enabled: true, keywords: ["help"] },
     },
-    triggerCtx: { botWxid: "wxid_bot" },
+    triggerCtx: { botWxid: "wxid_bot", allowFrom: ["wxid_alice"] }, // v1.1.17 fail-closed: DM 白名单含 sender 才放行
     enableDispatch: true,
     onDispatch: async (msg) => {
       dispatched.push(msg);
@@ -377,14 +386,19 @@ test("createWppInboundHandler — 入队 + flush + dispatch", async () => {
     fromUser: "wxid_alice",
     content: "please help me",
     msgType: 1,
-    msgId: "h1",
+    msgId: "h1-real",
   } as WppWebhookPayload);
 
   await handler.flushAll();
-  // 由于 enrichAndSaveMessage 失败 (no adapter), 后面不走 onDispatch
-  // 这里主要验证 handler 不抛
-  assert.ok(true);
+  // 真验证 (v1.3.18 P1-假绿2 修): enrichAndSaveMessage 真入库 + onDispatch 真被调
+  // 注: 'please help me' 含 'help' 关键词命中 trigger → onDispatch 触发
+  const saved = fake.messages.map((m) => (m as { msg_id?: string }).msg_id);
+  assert.ok(saved.includes("h1-real"), `消息应入库 (enrichAndSaveMessage 真跑), 实际 saved=${JSON.stringify(saved)}`);
+  assert.ok(dispatched.length === 1, `onDispatch 应被调 1 次, 实际 dispatched.length=${dispatched.length}`);
+  assert.equal(dispatched[0]!.msgId, "h1-real", "dispatched 的 msgId 应匹配入站消息");
 });
+
+
 
 // ===== FakeDbAdapter + enrich 集成测试 =====
 import type { DbAdapter } from "../src/storage/db/types.js";
@@ -432,7 +446,7 @@ test("createWppInboundHandler — 完整流程 (FakeDb)", async () => {
   // 注入 fake (hack: 通过 setBackend path, 因为 factory 只接 mysql)
   // 这里手动 mock — 仅验证 handler 拼装没错
   const fake = new FakeDbForEnrich();
-  let dispatched: WppInboundMessage[] = [];
+  const dispatched: WppInboundMessage[] = [];
   const handler = createWppInboundHandler({
     accountId: "default",
     triggerConfig: defaultTriggerConfig(),
@@ -456,4 +470,166 @@ test("createWppInboundHandler — 完整流程 (FakeDb)", async () => {
   // Verify no crash
   assert.ok(Array.isArray(dispatched));
   void fake; // suppress unused
+});
+
+test("v1.1.33 SAFE-REGEX — 超长输入截断不 hang (ReDoS 防御)", () => {
+  // P2[1] (2026-08-08 23:12 接总立 P1/P2/P3 推进):
+  //   mention.ts 接入 safeMatch 后, 恶意超长输入应截断到 4096, 不触发 super-linear runtime
+  //   验证: 100KB 恶意输入在 500ms 内完成 (旧代码 matchAll 可能 hang)
+  const huge = "@wxid_aaa ".repeat(8000) + "a".repeat(50000); // ~114KB
+  const start = Date.now();
+  const out = extractAtUserList(huge);
+  const elapsed = Date.now() - start;
+  assert.ok(out.includes("wxid_aaa"), "应提取到 wxid_aaa (截断后前 4096 字符内)");
+  assert.ok(elapsed < 500, `extractAtUserList 应在 500ms 内完成, 实际 ${elapsed}ms`);
+});
+
+test("v1.1.33 SAFE-REGEX — 超长 stripAtMentions 截断", () => {
+  const huge = `@wxid_bot ${'a'.repeat(100000)}`;
+  const start = Date.now();
+  const out = stripAtMentions(huge, "wxid_bot");
+  const elapsed = Date.now() - start;
+  assert.ok(!out.includes("wxid_bot"), "@wxid_bot 应被 strip");
+  assert.ok(elapsed < 500, `stripAtMentions 应在 500ms 内完成, 实际 ${elapsed}ms`);
+});
+
+// ===== v1.2.4 只入白名单: 非白名单群/私聊不入库 (老板拍板) =====
+
+test("v1.2.4 只入白名单 — 非白名单群不入库, 白名单群入库", async () => {
+  resetAdapter();
+  const fake = new FakeDbForEnrich();
+  setAdapterForTest(fake);
+
+  const handler = createWppInboundHandler({
+    accountId: "default",
+    triggerConfig: {
+      ...defaultTriggerConfig(),
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["white@chatroom"],
+      blacklistGroups: ["black@chatroom"],
+    },
+    triggerCtx: { botWxid: "wxid_bot", groupContextEnabled: true },
+    enableDispatch: true,
+  });
+
+  // 白名单群消息 (无 @) → 入库
+  await handler.handle({
+    fromUser: "wxid_sender",
+    content: "white msg",
+    msgType: 1,
+    msgId: "w-1",
+    chatroomId: "white@chatroom",
+  } as unknown as WppWebhookPayload);
+  // 非白名单群 (allowlist 外) → 不入库
+  await handler.handle({
+    fromUser: "wxid_sender",
+    content: "other msg",
+    msgType: 1,
+    msgId: "o-1",
+    chatroomId: "other@chatroom",
+  } as unknown as WppWebhookPayload);
+  // 黑名单群 → 不入库
+  await handler.handle({
+    fromUser: "wxid_sender",
+    content: "black msg",
+    msgType: 1,
+    msgId: "b-1",
+    chatroomId: "black@chatroom",
+  } as unknown as WppWebhookPayload);
+
+  await handler.flushAll();
+  const saved = fake.messages.map((m) => (m as { msg_id?: string }).msg_id);
+  assert.ok(saved.includes("w-1"), "白名单群消息应入库");
+  assert.ok(!saved.includes("o-1"), "非白名单群消息不应入库");
+  assert.ok(!saved.includes("b-1"), "黑名单群消息不应入库");
+});
+
+test("v1.2.4 只入白名单 — 私聊白名单外不入库, 白名单内入库", async () => {
+  resetAdapter();
+  const fake = new FakeDbForEnrich();
+  setAdapterForTest(fake);
+
+  const handler = createWppInboundHandler({
+    accountId: "default",
+    triggerConfig: defaultTriggerConfig(),
+    triggerCtx: { botWxid: "wxid_bot", allowFrom: ["wxid_allowed"] },
+    enableDispatch: true,
+  });
+
+  // 白名单内私聊 → 入库
+  await handler.handle({
+    fromUser: "wxid_allowed",
+    content: "hi",
+    msgType: 1,
+    msgId: "d-ok",
+  } as unknown as WppWebhookPayload);
+  // 白名单外私聊 → 不入库
+  await handler.handle({
+    fromUser: "wxid_stranger",
+    content: "hello",
+    msgType: 1,
+    msgId: "d-no",
+  } as unknown as WppWebhookPayload);
+
+  await handler.flushAll();
+  const saved = fake.messages.map((m) => (m as { msg_id?: string }).msg_id);
+  assert.ok(saved.includes("d-ok"), "白名单内私聊应入库");
+  assert.ok(!saved.includes("d-no"), "白名单外私聊不应入库");
+});
+
+// ===== v1.3.36 SINGLE-LINE-RELAY (2026-08-11): 微信新版单行接龙解析 =====
+import { parseRelayText } from "../src/inbound/relay.js";
+
+test("v1.3.36 — 单行接龙 (无换行) 解析出多个条目 (保守: 只切序号不猜昵称)", () => {
+  const raw = "1. 2. 倪彩霞 gt7 3. 莓心 4. 王燕燕 512 白色";
+  const r = parseRelayText(raw);
+  // 1. 是发起人占位(无内容), 2-4 是实际条目; 老板指正: 不猜昵称, 整段保留
+  assert.ok(r.items.length >= 3, `应 ≥3 条, 实际 ${r.items.length}`);
+  const it2 = r.items.find((i) => i.index === 2);
+  assert.equal(it2?.text, "倪彩霞 gt7");
+  const it4 = r.items.find((i) => i.index === 4);
+  assert.equal(it4?.text, "王燕燕 512 白色");
+});
+
+test("v1.3.36 — 多行接龙仍正常 (原有行为)", () => {
+  const raw = "#接龙\n1. Alice: 我来了\n2. Bob: 收到";
+  const r = parseRelayText(raw);
+  assert.ok(r.items.length >= 2, `应 ≥2 条, 实际 ${r.items.length}`);
+});
+
+test("v1.3.37 — 条目内换行内容合并 (不丢 'gt7'/'512 白色')", () => {
+  const r = parseRelayText("1.\n2. 倪彩霞\ngt7\n3. 莓心\n4. 王燕燕\n512 白色");
+  assert.equal(r.items.length, 3);
+  const it2 = r.items.find((i) => i.index === 2);
+  assert.equal(it2?.text, "倪彩霞 gt7");
+  const it4 = r.items.find((i) => i.index === 4);
+  assert.equal(it4?.text, "王燕燕 512 白色");
+});
+
+// ===== v1.3.39 FILEHELPER: filehelper 命令处理 (老板 2026-08-11) =====
+import { payloadToAllInboundMessages } from "../src/inbound/parser.js";
+
+test("v1.3.39 — filehelper 命令消息放行 (非命令仍过滤)", () => {
+  // 命令 (含 /) → 放行
+  const cmd = payloadToAllInboundMessages("default", {
+    Wxid: "wxid_bot", EventType: "sync_message", Timestamp: 1000,
+    Data: { count: 1, schema: "wechatpad.message.v2", messages: [{
+      content: "/genpair", conversation_id: "filehelper", created_at: 1000,
+      direction: "outgoing", id: "m1", kind: "text", recipient_id: "filehelper",
+      sender_id: "wxid_bot", type: 1,
+    }]},
+  } as never);
+  assert.ok(Array.isArray(cmd) && cmd.length === 1, "命令应放行");
+  assert.equal(cmd[0]?.peerId, "filehelper");
+
+  // 非命令 (无 /) → 过滤
+  const plain = payloadToAllInboundMessages("default", {
+    Wxid: "wxid_bot", EventType: "sync_message", Timestamp: 1000,
+    Data: { count: 1, schema: "wechatpad.message.v2", messages: [{
+      content: "你好？", conversation_id: "filehelper", created_at: 1000,
+      direction: "outgoing", id: "m2", kind: "text", recipient_id: "filehelper",
+      sender_id: "wxid_bot", type: 1,
+    }]},
+  } as never);
+  assert.equal(plain.length, 0, "非命令仍过滤");
 });

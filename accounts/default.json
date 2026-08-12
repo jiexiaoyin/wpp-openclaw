@@ -17,17 +17,42 @@
   "webhookSecret": "",
   "_webhookSecretNote": "v1.1.10 21:36 老板拍: signatureRequired 改回 permissive (src/core/signature.ts). secret 留空跳过验签, 让 vendor 不签的 push 能进. 等 vendor 真提供签名时再填 secret + 重新改 strict.",
   "allowFrom": [
-    "wxid_dbdmq8riblxo12"
+    "q139198824",
+    "jsnjzhou",
+    "zhuqixia520520"
   ],
   "groupPolicy": "allowlist",
   "groupAllowFrom": [
-    "57737516566@chatroom"
+    "57737516566@chatroom",
+    "53977339882@chatroom",
+    "44971342037@chatroom",
+    "19908568237@chatroom",
+    "53889526119@chatroom",
+    "45575237076@chatroom",
+    "21354014635@chatroom"
   ],
-  "selfWxid": "q139198824",
-  "nickname": "接晓银",
+  "selfWxid": "wxid_eezdbu1ytws422",
+  "nickname": "益融小助理",
   "requireAtMention": true,
   "debounceMs": 1500,
   "agent": "wpp-wechat",
+  "_v1.2.0_note": "2026-08-09 MCP 增强: mcpEnabled=false (vendor realtime 未开通, 避免白耗 5s connect; vendor 开通 realtime 后改 true 即用文件 CDN 下载)",
+  "mcpEnabled": false,
   "_p0_pollution_fix_note": "2026-08-08 16:05 紧急加固: 仅 wxid_dbdmq8riblxo12 直聊可触发; 群聊关闭; plugin disabled in openclaw.json 等待 code-level 白名单修复",
-  "_v1.1.17_note": "2026-08-08 17:10 P0-J 安全加固: webhookHost 0.0.0.0 → 127.0.0.1 (nginx 反代 wx.juhe.chat → 127.0.0.1:4398 不受影响, 但消除全网卡暴露)"
+  "_v1.1.17_note": "2026-08-08 17:10 P0-J 安全加固: webhookHost 0.0.0.0 → 127.0.0.1 (nginx 反代 wx.juhe.chat → 127.0.0.1:4398 不受影响, 但消除全网卡暴露)",
+  "webhookBusinessPath": "/wechatpadpro/default/webhook/business",
+  "webhookSecretEnv": "WECHATPRO_WEBHOOK_SECRET",
+  "adminUsers": [
+    "q139198824",
+    "wxid_eezdbu1ytws422"
+  ],
+  "blacklistGroups": [],
+  "chatroomDebug": false,
+  "dmPairingEnabled": false,
+  "groupContextEnabled": true,
+  "friendCirclePublishEnabled": true,
+  "friendCirclePublishAllowFrom": [
+    "q139198824",
+    "wxid_eezdbu1ytws422"
+  ]
 }

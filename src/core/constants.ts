@@ -1,22 +1,17 @@
 // core/constants.ts - 全局常量 SSOT
-// 仿 本项目 src/core/constants.ts 范式
 
 export const CHANNEL_ID = "wechatpadpro";
 export const PLUGIN_NAME = "wechatpadpro";
-export const PLUGIN_VERSION = "1.1.26";
+export const PLUGIN_VERSION = "1.3.53";
 
-// 默认 bot 昵称 (仿 gewe-multi-agent DEFAULT_BOT_NICKNAME 范式)
-// 用于群 @ 触发检测 (mention 匹配昵称而非 wxid, 见 inbound/parser/mention.ts)
-// accounts/<id>.json 的 nickname 字段优先; 缺失时回退此默认
-// 2026-08-08 18:15 老板指令: selfWxid/nickname 不要硬编码在代码, 配置驱动 + 默认值兜底
-export const DEFAULT_BOT_NICKNAME = "接晓银";
+// 默认 bot 昵称 (群 @ 触发检测用; accounts/<id>.json nickname 优先, 配置驱动 + 默认兜底)
+export const DEFAULT_BOT_NICKNAME = "YourBot";
 
 // 单账号 demo 默认账号 ID (B 方案 accounts/<id>.json)
 export const DEFAULT_ACCOUNT_ID = "default";
 
 // 默认 vendor upstream base
-// vendor: knowhub.cloud adminmaxapi (binary at /opt/1panel/docker/compose/WechatPadPro/)
-// 公网反代: https://adminmaxapi.knowhub.cloud, 本机 fallback: http://127.0.0.1:8062
+// vendor: WeChatPadPro 服务端 (adminmaxapi), 本机 fallback: http://127.0.0.1:8062
 export const DEFAULT_VENDOR_API_BASE = "http://127.0.0.1:8062";
 
 // WebSocket 路径 (vendor /ws/sync)
@@ -37,7 +32,6 @@ export const MsgType = {
 } as const;
 export type MsgTypeValue = (typeof MsgType)[keyof typeof MsgType];
 
-// peer 类型
 export const PeerKind = {
   DIRECT: "direct",
   GROUP: "group",
@@ -48,7 +42,8 @@ export type PeerKindValue = (typeof PeerKind)[keyof typeof PeerKind];
 export const LOG_TAG = `[WPP ${PLUGIN_VERSION}]`;
 
 // 默认 webhook 端口/路径 (avoid 4399/4398 跟其它 plugin 冲突)
-export const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
+// v1.2.1 P1-fix (安全): 默认 127.0.0.1 仅本机监听, 防 0.0.0.0 全网卡暴露 → 伪造 webhook prompt injection
+export const DEFAULT_WEBHOOK_HOST = "127.0.0.1";
 export const DEFAULT_WEBHOOK_PORT = 4398;
 export const DEFAULT_WEBHOOK_PATH = "/wechatpadpro/webhook";
 
@@ -57,7 +52,6 @@ export const DEFAULT_DEBOUNCE_MS = 1500;
 
 // 30 分钟 in-memory dedupe TTL (标准值)
 export const DEDUPE_TTL_MS = 30 * 60 * 1000;
-// v1.0.2 FIX-2: webhook 请求级 timeout (防 slow client DoS, 30s)
 export const REQUEST_TIMEOUT_MS = 30_000;
 // webhook body size 10 MB hard cap (标准值)
 export const WEBHOOK_BODY_LIMIT_BYTES = 10 * 1024 * 1024;
@@ -70,3 +64,21 @@ export const VENDOR_BASE_PATH = "/api";
 
 // API 重试间隔 (exp backoff, base 500ms)
 export const API_RETRY_BASE_MS = 500;
+
+// vendor MCP 服务 (v1.2.0 新增 — 老板 2026-08-09 发现 vendor 提供 MCP 端点)
+// 端点: vendor 容器内 127.0.0.1:8062/mcp (beego mcp_enabled=true)
+// 鉴权: Authorization: Bearer <token> (实测 = WECHATPRO_AUTHCODE, 非 TokenKey)
+export const MCP_BASE_URL = "http://127.0.0.1:8062/mcp";
+/** MCP 鉴权 token 的环境变量名 (复用 WECHATPRO_AUTHCODE, 凭证单一来源铁律) */
+export const MCP_AUTH_TOKEN_ENV = "WECHATPRO_AUTHCODE";
+/** MCP 调用超时 (5s, vendor 本地反代快) */
+export const MCP_TIMEOUT_MS = 5000;
+
+// (老板 2026-08-10 拍板: 删内存缓冲, DB 按人查, 查 10 条)
+// 默认值 (per-account accounts/<id>.json 可覆盖: groupContextWindow)
+export const GROUP_CONTEXT_WINDOW = 10;
+/**
+ * v1.2.4: 群聊上下文最多保留几张图 (老板拍板 "图片入 session 控制在 3 张之内")。
+ * 图片 ≤3 张直接塞 MediaUrls 给主模型看图 (已实证 MediaUrls 有效), 超过 3 张丢最旧的含图消息。
+ */
+export const GROUP_CONTEXT_MAX_IMAGES = 3;

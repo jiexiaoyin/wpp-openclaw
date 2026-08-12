@@ -1,10 +1,10 @@
 # Deployment Guide (DEPLOY.md)
 
-WeChatPadPro OpenClaw Plugin v1.1.15 部署到 OpenClaw gateway 详细指南.
+WeChatPadPro OpenClaw Plugin v1.2.0 部署到 OpenClaw gateway 详细指南.
 
 ## 1. 前置检查 (Pre-deploy)
 
-> v1.1.15: 323 tests 全绿 (clean env 322 pass + 1 fixture fail), tsc 0 错, deploy.sh 19 PASS / 0 FAIL / 0 WARN
+> v1.2.0: 539 tests 全绿, tsc 0 错, deploy.sh 19 PASS / 0 FAIL / 0 WARN
 
 ### 1.1 老板铁律
 - **凭证单一来源 env var** (B 方案, 2026-08-01 拍板)
@@ -37,11 +37,11 @@ bash deploy.sh --skip-build   # 跳过 tsc, 复用当前 dist
 ```
 
 ### 2.1 检查清单 (deploy.sh 跑通后)
-- [ ] `npm run build` 成功 (2s, dist 92 .js ~900K)
+- [ ] `npm run build` 成功 (dist 102 .js)
 - [ ] `manifest JSON parse` 通过 (`openclaw.plugin.json` 合法)
 - [ ] `manifest.id/version/kind` 字段全在
 - [ ] `dist/index.js` 存在 (~6KB)
-- [ ] `syntax check` 全部 92 .js 通过 `node --check`
+- [ ] `syntax check` 全部 102 .js 通过 `node --check`
 - [ ] `ESM load` 成功 (Node ESM 直接 import 不抛)
 - [ ] `ESM.id match`: dist runtime id = manifest id (`wechatpadpro`)
 - [ ] `ESM.kind valid` (channel 类型)
@@ -91,7 +91,7 @@ bash deploy-swap.sh --force     # 跳过 dry-run gate (老板手动确认后用)
 1. **改 WECHATPRO_DB_PASSWORD** 到真密码: `sudo nano /root/.openclaw/gateway.systemd.env`
 2. **配 accounts/default.json** 的 tokenKey/authcode (从 vendor 后台拿, 走 env var)
 3. **重启 gateway**: `systemctl --user restart openclaw-gateway`
-4. **验证 plugin registered**: `journalctl --user -u openclaw-gateway -n 50 | grep "WPP v1.1.15"`
+4. **验证 plugin registered**: `journalctl --user -u openclaw-gateway -n 50 | grep "WPP v1.2.0"`
 5. **验证 webhook 监听**: `ss -tlnp | grep 4398`
 
 ## 4. Rollback (回滚)
@@ -103,7 +103,7 @@ BACKUP=$(ls -td /data/wpp-deploy-swap-*/ | head -1)
 rm -rf /root/.openclaw/extensions/wechatpadpro
 cp -a "$BACKUP/extensions-wechatpadpro/" /root/.openclaw/extensions/wechatpadpro/
 systemctl --user restart openclaw-gateway
-# 还原 openclaw.json (从同 backup 拿, 或用 v1.1.15-G35 之类更早备份)
+# 还原 openclaw.json (从同 backup 拿, 或用更早备份)
 cp /data/wpp-deploy-swap-*/openclaw.json /root/.openclaw/openclaw.json
 chmod 600 /root/.openclaw/openclaw.json
 
@@ -142,34 +142,29 @@ ls /data/wechatpadpro-pre-v1.0-*  # dev backup
 | deploy.sh exit 2: "version mismatch" | package.json vs openclaw.plugin.json vs PLUGIN_VERSION 不一致 | 3 处同步 |
 | prod: "plugin not found" | openclaw.json 没加 plugins.allow | 手动 `jq` 注入 |
 | prod: "Cannot find module 'mysql2'" | 没拷 node_modules | `cp -a node_modules` |
-| prod: "missing register/activate" | 旧 v0.1.0 plugin entry (没 register) | 升 v1.1.15 |
-| prod: "missing required config helpers" | wppChannelPlugin.config 缺 6 helpers | 升 v1.1.15+ (G6) |
-| prod: "incomplete metadata" | wppChannelPlugin.meta 缺字段 | 升 v1.1.15+ (G7) |
-| prod: "plugin kind mismatch" | 旧 manifest kind="plugin" + export kind="channel" 冲突 | 升 v1.1.15+ (G3.5) |
+| prod: "missing register/activate" | 旧 v0.1.0 plugin entry (没 register) | 升到当前版本 |
+| prod: "missing required config helpers" | wppChannelPlugin.config 缺 6 helpers | 升到当前版本 |
+| prod: "incomplete metadata" | wppChannelPlugin.meta 缺字段 | 升到当前版本 |
+| prod: "plugin kind mismatch" | 旧 manifest kind="plugin" + export kind="channel" 冲突 | 升到当前版本 |
 | prod: DB connection fail | WECHATPRO_DB_PASSWORD 错 | 改 env, restart |
 
-## 8. v1.1.15~v1.1.15 增量部署注意事项
+## 8. 增量部署注意事项 (v1.1.55 ~ v1.2.0)
 
 | 版本 | 新增内容 | 部署影响 |
 |---|---|---|
-| v1.1.15 | Setup wizard (4 子命令) | 无 (新增 dev tool, 不影响 prod) |
-| v1.1.15 | 2 复合索引 (`idx_account_peer_ts` / `idx_account_msgtype_ts`) | 自动 apply (idempotent), 新装 OK, 老装自动补 |
-| v1.1.15 | AI dispatcher (WppChannelRuntime) | OpenClaw gateway 启动时需调 `setChannelRuntime` 才能真 dispatch (否则 NOOP) |
-| v1.1.15 | E2E test scaffold | 需 `WECHATPRO_DB_PASSWORD` + `WECHATPRO_TOKEN_KEY` + 真扫码 authcode env 才能跑 (否则 4 skip) |
-| v1.1.15 | webhook full verify (多算法 sha256/sha1/md5 + strict) | 配 `webhookSecret` 自动启用 HMAC 验签, 不配仍 NOOP |
-| v1.1.15 | S3/OSS abstraction | 仅代码, runtime 不变 (S3 config 走 `config.json`) |
-| v1.1.15 | 真实 S3 SDK 集成 | `node_modules` +13MB (`@aws-sdk/client-s3` + `s3-request-presigner`), `npm install` 必装 |
-| v1.1.15 | setup migrate (v0.1.0 → v1.1 B 方案) | 新增子命令, 不影响老部署 |
+| v1.1.55 | 引用回复 title=AI 回复 (type=57 修复) | 无 schema 变更, 直接部署 |
+| v1.1.56 | v1 schema 图片 enrich (`/Tools/DownloadImg` 64KB) | 无 schema 变更 |
+| v1.1.57 | 文件 v0 检测加宽 + v1 fallback | 无 schema 变更 |
+| v1.1.58 | 文件 NO-PATH-GUESS (禁 AI 猜路径) | 无 schema 变更 |
+| v1.2.0 | 文件确定性回复 (绕过 AI) | 无 schema 变更 |
 
-部署 v1.1.15 推荐步骤 (新装):
+部署 v1.2.0 推荐步骤 (新装):
 1. 跑 `npm run setup add` 加账号 (B 方案, 凭证走 env)
 2. 跑 `npm run setup validate` 11 项检查
-3. 跑 `npm run setup migrate` (仅 v0.1.0 升级, 新装跳过)
-4. `bash deploy-swap.sh --force` 真实部署
-5. `journalctl --user -u openclaw-gateway -n 50` 验证
+3. `bash deploy-swap.sh --force` 真实部署
+4. `journalctl --user -u openclaw-gateway -n 50` 验证
 
 ## 9. 老板拍板的特殊决策
 
 - **2026-08-01**: B 方案 (accounts/<id>.json + env vars) 取代嵌套 config
-- **2026-08-04**: wechatpadpro 部署 prod 后撤回 (manifest 缺 id 爆网关 status=78), 现 0 prod 残留
-- **2026-08-04**: Phase G 完工, v1.1.15 + v1.1.15 audit 修复, 4 轮 dry-run + 5 轮 real deploy 验证通过
+- **2026-08-09**: v1.2.0 生产已部署 (当前)

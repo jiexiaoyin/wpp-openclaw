@@ -51,7 +51,6 @@ export const WebhookMetrics = {
   incRejectedSecret: () => incCounter("messages_rejected_secret_total"),
   incRejectedDedupe: () => incCounter("messages_rejected_dedupe_total"),
   incRejectedPolicy: () => incCounter("messages_rejected_policy_total"),
-  // v1.0.2 新增 (FIX-3: webhook-receiver.ts port metrics)
   incRejectedBodySize: () => incCounter("messages_rejected_body_size_total"),
   incRejectedTimeout: () => incCounter("messages_rejected_timeout_total"),
   incRejectedSignature: () => incCounter("messages_rejected_signature_total"),

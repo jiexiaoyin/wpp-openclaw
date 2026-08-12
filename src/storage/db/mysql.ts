@@ -9,7 +9,7 @@ import mysql from "mysql2/promise";
 import type { RowDataPacket, Pool, ResultSetHeader } from "mysql2/promise";
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { info, warn, error } from "../../core/logger.js";
+import { info, warn, error, formatErr } from "../../core/logger.js";
 import { findPluginRoot } from "../../core/paths.js";
 import type {
   AccountRecord,
@@ -23,19 +23,35 @@ import type {
   SvridMappingRecord,
 } from "./types.js";
 
-/** ER_STATEMENT_TIMEOUT (1969): caught → return [] */
+/** ER_STATEMENT_TIMEOUT (1969): caught → throw QueryTimeoutError (silent killer 防护) */
 const ER_STATEMENT_TIMEOUT = 1969;
 /** max_statement_time (s) per query (vendor 文档明示不超过 10s) */
 const STMT_TIMEOUT_SECONDS = 10;
 
 /**
+ * 查询超时异常 (不静默返 [] — 曾把单行查询误判"不存在" silent killer)
+ * 用法: catch (e) { if (e instanceof QueryTimeoutError) ... }
+ */
+export class QueryTimeoutError extends Error {
+  readonly code = "QUERY_TIMEOUT";
+  readonly errno = ER_STATEMENT_TIMEOUT;
+  readonly sql: string;
+  constructor(sql: string, public readonly originalError?: unknown) {
+    super(`queryWithTimeout: 1969 timeout (sql=${sql.slice(0, 80)})`);
+    this.name = "QueryTimeoutError";
+    this.sql = sql;
+  }
+}
+
+/**
  * Run a query with optional max_statement_time timeout.
- * Catches ER_STATEMENT_TIMEOUT and returns empty rows.
+ * Throws QueryTimeoutError on ER_STATEMENT_TIMEOUT (caller can catch by instanceof).
  */
 export async function queryWithTimeout<T extends RowDataPacket[] | ResultSetHeader>(
   pool: Pool,
   sql: string,
   params: unknown[] = [],
+  opts?: { onTimeout?: "throw" | "warn-and-return" },
 ): Promise<T> {
   const conn = await pool.getConnection();
   try {
@@ -47,8 +63,11 @@ export async function queryWithTimeout<T extends RowDataPacket[] | ResultSetHead
   } catch (e) {
     const code = (e as { errno?: number }).errno;
     if (code === ER_STATEMENT_TIMEOUT) {
-      warn(`queryWithTimeout: 1969 timeout (sql=${sql.slice(0, 80)})`);
-      return [] as unknown as T;
+      if (opts?.onTimeout === "warn-and-return") {
+        warn(`queryWithTimeout: 1969 timeout (sql=${sql.slice(0, 80)}) — falling back to empty result`);
+        return [] as unknown as T;
+      }
+      throw new QueryTimeoutError(sql, e);
     }
     throw e;
   } finally {
@@ -127,34 +146,50 @@ async function applySchemaSql(pool: Pool): Promise<void> {
 
 /** Always include these migrations for vendor schema drift safety */
 async function applyMigrations(pool: Pool): Promise<void> {
-  // v1.0.1: 基础 (account_id, ts) 复合, 覆盖 history query
+  // 撤回时间戳应来自原始消息入库时间: wpp_messages 加 create_time BIGINT 列 (ensureColumn 幂等 ADD)
+  await ensureColumn(pool, "wpp_messages", "create_time", "BIGINT NULL");
+  await ensureColumn(pool, "wpp_messages", "from_wxid", "VARCHAR(128) NULL");
+  // 旧行回填: 从 raw_payload.sender_id 提取 (已有行无 from_wxid)
+  try {
+    await pool.query(
+      `UPDATE wpp_messages SET from_wxid = JSON_UNQUOTE(JSON_EXTRACT(raw_payload, '$.sender_id'))
+       WHERE from_wxid IS NULL AND raw_payload IS NOT NULL AND raw_payload <> ''
+         AND JSON_UNQUOTE(JSON_EXTRACT(raw_payload, '$.sender_id')) IS NOT NULL`,
+    );
+  } catch (e) {
+    warn(`applyMigrations: backfill from_wxid failed (non-fatal): ${formatErr(e)}`);
+  }
+
+  // 基础 (account_id, chat_id, ts) 复合, 覆盖 history query
   await ensureIndex(pool, "wpp_messages", "idx_account_chat_ts", [
     "account_id",
     "chat_id",
     "ts",
   ]);
-  // v1.0.1: (peer_kind, peer_id) 复合, 覆盖跨账号 peer 查询
+  // (peer_kind, peer_id) 复合, 覆盖跨账号 peer 查询
   await ensureIndex(pool, "wpp_messages", "idx_peer_kind_peer_id", [
     "peer_kind",
     "peer_id",
   ]);
-  // v1.1.1: (account_id, peer_id, ts) 复合, 加速 "get history from this peer" 常见 case
-  //   之前 idx_account_ts + filter peer_id 走 filter 慢, 复合后走 index range scan
+  await ensureIndex(pool, "wpp_messages", "idx_sender", [
+    "peer_kind",
+    "peer_id",
+    "from_wxid",
+  ]);
+  // (account_id, peer_id, ts) 复合, 加速 get-history-from-peer (复合后走 index range scan)
   await ensureIndex(pool, "wpp_messages", "idx_account_peer_ts", [
     "account_id",
     "peer_id",
     "ts",
   ]);
-  // v1.1.1: (account_id, msg_type, ts) 复合, 加速按消息类型查 (Phase D 4-way trigger)
+  // (account_id, msg_type, ts) 复合, 加速按消息类型查
   await ensureIndex(pool, "wpp_messages", "idx_account_msgtype_ts", [
     "account_id",
     "msg_type",
     "ts",
   ]);
 
-  // v1.1.24 QUOTE-SVRID (2026-08-08 接总立): 引用消息 svrid 映射表
-  //   微信 svrid 无法主动获取, 只能从"别人引用该消息"的 refermsg.svrid 捕获
-  //   表: wpp_svrid_mapping (md5 → svrid), AI 引用时优先查真实 svrid
+  // 引用消息 svrid 映射表: 微信 svrid 无法主动获取, 只能从"别人引用该消息"的 refermsg.svrid 被动捕获
   await pool.query(`
     CREATE TABLE IF NOT EXISTS wpp_svrid_mapping (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -169,9 +204,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
-  // v1.1.25 SYNC-STATE (2026-08-08 接总立): Synckey 增量游标持久化
-  //   根因: Synckey:"" 每次重启全量拉取 → 重放风暴 → dedup DB 查询阻塞事件循环 → 网关卡顿
-  //   修复: 保存每次 Sync 返回的 KeyBuf.buffer, 重启后用增量游标只拉新消息
+  // Synckey 增量游标持久化: 保存 Sync 返回的 KeyBuf.buffer, 重启后用增量游标只拉新消息 (防全量重放风暴)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS wpp_sync_state (
       account_id VARCHAR(64) NOT NULL,
@@ -234,20 +267,20 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
     // ===== Messages =====
     async saveMessage(record: MessageRecord): Promise<void> {
       const p = getPool();
-      // v1.1.17 FULL-FIX (P0-G): schema.sql 已加 UNIQUE (account_id, msg_id, new_msg_id)
-      // INSERT 改 ON DUPLICATE KEY UPDATE — 三通道 (webhook/business-callback/WS) 重复推送时幂等
+      // UNIQUE (account_id, msg_id, new_msg_id) + ON DUPLICATE KEY UPDATE — 三通道重复推送时幂等
       await p.query(
         `INSERT INTO wpp_messages
          (account_id, msg_id, new_msg_id, direction, peer_kind, peer_id, peer_name,
-          chat_id, msg_type, content, raw_payload, ts)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(FROM_UNIXTIME(?), CURRENT_TIMESTAMP))
+          chat_id, msg_type, content, raw_payload, from_wxid, ts)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(FROM_UNIXTIME(?), CURRENT_TIMESTAMP))
          ON DUPLICATE KEY UPDATE
            direction = VALUES(direction),
            peer_kind = VALUES(peer_kind),
            peer_id = VALUES(peer_id),
            msg_type = VALUES(msg_type),
            content = VALUES(content),
-           raw_payload = VALUES(raw_payload)`,
+           raw_payload = VALUES(raw_payload),
+           from_wxid = VALUES(from_wxid)`,
         [
           record.account_id,
           record.msg_id ?? null,
@@ -260,6 +293,7 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
           record.msg_type ?? null,
           record.content ?? null,
           record.raw_payload !== undefined ? JSON.stringify(record.raw_payload) : null,
+          record.from_wxid ?? null,
           record.ts ?? null,
         ],
       );
@@ -285,7 +319,11 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
         where.push("ts < FROM_UNIXTIME(?)");
         params.push(opts.beforeTs);
       }
-      // v1.0.3 FIX-A1: clamp limit 防御 DoS (单次最多 1000 行, 防 caller 传 1M 内存爆)
+      if (opts.fromWxid) {
+        where.push("from_wxid = ?");
+        params.push(opts.fromWxid);
+      }
+      // clamp limit 防 DoS (单次最多 1000 行, 防 caller 传 1M 内存爆)
       const safeLimit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
       const sql =
         `SELECT * FROM wpp_messages` +
@@ -305,20 +343,19 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       return firstRow(rows) ? rowToMessage(firstRow(rows)!) : null;
     },
 
-    // v1.1.19 DB-DEDUP (2026-08-08 18:33 接总立方案 A): 持久化去重查询
-    // 按 msg_id 或 new_msg_id 任一命中即视为已存在 (vendor 重放时 msg_id 相同)
+    // 持久化去重查询: 按 msg_id 或 new_msg_id 任一命中即视为已存在 (vendor 重放时 msg_id 相同)
     async getMessageByMsgIdOrNewId(
       msgId: string | undefined,
       newMsgId: string | undefined,
       accountId: string,
+      // v1.3.18 P1-核心2 fix: 加 direction 选项, 默认 inbound (保持向后兼容, dedup 用)
+      opts?: { direction?: "inbound" | "outbound" | "any" },
     ): Promise<MessageRecord | null> {
       if (!msgId && !newMsgId) return null;
       const p = getPool();
-      // v1.1.19 FIX (2026-08-08 18:38): SQL 运算符优先级 bug —
-      //   之前 `WHERE account_id = ? OR msg_id = ? OR new_msg_id = ? AND direction='inbound'`
-      //   AND 优先于 OR → 变成 account_id = ? OR msg_id = ? OR (new_msg_id = ? AND direction)
-      //   → account_id 恒真 → 所有消息都命中 → 全部误杀 skip (老板图片消息丢失根因)
-      //   正确: account_id AND (msg_id OR new_msg_id) AND direction
+      const direction = opts?.direction ?? "inbound";
+      // SQL 运算符优先级陷阱: 必须 `account_id AND (msg_id OR new_msg_id) AND direction`
+      //  (曾写成 OR 连 chain, AND 优先 → account_id 恒真 → 全部误杀, 消息丢失根因)
       const idClauses: string[] = [];
       const params: unknown[] = [accountId];
       if (msgId) {
@@ -329,9 +366,10 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
         idClauses.push("new_msg_id = ?");
         params.push(newMsgId);
       }
+      const dirClause = direction === "any" ? "" : `AND direction = '${direction}'`;
       const rows = await queryWithTimeout<RowDataPacket[]>(
         p,
-        `SELECT * FROM wpp_messages WHERE account_id = ? AND (${idClauses.join(" OR ")}) AND direction = 'inbound' LIMIT 1`,
+        `SELECT * FROM wpp_messages WHERE account_id = ? AND (${idClauses.join(" OR ")}) ${dirClause} LIMIT 1`,
         params,
       );
       return firstRow(rows) ? rowToMessage(firstRow(rows)!) : null;
@@ -347,7 +385,7 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       return firstRow(rows) ? rowToMessage(firstRow(rows)!) : null;
     },
 
-    // ===== v1.1.24 Quote svrid 映射 =====
+    // ===== Quote svrid 映射 =====
     async saveSvridMapping(record: SvridMappingRecord): Promise<void> {
       const p = getPool();
       await p.query(
@@ -377,7 +415,7 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       return rows.length > 0 ? String(rows[0]!.svrid) : null;
     },
 
-    // ===== v1.1.25 Sync state (Synckey 持久化) =====
+    // ===== Sync state (Synckey 持久化) =====
     async saveSynckey(accountId, synckey): Promise<void> {
       const p = getPool();
       await p.query(
@@ -561,7 +599,7 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
         where.push("endpoint = ?");
         params.push(opts.endpoint);
       }
-      // v1.0.3 FIX-A1: clamp limit 防御 DoS
+      // clamp limit 防 DoS
       const safeLimit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
       const sql =
         `SELECT * FROM wpp_api_calls` +
@@ -668,6 +706,7 @@ function rowToMessage(r: RowDataPacket): MessageRecord {
     msg_type: r.msg_type == null ? null : String(r.msg_type),
     content: r.content == null ? null : String(r.content),
     raw_payload: raw,
+    from_wxid: r.from_wxid == null ? null : String(r.from_wxid),
     ts: r.ts instanceof Date ? Math.floor(r.ts.getTime() / 1000) : Number(r.ts ?? 0),
   };
 }

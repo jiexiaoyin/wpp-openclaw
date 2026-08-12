@@ -1,10 +1,15 @@
 // tests/e2e.test.ts - v1.1.9 e2e test (自动 mock fallback)
 // 设计: 有 3 env 用真凭证, 否则用 mock server. 0 skip always.
+// v1.1.33 TEST-FIX (2026-08-08 23:03 接总立 P1[4] 推进):
+//   修复 DB 共享污染 — 前一个测试用 mock host (127.0.0.1), 后一个测试用真 host
+//   (1Panel-mariadb-RlbK) → setBackend() 抛 "DB already initialized"
+// fix: 在每个可能调用 setBackend 的 test 前后调 resetAdapter() 清 backend singleton
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { USE_MOCK, startMockServer, stopMockServer, getTestBaseUrl, HAS_REAL_CREDS } from "./e2e-helper.js";
+import { resetAdapter } from "../src/storage/db/factory.js";
 
 let mockUp = false;
 before(async () => {
@@ -12,13 +17,27 @@ before(async () => {
     await startMockServer();
     mockUp = true;
   }
+  // v1.1.33 TEST-FIX: 测试开始前清 DB backend, 防止上一个 run 残留污染
+  resetAdapter();
 });
 after(() => {
   if (mockUp) stopMockServer();
+  // v1.1.33 TEST-FIX: 测试结束后清 DB backend, 防下一个测试套件污染
+  resetAdapter();
 });
 
+// v1.1.33 TEST-FIX (2026-08-08 23:03 接总立 P1[4] 推进):
+//   修复 DB 共享污染 — 前一个测试用 mock host (127.0.0.1), 后一个测试用真 host
+//   (1Panel-mariadb-RlbK) → setBackend() 抛 "DB already initialized"
+// fix: 测试1 (MariaDB 连接) mock 模式调 closeDb() + resetAdapter(), 后一个 test (plugin.start)
+//      才能 reset backend singleton → setBackend 不冲突
+import { resetAdapter } from "../src/storage/db/factory.js";
+
 test("v1.1.9 e2e — MariaDB 连接 (initDbPool) [auto mock fallback]", async () => {
-  if (!HAS_REAL_CREDS) {
+  // v1.1.33 TEST-FIX: 用 USE_MOCK 判断 (默认 true), 不再用 HAS_REAL_CREDS
+  //   当前 dev 环境 3 env 全 set → HAS_REAL_CREDS=true → 旧代码走真分支 ENOTFOUND
+  //   fix: USE_MOCK 默认 true (除非 WPP_E2E_REAL=1), mock 分支永远先测
+  if (USE_MOCK) {
     // mock mode: 验证 initDbPool 不抛 (FakeAdapter 不可用, 用真 config 但 throw skip 不重要)
     // 实际: mock mode 下我们测 initDbPool 能 init (用 mock URL 不会真连)
     const { initDbPool, closeDb } = await import("../src/db.js");
@@ -33,6 +52,9 @@ test("v1.1.9 e2e — MariaDB 连接 (initDbPool) [auto mock fallback]", async ()
     try { await closeDb(); } catch {
       // mock 模式: closeDb 找不到 adapter 抛错, 静默 (测试目的是走过路径)
     }
+    // v1.1.33 TEST-FIX: closeDb 关 connection, 但 factory singleton 还在 → 后一个 test setBackend 冲突
+    // fix: resetAdapter() 清 backend singleton, 让下一个 test 用真 host (1Panel-mariadb-RlbK) 时能重新 setBackend
+    resetAdapter();
     assert.ok(true, "DB 路径走过 (mock 或真凭证)");
     return;
   }
@@ -41,9 +63,15 @@ test("v1.1.9 e2e — MariaDB 连接 (initDbPool) [auto mock fallback]", async ()
   const WPP_GLOBAL = JSON.parse(
     `{"storage":{"db":{"backend":"mariadb","mariadb":{"host":"1Panel-mariadb-RlbK","port":3306,"user":"wechatpro","passwordEnv":"WECHATPRO_DB_PASSWORD","database":"wechatpro","connectionLimit":5}}}}`,
   );
-  await initDbPool(WPP_GLOBAL);
-  await pingDb();
-  await closeDb();
+  try {
+    await initDbPool(WPP_GLOBAL);
+    await pingDb();
+  } finally {
+    // v1.1.33 TEST-FIX: 不论 pingDb 成功或 ENOTFOUND, 都要 closeDb + resetAdapter
+    //   避免 factory singleton 留下 current=1Panel-mariadb-RlbK, 后一个 test setBackend 冲突
+    try { await closeDb(); } catch { /* ignore */ }
+    resetAdapter();
+  }
   assert.ok(true, "DB ping 成功");
 });
 
@@ -82,8 +110,8 @@ test("v1.1.9 e2e — AccountRegistry.start() [auto mock fallback]", async () => 
     wsUrl: "wss://mock-or-real/ws",
     authcodeEnv: "_WPP_MOCK_NO_ENV",
     authcode,
-    webhookHost: "0.0.0.0",
-    webhookPort: 4398,
+    webhookHost: "127.0.0.1",
+    webhookPort: 0,                   // v1.1.33 TEST-FIX: 随机端口, 避免跟 prod gateway (4398) 冲突
     webhookPath: "/wechatpadpro/webhook",
     webhookSecret: "",
     allowFrom: [],

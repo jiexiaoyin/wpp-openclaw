@@ -3,11 +3,7 @@
 // 仿 本项目 AccountContext 设计 (本仓库 v0.1.0 沿用 module singleton 模式, G1 升级为 class)
 //
 // 关键不变量:
-//   1. 1 accountId = 1 AccountContext (G2 Registry 保证)
-//   2. AccountContext 与现有 WppAccountState 结构兼容 (structural typing)
 //      → outbound / dispatch / inbound 现有 call site 不用动
-//   3. logger 自带 accountId 字段 + [WPP:<id>] 前缀 → 多账号 log grep 隔离
-//   4. 构造纯内存 (不连 DB / 网络) → 单测 0 依赖
 
 import {
   info as loggerInfo,
@@ -41,7 +37,14 @@ export class AccountContext {
   wsClient?: WppWsClient;
   webhookServer?: WppWebhookServer;
 
-  // v1.1.12 P1-1 (2026-08-08): periodic setWebhook retry timer 集合
+  // v1.1.27 SHUTDOWN-FLUSH (2026-08-08 P1-b): inbound debouncer flushAll 钩子
+  //   之前: stop() 拿不到 handler 闭包内 debouncer 引用 → 停机丢失 buffered 消息
+  //   fix: index.ts attachInboundFlush(inboundHandler.flushAll), stop() 时先 flush 再停 ws/webhook
+  private inboundFlushHook: (() => Promise<void>) | null = null;
+  attachInboundFlush(hook: () => Promise<void>): void {
+    this.inboundFlushHook = hook;
+  }
+
   // 多个 timer 可能并存 (e.g. 启动失败 + 后续仍 retry), shutdown 时全部 clear
   private readonly retryTimers = new Set<NodeJS.Timeout>();
 
@@ -138,7 +141,6 @@ export class AccountContext {
     this.info(`webhook server attached`, { port: this.config.webhookPort, path: this.config.webhookPath });
   }
 
-  // v1.1.12 P1-1 (2026-08-08): periodic setWebhook retry timer 管理
   // 启动时 setWebhook 失败 → 后台每 5 分钟重试, 成功 clearInterval
   // shutdown 时统一 clear (防泄漏)
   setRetryTimer(timer: NodeJS.Timeout): void {
@@ -176,10 +178,19 @@ export class AccountContext {
    * registry.delete 由 AccountRegistry 在调用 stop 后负责 (G2)
    */
   async stop(): Promise<void> {
-    // v1.1.12 P1-1: 先清所有 retry timer (避免 setInterval 仍在跳)
     if (this.retryTimers.size > 0) {
       this.clearRetryTimer();
       this.info(`cleared ${this.retryTimers.size} retry timer(s)`);
+    }
+    // v1.1.27 SHUTDOWN-FLUSH: 先 flush debouncer (buffered 消息), 再停 ws/webhook
+    //   顺序很重要: flush 完成后 ws/webhook 才能安全停, 否则消息进 debouncer 但 handler 已关
+    if (this.inboundFlushHook) {
+      try {
+        await this.inboundFlushHook();
+        this.info(`inbound flush completed (debouncer buffered messages dispatched)`);
+      } catch (e) {
+        this.warn(`inbound flush error: ${formatErr(e)}`);
+      }
     }
     if (this.wsClient) {
       try {

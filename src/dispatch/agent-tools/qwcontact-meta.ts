@@ -1,0 +1,31 @@
+// src/dispatch/agent-tools/qwcontact-meta.ts - QWContact tag (企业联系人, 3)
+
+import { Type } from "typebox";
+import type { ToolMeta } from "./_shared.js";
+import { makeWppQWContact } from "../../send/index.js";
+import { getDefaultAccountRegistry } from "../../account-state.js";
+
+function getQwc() {
+  const state = getDefaultAccountRegistry().get("default");
+  if (!state) throw new Error("account not found: default");
+  return makeWppQWContact({
+    baseUrl: state.config.apiBaseUrl,
+    tokenKey: state.config.tokenKey,
+    authcode: state.authcode,
+    accountId: "default",
+  });
+}
+
+export const QW_CONTACT_META: ToolMeta = {
+  qwContactSearch: ["搜索企业微信联系人.", Type.Object({ keyword: Type.String() }), (keyword: string) => getQwc().searchQWContact(keyword)],
+  qwContactApply: [
+    "企业微信申请加好友.",
+    Type.Object({ v1: Type.String(), v2: Type.String() }),
+    (v1: string, v2: string) => getQwc().qwApplyAddContact(v1, v2),
+  ],
+  qwContactAdd: [
+    "企业微信主动加好友.",
+    Type.Object({ v1: Type.String(), v2: Type.String() }),
+    (v1: string, v2: string) => getQwc().qwAddContact(v1, v2),
+  ],
+};

@@ -61,9 +61,9 @@ export function makeWppWxapp(ctx: WppAccountCtx) {
     verifyPlugin: (appId: string, url: string) =>
       dispatch("/Wxapp/Verifyplugin", { appId, url }),
 
-    /** /Wxapp/Wxapp/AddWxAppRecord */
-    addWxAppRecord: (appId: string, record: Record<string, unknown>) =>
-      dispatch("/Wxapp/Wxapp/AddWxAppRecord", { appId, record: JSON.stringify(record) }),
+    /** /Wxapp/Wxapp/AddWxAppRecord (v1.2.1 swagger-alignment: AddWxAppRecordParamDoc {username}) */
+    addWxAppRecord: (username: string) =>
+      dispatch("/Wxapp/Wxapp/AddWxAppRecord", { username }),
 
     /** /Wxapp/Wxapp/GetpullPay */
     getPullPay: (appId: string) => dispatch("/Wxapp/Wxapp/GetpullPay", { appId }),

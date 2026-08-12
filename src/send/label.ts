@@ -9,12 +9,9 @@ export function makeWppLabel(ctx: WppAccountCtx) {
     postWppJson(ctx.baseUrl, ep, body, opts);
 
   return {
-    /** /Label/Add */
-    add: (labelName: string, wxidList?: string[]) =>
-      dispatch("/Label/Add", {
-        labelName,
-        wxidList: wxidList ? wxidList.join(",") : "",
-      }),
+    /** /Label/Add (v1.2.1 swagger-alignment: AddParamDoc {LabelName}) */
+    add: (labelName: string) =>
+      dispatch("/Label/Add", { LabelName: labelName }),
 
     /** /Label/Delete */
     delete: (labelId: string) => dispatch("/Label/Delete", { labelId }),
@@ -22,9 +19,9 @@ export function makeWppLabel(ctx: WppAccountCtx) {
     /** /Label/GetList */
     getList: () => dispatch("/Label/GetList", {}),
 
-    /** /Label/UpdateList */
+    /** /Label/UpdateList (v1.2.1 swagger-alignment: UpdateListParamDoc {LabelID, ToWxids}) */
     updateList: (labelId: string, wxidList: string[]) =>
-      dispatch("/Label/UpdateList", { labelId, wxidList: wxidList.join(",") }),
+      dispatch("/Label/UpdateList", { LabelID: labelId, ToWxids: wxidList.join(",") }),
 
     /** /Label/UpdateName */
     updateName: (labelId: string, labelName: string) =>

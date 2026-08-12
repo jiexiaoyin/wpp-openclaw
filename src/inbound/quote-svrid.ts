@@ -50,11 +50,11 @@ export async function captureQuoteSvrid(
       captured_at: Math.floor(Date.now() / 1000),
     });
     info(
-      `[WPP v1.1.24] quote svrid captured: svrid=${svrid} md5=${md5 ?? "(text)"} (account=${accountId})`,
+      `[WPP v1.2.0] quote svrid captured: svrid=${svrid} md5=${md5 ?? "(text)"} (account=${accountId})`,
     );
     return { svrid, md5: md5 ?? undefined, captured: true };
   } catch (e) {
-    warn(`[WPP v1.1.24] quote svrid capture failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+    warn(`[WPP v1.2.0] quote svrid capture failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
     return { svrid, md5: md5 ?? undefined, captured: false };
   }
 }
@@ -81,19 +81,16 @@ export async function resolveQuoteSvrid(
   content: string | undefined,
   accountId: string,
 ): Promise<string> {
-  // 1. 优先: content 里 md5 → 查映射表真实 svrid
   const md5 = extractQuotedImgMd5(content);
   if (md5) {
     const svrid = await getSvridByMd5(md5, accountId);
     if (svrid) {
-      info(`[WPP v1.1.24] svrid resolved via md5: ${svrid} (md5=${md5})`);
+      info(`[WPP v1.2.0] svrid resolved via md5: ${svrid} (md5=${md5})`);
       return svrid;
     }
   }
-  // 2. fallback: new_msg_id (近似, 不一定能定位)
   if (newMsgId) {
     return newMsgId;
   }
-  // 3. 最后: msg_id (小号, 通常不能定位)
   return msgId;
 }

@@ -59,6 +59,23 @@ test("buildDedupeKey — 优先级: newMsgId > msgId > noid", () => {
   assert.equal(buildDedupeKey(undefined, "n1"), "noapp:n1");
 });
 
+// v1.1.48 P0-FIX (2026-08-09): 修复 ?? 误判空字符串 — parseV1Message 默认 newMsgId=""
+//   之前: buildDedupeKey(undef, "", "msg-X") === buildDedupeKey(undef, "", "msg-Y") === "noapp:"
+//   现在: 应回退到 msgId, 每条消息 dedup key 唯一
+test("buildDedupeKey — 空字符串 newMsgId 回退 msgId (P0-fix 2026-08-09)", () => {
+  assert.equal(buildDedupeKey(undefined, "", "msg-X"), "noapp:msg-X");
+  assert.equal(buildDedupeKey(undefined, "", "msg-Y"), "noapp:msg-Y");
+  assert.notEqual(
+    buildDedupeKey(undefined, "", "msg-X"),
+    buildDedupeKey(undefined, "", "msg-Y"),
+    "不同 msgId 必须 dedup key 不同 (?? 空字符串 bug 回归拦截)",
+  );
+  // 三种 falsy 形式都应回退
+  assert.equal(buildDedupeKey(undefined, undefined, "msg-Z"), "noapp:msg-Z");
+  assert.equal(buildDedupeKey(undefined, "", ""), "noapp:noid");
+  assert.equal(buildDedupeKey(undefined, undefined, undefined), "noapp:noid");
+});
+
 test("SeenTracker — 重复 key 30min 内拒绝", async () => {
   const s = new SeenTracker();
   assert.ok(s.check("a"));

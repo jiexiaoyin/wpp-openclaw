@@ -16,9 +16,9 @@ const QUOTE_XML = `<?xml version="1.0"?>
 <msg>
   <appmsg appid="" sdkver="0">
     <title>你好</title>
-    <type>57</type>
+    <type>49</type>
     <refermsg>
-      <type>49</type>
+      <type>1</type>
       <svrid>513471006431325567</svrid>
       <fromusr>q139198824</fromusr>
       <chatusr>q139198824</chatusr>

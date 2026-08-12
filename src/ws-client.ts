@@ -1,21 +1,16 @@
 // ws-client.ts - WebSocket 客户端 (接 wechatpadpro /ws/sync)
 // vendor 推送实时消息 (替代 webhook 模式可选)
 //
-// v1.1.11 P0-N1 (2026-08-05): ws 收到 type=100/类通知时, 主动 POST /Msg/Sync 拉消息列表,
 //   然后 payloadToInboundMessage → caller 提供的 onInboundMessage handler.
 //   修复 PoC stub: 原实现只 log debug (vendor 推真消息完全不处理).
 //
 // 关键设计:
-//   1. ws-client 持有 1 个 WppApiClient 引用 (用于 SyncMessage), 不再依赖 caller
-//   2. accountId 注入构造 (用于 payloadToInboundMessage 必备字段)
-//   3. SyncMessage 在 ws on("message") handler 内 fire-and-forget; 错错用 log + 不 break ws
-//   4. 显式跳过 connection_ready (vendor 握手) 跟 init 类 frame (避免 noise)
-//   5. 不发任何消息发送 API (vendor 鉴权方已就绪, ops 单独验证)
 
 import WebSocket from "ws";
 import { logObj as log, formatErr } from "./core/logger.js";
 import { payloadToInboundMessage } from "./inbound/parser.js";
 import { getSynckey, saveSynckey } from "./db.js";
+import { parseJsonText } from "./api/client.js";
 import type {
   WppWsClient,
   WppApiClient,
@@ -29,6 +24,12 @@ export interface WechatpadproWsClientOpts {
   accountId: string;
   /** 同步间隔兜底 (vendor WS 没推时也定时 SyncMessage 拉取, 防 vendor 推送漏通知) */
   fallbackSyncMs?: number;
+  /** v1.1.40 GLOBAL-CONFIG: WS 重连策略 (从 WppAccountConfig.sync.wsReconnect 读, 未设走默认值) */
+  wsReconnect?: {
+    initialDelayMs?: number;
+    maxDelayMs?: number;
+    multiplier?: number;
+  };
   /** 主入口: 收到 SyncMessage 拉到的消息后, 调 caller. caller 负责 debouncer/triggers/dispatch */
   onInboundMessage: (msg: WppInboundMessage) => void | Promise<void>;
 }
@@ -36,9 +37,16 @@ export interface WechatpadproWsClientOpts {
 export class WechatpadproWsClient implements WppWsClient {
   private ws: WebSocket | null = null;
   private connected = false;
-  private retryDelay = 1000;
-  private maxRetryDelay = 30_000;
+  private retryDelay: number;
+  private maxRetryDelay: number;
+  private retryMultiplier: number;
   private stopped = false;
+  // 连续 5 次 ws 502 (vendor 推送调度异常) → 切长退避 5min, 避免疯狂重连 vendor
+  // 重连成功后重置计数
+  private consecutive502 = 0;
+  private static readonly CONSECUTIVE_502_THRESHOLD = 5;
+  private static readonly LONG_BACKOFF_MS = 300_000; // 5 min
+  private lastBackoffReason: string | null = null;
   /** v1.1.11: pending SyncMessage 锁, 防 ws 推送风暴时多次并发拉消息 */
   private syncInFlight = false;
   /** v1.1.11: 兜底定时 SyncMessage (vendor WS 漏推/重启场景). 默认 60s */
@@ -51,16 +59,20 @@ export class WechatpadproWsClient implements WppWsClient {
     private opts: WechatpadproWsClientOpts,
   ) {
     this.fallbackSyncMs = opts.fallbackSyncMs ?? 60_000;
+    this.retryDelay = opts.wsReconnect?.initialDelayMs ?? 1_000;
+    this.maxRetryDelay = opts.wsReconnect?.maxDelayMs ?? 30_000;
+    this.retryMultiplier = opts.wsReconnect?.multiplier ?? 2;
   }
 
   async start(): Promise<void> {
     this.stopped = false;
     this.connect();
-    // v1.1.11: 兜底定时 SyncMessage (vendor WS 推送失败也能拉)
-    this.fallbackTimer = setInterval(() => {
-      void this.triggerSync("fallback-timer");
-    }, this.fallbackSyncMs);
-    this.fallbackTimer.unref?.();
+    if (this.fallbackSyncMs > 0) {
+      this.fallbackTimer = setInterval(() => {
+        void this.triggerSync("fallback-timer");
+      }, this.fallbackSyncMs);
+      this.fallbackTimer.unref?.();
+    }
   }
 
   async stop(): Promise<void> {
@@ -98,15 +110,19 @@ export class WechatpadproWsClient implements WppWsClient {
     }
     this.ws.on("open", () => {
       this.connected = true;
-      this.retryDelay = 1000;
+      this.retryDelay = this.opts.wsReconnect?.initialDelayMs ?? 1_000;
+      if (this.consecutive502 > 0) {
+        log.info(`ws reset 502 counter: prev=${this.consecutive502} (vendor recovered)`);
+      }
+      this.consecutive502 = 0;
       log.info("ws connected");
-      // v1.1.11: ws 连接成功立刻触发一次 sync, 拉可能积压消息
       void this.triggerSync("ws-open");
     });
     this.ws.on("message", async (data) => {
       try {
         const text = data.toString();
-        const json = JSON.parse(text) as Record<string, unknown>;
+        // v1.3.18 F6 fix: 用 parseJsonText 预引号化 16+ 位大整数 (vendor 推送 new_msg_id 防丢精度)
+        const json = parseJsonText(text) as Record<string, unknown>;
         const dataField = json["Data"] as Record<string, unknown> | undefined;
         const type = dataField?.["type"];
 
@@ -132,6 +148,18 @@ export class WechatpadproWsClient implements WppWsClient {
     });
     this.ws.on("error", (err) => {
       log.error(`ws error: ${err.message}`);
+      // Unexpected server response: 502 是 vendor 推送调度异常的信号
+      if (/502|503|504/.test(err.message)) {
+        this.consecutive502 += 1;
+        if (this.consecutive502 >= WechatpadproWsClient.CONSECUTIVE_502_THRESHOLD) {
+          this.lastBackoffReason = `502 x ${this.consecutive502}`;
+          log.warn(
+            `ws smart backoff triggered: ${this.consecutive502} consecutive vendor 5xx, next retry in ${WechatpadproWsClient.LONG_BACKOFF_MS}ms (5min)`,
+          );
+          // 跳到下一个退避轮, 重试 delay 被 override 成 LONG_BACKOFF_MS
+          this.retryDelay = WechatpadproWsClient.LONG_BACKOFF_MS;
+        }
+      }
       // close handler will be called next
     });
   }
@@ -148,7 +176,6 @@ export class WechatpadproWsClient implements WppWsClient {
     }
     this.syncInFlight = true;
     try {
-      // v1.1.25 SYNC-STATE (2026-08-08 接总立): Synckey 增量游标持久化
       //   根因: Synckey:"" 每次全量拉取 → 重启后重放风暴 (19:56 一次 1458 条) →
       //     dedup 每条独立 DB 查询 → 事件循环阻塞 → 网关卡顿
       //   修复: 读上次保存的 KeyBuf.buffer 增量拉取; Sync 后保存新 KeyBuf
@@ -193,8 +220,9 @@ export class WechatpadproWsClient implements WppWsClient {
   private scheduleRetry(): void {
     if (this.stopped) return;
     const delay = Math.min(this.retryDelay, this.maxRetryDelay);
-    log.info(`ws reconnect in ${delay}ms`);
+    log.info(`ws reconnect in ${delay}ms${this.lastBackoffReason ? ` (smart backoff: ${this.lastBackoffReason})` : ""}`);
     setTimeout(() => this.connect(), delay);
-    this.retryDelay = Math.min(this.retryDelay * 2, this.maxRetryDelay);
+    this.retryDelay = Math.min(this.retryDelay * this.retryMultiplier, this.maxRetryDelay);
+    this.lastBackoffReason = null;
   }
 }

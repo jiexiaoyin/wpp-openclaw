@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "sourceMap": false,
+    "removeComments": true,
+    "rootDir": ".",
+    "outDir": "./dist-release"
+  },
+  "include": ["./src/**/*.ts", "./scripts/setup.ts"],
+  "exclude": ["src/dead-code"]
+}
+

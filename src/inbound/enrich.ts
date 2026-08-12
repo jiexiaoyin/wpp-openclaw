@@ -23,7 +23,8 @@ export async function enrichAndSaveMessage(
       account_id: msg.accountId,
       msg_id: msg.msgId,
       new_msg_id: msg.newMsgId,
-      direction: "inbound",
+      // v1.3.21 REVOKE-FIX: 用 msg.direction (outgoing 图片 = outbound), 默认 inbound
+      direction: msg.direction ?? "inbound",
       peer_kind: msg.peerKind,
       peer_id: msg.peerId,
       peer_name: msg.fromNickname,
@@ -31,6 +32,7 @@ export async function enrichAndSaveMessage(
       msg_type: String(msg.msgType),
       content: msg.content,
       raw_payload: msg.raw,
+      from_wxid: msg.fromWxid,
       ts: msg.ts,
     });
     return { saved: true };
