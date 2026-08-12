@@ -4,6 +4,16 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.54]
+- 2026-08-12 (RELAY-TRIGGER — 接龙消息触发 AI 鼓励, 华为群)
+- **根因 (老板反馈"接龙一直没 LLM 介入")**: 真实 vendor 接龙推送是 **type=49 (app, category=app_message)**, 但 handler 只判断 `msgType===53` (describeMsgType 映射的 chat-history) → relay 解析从未执行; 且 msgTypeTrigger 未配置 → 接龙消息不触发 dispatch → **AI 完全不介入**。v1.3.37 RELAY-PARSE 测试用的 53 是假设, 跟真实 vendor 数据不符 (集成 bug)。
+- **修复**:
+  - `relay.ts` 加 `isRelayMessage(m)`: type=53 (旧兼容) 或 type=49 && (content/title 含 "#接龙" 或 "接龙"+编号条目)
+  - `handler.ts` Step 3: relay 解析条件 `msgType===53` → `isRelayMessage(m)` (默认 parseRelay 开)
+  - `handler.ts` dispatch: 接龙消息**强制触发 AI** (即使没人 @) — 老板诉求"对华为群接龙进行鼓励"
+  - **节流**: 同群同接龙标题 5 分钟内只触发一次 (vendor 每次有人接龙都推完整接龙, 全回会刷屏); 被 @ 消息不受节流影响
+- **测试**: `isRelayMessage` 5 用例 (49+接龙 true / 53 true / 普通 app false / 文本 false / 无条目 false) + handler e2e (type=49 接龙强制 dispatch + content 解析成 [接龙] 前缀); 801/801 全绿; tsc 0 错
+
 ## [v1.3.53]
 - 2026-08-12 (VOICE-DEGRADE — 语音转码失败降级发文件 + api-coverage 自动拉 swagger)
 - **P3-1 VOICE-DEGRADE (老板 6-12 16:36 偏好)**: mp3 语音转 silk 失败 → 降级为文件消息 (不再报错)。

@@ -1,6 +1,6 @@
 // src/inbound/handler.ts - 主入口 (debouncer + 4-way triggers + enrich)
 
-import { info, warn, logObj as log, formatErr } from "../core/logger.js";
+import { info, warn, debug, logObj as log, formatErr } from "../core/logger.js";
 import {
   WppInboundDebouncer,
   type DebouncerCallbacks,
@@ -16,7 +16,7 @@ import { captureQuoteSvrid } from "./quote-svrid.js";
 import { extractPairCode } from "../pairing-store.js";
 import { getMessageById } from "../storage/db/messages.js";
 import { getMessageByMsgIdOrNewId } from "../db.js";
-import { parseRelayText } from "./relay.js";
+import { parseRelayText, isRelayMessage } from "./relay.js";
 import { isRedPacketMessage, processRedPacket } from "./hongbao.js";
 import { extractAtUserList } from "./parser/mention.js";
 import { payloadToAllInboundMessages } from "./parser.js";
@@ -30,6 +30,12 @@ import { stringifyLargeInts } from "../util/bigint.js"; // v1.3.27 P2-2: 调试�
 // 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
 // 解法: enrich 时 trackEnrich 记录 promise, 触发 dispatch 前 waitForPendingEnrich 等待同 sender 的 enrich 完成。
 const pendingEnrichs = new Map<string, Promise<void>>();
+
+// v1.3.54 RELAY-TRIGGER 节流: 同群同接龙标题, RELAY_THROTTLE_MS 内只触发一次 AI 鼓励。
+// 背景: vendor 每次有人接龙都推送完整接龙 (type=49 app), 若不节流 AI 每条都回 → 刷屏。
+// key = `${peerId}:${content 首行前 30 字}` (同一接龙 title 指纹); 被 @ 的消息 content 不同 → 不受节流影响。
+const RELAY_THROTTLE_MS = 5 * 60 * 1000;
+const relayTriggerAt = new Map<string, number>();
 
 /** 追踪一次 enrich (key = accountId:sender, 同 sender 串行) */
 function trackEnrich<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -397,12 +403,13 @@ export function createWppInboundHandler(
         warn(`inbound batch persist: ${r.failed}/${persistBatch.length} failed (skipped ${batch.length - persistBatch.length} blocked)`);
       }
 
-      // Step 3: relay 解析 (chat-history 53): 给 prompt 注入 items
+      // Step 3: relay 解析 (接龙): 给 prompt 注入 items
+      // v1.3.54 RELAY-TRIGGER: 用 isRelayMessage 识别 (真实 vendor 接龙 type=49 app, 非 53)
       for (const m of batch) {
-        if (m.msgType === 53 && opts.parseRelay) {
+        if (opts.parseRelay !== false && isRelayMessage(m)) {
           try {
             const relay = parseRelayText(m.content);
-            info(`relay detected: title="${relay.title.slice(0, 30)}", items=${relay.items.length}`);
+            info(`relay detected: title="${relay.title.slice(0, 30)}", items=${relay.items.length} msgType=${m.msgType}`);
             m.content = `[接龙] ${relay.title}\n` +
               relay.items.map((it) => `${it.index}. ${it.text ?? ""}`).join("\n");
           } catch (e) {
@@ -430,6 +437,24 @@ export function createWppInboundHandler(
       for (const [m, t] of triggerResults) {
         // v1.3.39 FILEHELPER: filehelper 命令不 dispatch (只走命令回调, 不进 AI)
         if (m.peerId === "filehelper" && /^\s*\//.test(m.content)) continue;
+        // v1.3.54 RELAY-TRIGGER (老板 8-12 拍板): 接龙消息强制触发 AI (即使没人 @)
+        //   老板诉求"对华为群接龙进行鼓励" — 群内接龙活动要让 AI 介入给鼓励, 不能静默
+        //   节流: 同群同接龙 5 分钟内只触发一次 (vendor 每次有人接龙都推完整接龙, 全回会刷屏)
+        if (opts.enableDispatch !== false && isRelayMessage(m)) {
+          const titleKey = (m.content ?? "").split("\n")[0]?.slice(0, 30) ?? "";
+          const throttleKey = `${m.peerId}:${titleKey}`;
+          const now = Date.now();
+          const lastAt = relayTriggerAt.get(throttleKey) ?? 0;
+          if (now - lastAt >= RELAY_THROTTLE_MS) {
+            relayTriggerAt.set(throttleKey, now);
+            m.trigger = "msgType";
+            dispatched.push(m);
+            info(`relay force-trigger dispatch: peer=${m.peerId} msgId=${m.msgId} via=msgType (throttle key=${throttleKey.slice(0, 40)})`);
+          } else {
+            debug(`relay throttled (last ${Math.round((now - lastAt) / 1000)}s ago, TTL ${RELAY_THROTTLE_MS / 1000}s): ${throttleKey.slice(0, 40)}`);
+          }
+          continue;
+        }
         if (t.triggered && t.via !== "blocked") {
           m.trigger = t.via ?? "at";
           if (t.via === "at" || t.via === "keyword" || t.via === "msgType" ||

@@ -10,7 +10,7 @@ import {
   type WppTriggerConfig,
 } from "../src/inbound/triggers.js";
 import { WppInboundDebouncer } from "../src/inbound/debouncer.js";
-import { parseRelayText } from "../src/inbound/relay.js";
+import { parseRelayText, isRelayMessage } from "../src/inbound/relay.js";
 import {
   stripGroupPrefix,
   describeMsgType,
@@ -351,6 +351,39 @@ test("parseRelayText — 空返回 {title:'', items:[]}", () => {
   assert.equal(r.items.length, 0);
 });
 
+// ===== v1.3.54 RELAY-TRIGGER — isRelayMessage 识别 (真实 vendor 接龙 type=49 app) =====
+
+test("v1.3.54 isRelayMessage — 真实接龙 type=49 app + #接龙 title → true", () => {
+  const m = {
+    msgType: 49,
+    content: "#接龙 nova16SE首销\n1. 门店+型号",
+    raw: { app: { category: "app_message", title: "#接龙 nova16SE首销🫕" } },
+  };
+  assert.equal(isRelayMessage(m), true);
+});
+
+test("v1.3.54 isRelayMessage — 旧 chat-history type=53 → true (兼容历史)", () => {
+  assert.equal(isRelayMessage({ msgType: 53, content: "relay" }), true);
+});
+
+test("v1.3.54 isRelayMessage — 普通 app type=49 (链接/文件/小程序) → false (不误判)", () => {
+  const m = {
+    msgType: 49,
+    content: "分享链接",
+    raw: { app: { category: "app_message", title: "http://example.com" } },
+  };
+  assert.equal(isRelayMessage(m), false);
+});
+
+test("v1.3.54 isRelayMessage — 普通文本 type=1 → false", () => {
+  assert.equal(isRelayMessage({ msgType: 1, content: "大家好" }), false);
+});
+
+test("v1.3.54 isRelayMessage — type=49 但 content 提及接龙无条目 → false", () => {
+  // 普通聊天提"接龙" (无 # 前缀 + 无编号条目) 不应误判
+  assert.equal(isRelayMessage({ msgType: 49, content: "我们明天接龙吧", raw: {} }), false);
+});
+
 // ===== enrich (用真实 adapter 测试, 但 db 没真连, 用 stub) =====
 
 test("enrichAndSaveMessage — 没有 adapter 抛错捕获", async () => {
@@ -396,6 +429,36 @@ test("v1.3.18 P1-假绿2 修 — createWppInboundHandler: 入队 + flush + dispa
   assert.ok(saved.includes("h1-real"), `消息应入库 (enrichAndSaveMessage 真跑), 实际 saved=${JSON.stringify(saved)}`);
   assert.ok(dispatched.length === 1, `onDispatch 应被调 1 次, 实际 dispatched.length=${dispatched.length}`);
   assert.equal(dispatched[0]!.msgId, "h1-real", "dispatched 的 msgId 应匹配入站消息");
+});
+
+test("v1.3.54 RELAY-TRIGGER — 接龙 type=49 消息强制触发 dispatch (即使无人 @)", async () => {
+  resetAdapter();
+  const fake = new FakeDbForEnrich();
+  setAdapterForTest(fake);
+  const dispatched: WppInboundMessage[] = [];
+  const handler = createWppInboundHandler({
+    accountId: "default",
+    triggerConfig: { ...defaultTriggerConfig(), groupPolicy: "open" },
+    triggerCtx: { botWxid: "wxid_bot", allowFrom: [] },
+    enableDispatch: true,
+    onDispatch: async (msg) => { dispatched.push(msg); },
+  });
+  const relayMsgId = `relay-test-${Date.now()}`;
+  await handler.handle({
+    fromWxid: "wxid_member123", // 群内成员发接龙
+    chatroomId: "19908568237@chatroom", // 群 (华为群)
+    msgType: 49, // v1.3.54: 真实接龙是 type=49 app, 不是 53
+    content: "#接龙 nova16SE首销\n1. 门店+型号\n2. 华为程起凤 nova16se",
+    msgId: relayMsgId,
+  } as unknown as WppWebhookPayload);
+  await handler.flushAll();
+  assert.ok(
+    dispatched.some((d) => d.msgId === relayMsgId),
+    `接龙消息应被强制 dispatch (force-trigger via msgType), 实际 dispatched=${JSON.stringify(dispatched.map((d) => d.msgId))}`,
+  );
+  const relay = dispatched.find((d) => d.msgId === relayMsgId);
+  assert.equal(relay?.trigger, "msgType", "接龙触发 via 应为 msgType");
+  assert.ok(relay?.content?.startsWith("[接龙]"), "接龙内容应被解析成 [接龙] 前缀注入 AI 上下文");
 });
 
 
@@ -578,7 +641,7 @@ test("v1.2.4 只入白名单 — 私聊白名单外不入库, 白名单内入库
 });
 
 // ===== v1.3.36 SINGLE-LINE-RELAY (2026-08-11): 微信新版单行接龙解析 =====
-import { parseRelayText } from "../src/inbound/relay.js";
+import { parseRelayText, isRelayMessage } from "../src/inbound/relay.js";
 
 test("v1.3.36 — 单行接龙 (无换行) 解析出多个条目 (保守: 只切序号不猜昵称)", () => {
   const raw = "1. 2. 倪彩霞 gt7 3. 莓心 4. 王燕燕 512 白色";

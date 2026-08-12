@@ -23,6 +23,27 @@ export interface RelayParseResult {
 }
 
 /**
+ * v1.3.54 RELAY-TRIGGER (2026-08-12 接总立): 识别接龙消息。
+ *
+ * 真实 vendor 接龙推送 (v1 schema) 是 **type=49 (app, category=app_message)**, title/content 以 "#接龙" 开头;
+ * handler 之前只判断 `msgType === 53` (describeMsgType 映射的 chat-history) → 从未匹配 → 接龙不解析、不触发 AI。
+ * (v1.3.37 RELAY-PARSE 测试用的 53 是假设, 跟真实 vendor 数据不符 — 集成 bug)
+ *
+ * 识别:
+ *   - msgType===53 (旧 chat-history, 兼容历史)
+ *   - msgType===49 && (content/title 含 "#接龙" 或 "接龙" + 编号条目)
+ */
+export function isRelayMessage(m: { msgType?: number; content?: string; raw?: unknown }): boolean {
+  if (m.msgType === 53) return true; // 旧 chat-history (历史兼容)
+  if (m.msgType !== 49) return false; // 非 app → 非接龙
+  const rawApp = (m.raw as { app?: { title?: unknown } } | undefined)?.app;
+  const rawTitle = typeof rawApp?.title === "string" ? rawApp.title : "";
+  const text = `${m.content ?? ""} ${rawTitle}`;
+  // 微信接龙模板以 "#接龙" 开头; 兼容 "接龙" + 编号条目 (N. xxx) 变体
+  return text.includes("#接龙") || (text.includes("接龙") && /(?:^|\n)\s*\d+\.\s/.test(text));
+}
+
+/**
  * 解析 vendor 推送的 chat-history/接龙 msg body.
  *
  * 重要: title 字面 `\n` (`\<0x5c><0x6e>`) 不是真换行 — 解析前先 `.replace(/\\n/g, "\n")`.
