@@ -147,10 +147,10 @@ wechatpadpro-openclaw/
 
 ## 文档
 
-- [GETTING_STARTED.md](./GETTING_STARTED.md) — 从零安装 + 配置
-- [DEPLOY.md](./DEPLOY.md) — 部署/回滚
-- [USAGE.md](./USAGE.md) — OpenClaw 框架使用
-- [FEATURES.md](./FEATURES.md) — 159 tools + 231 endpoints 清单
+- [GETTING_STARTED.md](./GETTING_STARTED.md) — 从零安装 + 配置 (快速开始)
+- [DEPLOY.md](./DEPLOY.md) — 部署 + 回滚 + 故障排查
+- [USAGE.md](./USAGE.md) — 使用说明 (工具 / 配置 / 多账号 / 监控)
+- [vendor/README.md](./vendor/README.md) — 配套服务端部署
 
 ## 许可证
 
