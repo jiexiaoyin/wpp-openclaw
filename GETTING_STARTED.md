@@ -28,7 +28,7 @@
 | Node.js | ≥ 20.x |
 | OpenClaw gateway | v2026.7.1+ |
 | MariaDB | 存储消息数据库 |
-| WeChatPadPro 服务端 | 微信 Pad 协议 HTTP API + WS (自行搭建或购买) |
+| WeChatPadPro 服务端 | 微信 Pad 协议 HTTP API + WS — **本包 `vendor/` 已含** (v8_m4.1.12.29_p8.0.75.53), 部署见 [vendor/README.md](./vendor/README.md) |
 
 **必填环境变量**(凭证不进 JSON/DB):
 
