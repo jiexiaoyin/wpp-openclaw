@@ -23,7 +23,6 @@ import {
   getOpenclawRoot,
 } from "../src/setup-wizard.js";
 import { readFile as readFileAsync } from "node:fs/promises";
-import { readdirSync, readFileSync } from "node:fs";
 import { generatePairingCode, getPairingStorePath } from "../src/pairing-store.js";
 
 /** v1.1.42 SETUP-MERGE: 检查 agent id 是否已在 openclaw.json agents.list 里 */
