@@ -26,24 +26,28 @@ WeChatPadPro 微信 Pad 协议 → OpenClaw gateway → AI 自动回复。支持
 ## 快速开始
 
 ```bash
-# 0. 解压发布包 (不含依赖)
-unzip wpp-plugin-release.zip && cd wpp-plugin-release
-
-# 1. 安装依赖 (发布包不含 node_modules, 这一步联网下载依赖)
+# 1. 安装依赖 (发布包不含 node_modules)
 npm ci
 
-# 2. 配账号 (交互式向导, 填你自己的 vendor 地址 + wxid)
+# 2. 配账号 (交互式向导)
 cp accounts/default.json.example accounts/default.json
 npm run setup add default
 
-# 3. 部署
-bash deploy.sh               # 验证 (19 项全 PASS)
+# 3. 设环境变量 — WPP_VENDOR_HOST 必设, 否则图片/语音/文件无法下载!
+export WPP_VENDOR_HOST="https://your-vendor-domain"   # 你的服务端域名
+export WECHATPRO_TOKEN_KEY="..."                      # 服务端 API Token
+export WECHATPRO_AUTHCODE="..."                       # 服务端授权码
+export WECHATPRO_DB_PASSWORD="..."                    # MariaDB 密码
+
+# 4. 部署
+bash deploy.sh               # 验证 (18+ 项全 PASS)
 bash deploy-swap.sh --force  # 真实部署
 ```
 
-> **zip 小 = 正常**: 发布包只含编译产物, 不含 node_modules。`npm ci` 会根据 package.json 自动下载全部依赖。
+> **zip 小 = 正常**: 只含编译产物, 不含 node_modules; `npm ci` 自动下载全部依赖。
+> **`WPP_VENDOR_HOST` 别漏**: 媒体下载走白名单, 不设则图片/语音/文件全部无法下载。
 
-详细步骤见 [GETTING_STARTED.md](./GETTING_STARTED.md)。
+完整步骤见 [GETTING_STARTED.md](./GETTING_STARTED.md)。
 
 ## 前置要求
 
