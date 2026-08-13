@@ -189,13 +189,13 @@ test("v1.3.20 REVOKE-FIX — persistOutboundMsg 用 List[0] 入库 newMsgId (原
 
 test("v1.3.22 — uploadMediaToOss 无 OSS 凭证 → 返回 null (降级不阻塞)", async () => {
   const { uploadMediaToOss } = await import("../src/dispatch/media-oss.js");
-  const url = await uploadMediaToOss(Buffer.from("hello"), "image", "jpg", "/tmp/nonexistent-oss-creds.json");
+  const url = await uploadMediaToOss(Buffer.from("hello"), "image", "jpg", "default", "/tmp/nonexistent-oss-creds.json");
   assert.equal(url, null, "无凭证应返回 null");
 });
 
 test("v1.3.22 — uploadMediaToOss 凭证文件不存在 → null (不抛)", async () => {
   const { uploadMediaToOss } = await import("../src/dispatch/media-oss.js");
-  const url = await uploadMediaToOss(Buffer.from("x"), "voice", "silk", "/tmp/definitely-missing.json");
+  const url = await uploadMediaToOss(Buffer.from("x"), "voice", "silk", "default", "/tmp/definitely-missing.json");
   assert.equal(url, null);
 });
 

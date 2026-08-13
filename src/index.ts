@@ -31,6 +31,7 @@ import { defaultTriggerConfig } from "./inbound/triggers.js";
 import { buildSessionKey } from "./session-key.js";
 import { sendText as dispatchSendText, sendImage as dispatchSendImage } from "./dispatch/outbound.js";
 import { AGENT_TOOLS } from "./dispatch/agent-tools/index.js";
+import { getCurrentAccountId } from "./dispatch/account-context.js";
 import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom } from "./config.js";
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig, type ResolvedGlobalConfig } from "./core/runtime-config.js";
@@ -46,6 +47,22 @@ const runtimeInboundHandlers = new Map<string, ReturnType<typeof createWppInboun
 function maskSecret(secret: string): string {
   if (!secret) return "(empty)";
   return secret.length <= 4 ? "****" : `${secret.slice(0, 4)}...${secret.slice(-2)}`;
+}
+
+/**
+ * v1.3.56 MULTI-ACCOUNT: outbound 兜底账号解析。
+ * 框架调 outbound.sendText/sendImage/sendMedia 时 accountId 缺失 → 用当前 dispatch 账号 (ALS),
+ * 再兜底 "default" (单账号兼容)。
+ */
+function resolveOutboundAccount(accountId: string | undefined, via: string): string {
+  if (accountId) return accountId;
+  const ctx = getCurrentAccountId();
+  if (ctx) {
+    log.info(`[WPP v1.3.56 MULTI-ACCOUNT] outbound.${via} 缺 accountId, 用当前 dispatch 账号: ${ctx}`);
+    return ctx;
+  }
+  log.warn(`[WPP v1.3.56 MULTI-ACCOUNT] outbound.${via} 缺 accountId 且无 dispatch 上下文, 兜底 default`);
+  return "default";
 }
 
 // 全局解析后配置 (module-level 缓存, 避免重复 config.json I/O)
@@ -689,7 +706,7 @@ export const wppChannelPlugin = {
     // 不动现有功能 (sendText/sendImage/sendMedia 行为保持)
     // 仿 GeWe v1.4.4 范式 (gewe-multi-agent/src/index.ts:231 完整 outbound 字段定义)
     async sendText(opts: { accountId?: string; to: string; text: string; ats?: string[] }) {
-      const r = await dispatchSendText(opts.accountId ?? "default", opts.to, opts.text, opts.ats);
+      const r = await dispatchSendText(resolveOutboundAccount(opts.accountId, "sendText"), opts.to, opts.text, opts.ats);
       return {
         ok: r.ok, error: r.error,
         msgId: r.msgId, newMsgId: r.newMsgId, createTime: r.createTime,
@@ -700,7 +717,7 @@ export const wppChannelPlugin = {
       };
     },
     async sendImage(opts: { accountId?: string; to: string; imageUrl: string }) {
-      const r = await dispatchSendImage(opts.accountId ?? "default", opts.to, opts.imageUrl);
+      const r = await dispatchSendImage(resolveOutboundAccount(opts.accountId, "sendImage"), opts.to, opts.imageUrl);
       return {
         ok: r.ok, error: r.error,
         msgId: r.msgId, newMsgId: r.newMsgId, createTime: r.createTime,
@@ -743,7 +760,7 @@ export const wppChannelPlugin = {
       silent?: boolean;
     }) {
       const { sendMessage: dispatchSendMessage } = await import("./dispatch/send-message.js");
-      const accountId = opts.accountId ?? "default";
+      const accountId = resolveOutboundAccount(opts.accountId, "sendMedia");
       // 按 mediaType 优先; 没传则按 url 后缀推断
       const urlNoQuery = (opts.mediaUrl.split("?")[0] ?? "").toLowerCase();
       const inferred: WppSendType =

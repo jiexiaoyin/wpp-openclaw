@@ -59,7 +59,8 @@ export class AccountContext {
   constructor(init: AccountContextInit) {
     this.accountId = init.accountId;
     this.config = init.config;
-    this.apiClient = new WechatpadproApiClient(init.config);
+    // v1.3.56 MULTI-ACCOUNT: client 持真实 accountId (OSS key/入库/日志按账号分桶)
+    this.apiClient = new WechatpadproApiClient(init.config, init.accountId);
     this.createdAt = Date.now();
     this.authcode = init.config.authcode;
     this.selfWxid = init.config.selfWxid;

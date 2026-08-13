@@ -131,6 +131,27 @@ journalctl --user -u openclaw-gateway -n 50 | grep "account fully started"  # �
 
 ---
 
+## 3.5 多账号 (v1.3.56, 一 authcode = 一 agent = 一账号)
+
+每个微信号 (一个 authcode) 对应一个**独立 OpenClaw agent** 和一个账号配置文件:
+
+```bash
+npm run setup add wechatA      # 建 accounts/wechatA.json + agent wpp-wechatA + openclaw.json 登记
+npm run setup add wechatB      # 建 accounts/wechatB.json + agent wpp-wechatB + openclaw.json 登记
+npm run setup list             # 看所有账号
+npm run setup modify wechatA   # 改 wechatA 的白名单/端口/agent
+npm run setup remove wechatB   # 只删 accounts/wechatB.json
+npm run setup remove wechatB --clean   # 删 json + agent workspace + openclaw.json 登记/binding
+```
+
+**关键点**:
+- 每个账号自动获得独立 agent `wpp-<账号id>` (独立 workspace/记忆/人设), AI 不串号
+- `add` 自动分配 webhook 端口 (4398 起跳已用端口), 多账号不冲突
+- 自动登记 openclaw.json: `channels.wechatpadpro.accounts.<id>` + per-account route binding `{channel:"wechatpadpro", accountId:"<id>"}`
+- 每账号独立 env: `WECHATPRO_<ID>_TOKEN_KEY` / `WECHATPRO_<ID>_AUTHCODE` (add 向导会自动填 env 名)
+
+---
+
 ## 4. 首次引导(发消息测试)
 
 部署完成后,用老板微信发给机器人验证:

@@ -409,6 +409,140 @@ export async function removeAccountFile(accountId: string): Promise<{ filePath: 
   return { filePath };
 }
 
+// ============ v1.3.56 MULTI-ACCOUNT: 读/改账号 + openclaw.json 登记 ============
+
+/** 读取现有账号配置 (modify 用) */
+export async function readAccountFile(accountId: string): Promise<WppAccountConfig> {
+  if (!isValidAccountId(accountId)) throw new Error(`invalid accountId: '${accountId}'`);
+  const filePath = join(getAccountsDir(), `${accountId}.json`);
+  try {
+    await access(filePath);
+  } catch {
+    throw new Error(`accounts/${accountId}.json does not exist`);
+  }
+  const raw = await readFileAsync(filePath, "utf8");
+  return JSON.parse(raw) as WppAccountConfig;
+}
+
+/** merge 写回账号配置 (modify 用, 保留未改字段) */
+export async function updateAccountFile(
+  accountId: string,
+  patch: Partial<WppAccountConfig>,
+): Promise<{ filePath: string; json: string }> {
+  if (!isValidAccountId(accountId)) throw new Error(`invalid accountId: '${accountId}'`);
+  const existing = await readAccountFile(accountId);
+  const merged = { ...existing, ...patch };
+  const filePath = join(getAccountsDir(), `${accountId}.json`);
+  const json = JSON.stringify(merged, null, 2) + "\n";
+  await writeFileAsync(filePath, json, "utf8");
+  return { filePath, json };
+}
+
+/** 解析 openclaw.json 根目录 (OPENCLAW_ROOT env 覆盖, 默认 $HOME/.openclaw) */
+function resolveOpenclawRoot(): string {
+  return process.env.OPENCLAW_ROOT || (process.env.HOME ? `${process.env.HOME}/.openclaw` : "/root/.openclaw");
+}
+
+async function loadOpenclawJson(): Promise<Record<string, unknown>> {
+  const raw = await readFileAsync(join(resolveOpenclawRoot(), "openclaw.json"), "utf8");
+  return JSON.parse(raw) as Record<string, unknown>;
+}
+
+async function saveOpenclawJson(cfg: Record<string, unknown>): Promise<void> {
+  await writeFileAsync(join(resolveOpenclawRoot(), "openclaw.json"), JSON.stringify(cfg, null, 2) + "\n", "utf8");
+}
+
+/**
+ * v1.3.56 MULTI-ACCOUNT: 在 openclaw.json 登记新账号 (一账号一 agent 路由)。
+ * 两处:
+ *   1. channels.wechatpadpro.accounts.<id> = { enabled, configFile: "accounts/<id>.json" }
+ *   2. bindings 加 { type:"route", agentId, match:{ channel:"wechatpadpro", accountId:"<id>" } }
+ * 幂等: 已存在同 accountId binding / accounts 登记则跳过。
+ */
+export async function registerAccountInOpenclaw(
+  accountId: string,
+  agentId: string,
+): Promise<{ registered: boolean; bindingAdded: boolean; openclawRoot: string }> {
+  const root = resolveOpenclawRoot();
+  const cfg = await loadOpenclawJson();
+
+  // 1. channels.wechatpadpro.accounts.<id>
+  const channels = (cfg.channels ?? {}) as Record<string, unknown>;
+  const wpp = (channels.wechatpadpro ?? {}) as Record<string, unknown>;
+  const accounts = (wpp.accounts ?? {}) as Record<string, unknown>;
+  let registered = false;
+  if (!accounts[accountId]) {
+    accounts[accountId] = { enabled: true, configFile: `accounts/${accountId}.json` };
+    wpp.accounts = accounts;
+    channels.wechatpadpro = wpp;
+    cfg.channels = channels;
+    registered = true;
+  }
+
+  // 2. bindings route (per-account 精确匹配)
+  const bindings = (cfg.bindings ?? []) as Array<Record<string, unknown>>;
+  const existing = bindings.some(
+    (b) =>
+      (b.match as Record<string, unknown>)?.channel === "wechatpadpro" &&
+      (b.match as Record<string, unknown>)?.accountId === accountId,
+  );
+  let bindingAdded = false;
+  if (!existing) {
+    const maxId = Math.max(0, ...bindings.map((b) => Number(b?.bindId ?? 0)));
+    bindings.push({
+      bindId: maxId + 1,
+      type: "route",
+      agentId,
+      comment: `WeChatPadPro account ${accountId} routes to ${agentId}`,
+      match: { channel: "wechatpadpro", accountId },
+    });
+    cfg.bindings = bindings;
+    bindingAdded = true;
+  }
+
+  if (registered || bindingAdded) await saveOpenclawJson(cfg);
+  return { registered, bindingAdded, openclawRoot: root };
+}
+
+/** 从 openclaw.json 删除账号登记 + binding (remove --clean 用) */
+export async function unregisterAccountFromOpenclaw(accountId: string): Promise<{ removed: boolean; openclawRoot: string }> {
+  const root = resolveOpenclawRoot();
+  const cfg = await loadOpenclawJson();
+  let removed = false;
+
+  // 1. 删 channels.wechatpadpro.accounts.<id>
+  const channels = (cfg.channels ?? {}) as Record<string, unknown>;
+  const wpp = (channels.wechatpadpro ?? {}) as Record<string, unknown>;
+  const accounts = (wpp.accounts ?? {}) as Record<string, unknown>;
+  if (accounts[accountId]) {
+    delete accounts[accountId];
+    wpp.accounts = accounts;
+    channels.wechatpadpro = wpp;
+    cfg.channels = channels;
+    removed = true;
+  }
+
+  // 2. 删对应 binding
+  const bindings = (cfg.bindings ?? []) as Array<Record<string, unknown>>;
+  const before = bindings.length;
+  const kept = bindings.filter(
+    (b) => !((b.match as Record<string, unknown>)?.channel === "wechatpadpro" &&
+             (b.match as Record<string, unknown>)?.accountId === accountId),
+  );
+  if (kept.length !== before) {
+    cfg.bindings = kept;
+    removed = true;
+  }
+
+  if (removed) await saveOpenclawJson(cfg);
+  return { removed, openclawRoot: root };
+}
+
+/** 解析 openclaw.json 根目录 (供 setup.ts 复用, 处理 agent workspace 删除) */
+export function getOpenclawRoot(): string {
+  return resolveOpenclawRoot();
+}
+
 // ============ helpers (also exported for tests) ============
 
 /** 校验 add 字段合法性 (UI 层先调一次, writeAccountFile 再校验一次) */
@@ -574,6 +708,12 @@ export async function migrateFromV0Config(
 export interface EnsureAgentWorkspaceOpts {
   /** agent ID (e.g. "wpp-wechat" 或 "wpp-wechat-alice") */
   agentId: string;
+  /**
+   * v1.3.56 MULTI-ACCOUNT: 关联的 WPP 账号 id。
+   * 注入 binding 用: match = { channel:"wechatpadpro", accountId: <此值> } (精确路由, 非 "*")。
+   * 缺省不注入 per-account binding (保留旧行为)。
+   */
+  accountId?: string;
   /** 是否克隆现有 agent 作为模板 (e.g. "gewe-wechat", "wpp-wechat") */
   cloneFrom?: string;
   /** 是否同时构建 openclaw.json entry (默认 true) */
@@ -617,6 +757,7 @@ export async function ensureAgentWorkspace(
 ): Promise<EnsureAgentWorkspaceResult> {
   const {
     agentId,
+    accountId,
     cloneFrom,
     patchOpenclawJson = true,
     // v1.3.55 RELEASE-GENERIC: OpenClaw 根目录可 env 覆盖 (接收方用自己的 OpenClaw)
@@ -727,12 +868,36 @@ export async function ensureAgentWorkspace(
       agentDir: agentDir,
     });
     const bindings = (cfg.bindings ?? []) as Array<Record<string, unknown>>;
-    const maxId = Math.max(0, ...bindings.map((b) => Number(b?.bindId ?? 0)));
-    bindings.push({
-      bindId: maxId + 1,
-      agentId: agentId,
-      match: { channel: "last", accountId: "*" },
-    });
+    // v1.3.56 MULTI-ACCOUNT binding 修复: channel "last" 是占位符(不命中任何流量),
+    //   accountId "*" 是通配(路由到同一 agent) — 都错。
+    //   现在: channel="wechatpadpro" + accountId 精确匹配 (per-account 一账号一 agent)。
+    //   幂等: 同 accountId 已存在 binding 则跳过 (防重复 add)。
+    if (accountId) {
+      const hasBinding = bindings.some(
+        (b) =>
+          (b.match as Record<string, unknown>)?.channel === "wechatpadpro" &&
+          (b.match as Record<string, unknown>)?.accountId === accountId,
+      );
+      if (!hasBinding) {
+        const maxId = Math.max(0, ...bindings.map((b) => Number(b?.bindId ?? 0)));
+        bindings.push({
+          bindId: maxId + 1,
+          type: "route",
+          agentId,
+          comment: `WeChatPadPro account ${accountId} routes to ${agentId}`,
+          match: { channel: "wechatpadpro", accountId },
+        });
+      }
+    } else {
+      // 无 accountId (旧调用): 保持旧行为但修 channel (agent 级 binding, 不绑具体账号)
+      const maxId = Math.max(0, ...bindings.map((b) => Number(b?.bindId ?? 0)));
+      bindings.push({
+        bindId: maxId + 1,
+        type: "route",
+        agentId,
+        match: { channel: "wechatpadpro" },
+      });
+    }
     await writeFile(configJsonPath, JSON.stringify(cfg, null, 2) + "\n", "utf8");
   }
 

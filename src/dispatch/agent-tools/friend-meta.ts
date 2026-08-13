@@ -5,15 +5,16 @@ import { Type } from "typebox";
 import type { ToolMeta } from "./_shared.js";
 import { makeWppFriend } from "../../send/friend.js";
 import { getDefaultAccountRegistry } from "../../account-state.js";
+import { getCurrentAccountId } from "../account-context.js";
 
 function getFriendApi() {
-  const state = getDefaultAccountRegistry().get("default");
+  const state = getDefaultAccountRegistry().get(getCurrentAccountId() ?? "default");
   if (!state) throw new Error("account not found: default");
   return makeWppFriend({
     baseUrl: state.config.apiBaseUrl,
     tokenKey: state.config.tokenKey,
     authcode: state.authcode,
-    accountId: "default",
+    accountId: getCurrentAccountId() ?? "default",
   });
 }
 

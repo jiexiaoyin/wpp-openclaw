@@ -34,31 +34,35 @@ function escapeXml(s: string): string {
   });
 }
 
-/** 构造 makeWppXxx ctx (由 cfg 派生, 行为对齐 send/ 层; 单账号 shim 固定 accountId=default) */
-function makeCtx(cfg: WppAccountConfig) {
+/** 构造 makeWppXxx ctx (由 cfg 派生, 行为对齐 send/ 层; v1.3.56 MULTI-ACCOUNT: accountId 透传真实 id) */
+function makeCtx(cfg: WppAccountConfig, accountId: string) {
   return {
     baseUrl: cfg.apiBaseUrl,
     tokenKey: cfg.tokenKey,
     authcode: cfg.authcode,
-    accountId: "default",
+    accountId,
   };
 }
 
-function makeMsgFor(cfg: WppAccountConfig) {
-  return makeWppMsg(makeCtx(cfg));
+function makeMsgFor(cfg: WppAccountConfig, accountId: string) {
+  return makeWppMsg(makeCtx(cfg, accountId));
 }
-function makeGroupFor(cfg: WppAccountConfig) {
-  return makeWppGroup(makeCtx(cfg));
+function makeGroupFor(cfg: WppAccountConfig, accountId: string) {
+  return makeWppGroup(makeCtx(cfg, accountId));
 }
-function makeFriendFor(cfg: WppAccountConfig) {
-  return makeWppFriend(makeCtx(cfg));
+function makeFriendFor(cfg: WppAccountConfig, accountId: string) {
+  return makeWppFriend(makeCtx(cfg, accountId));
 }
-function makeWebhookFor(cfg: WppAccountConfig) {
-  return makeWppWebhook(makeCtx(cfg));
+function makeWebhookFor(cfg: WppAccountConfig, accountId: string) {
+  return makeWppWebhook(makeCtx(cfg, accountId));
 }
 
 export class WechatpadproApiClient implements WppApiClient {
-  constructor(private cfg: WppAccountConfig) {}
+  private accountId: string;
+  constructor(private cfg: WppAccountConfig, accountId?: string) {
+    // v1.3.56 MULTI-ACCOUNT: 每账号独立 client 持自己的 accountId (OSS key/日志/入库用)
+    this.accountId = accountId ?? "default";
+  }
 
   getBaseUrl(): string {
     return this.cfg.apiBaseUrl.replace(/\/$/, "");
@@ -109,17 +113,17 @@ export class WechatpadproApiClient implements WppApiClient {
 
   // ============ Msg (v1.3.19 UNIFY-SEND: 委托 send/msg.ts, persist:false 防双入库) ============
   async sendText(toWxid: string, text: string, ats?: string[]): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg);
+    const api = makeMsgFor(this.cfg, this.accountId);
     return api.sendTxt(toWxid, text, ats, false);
   }
 
   async sendImage(toWxid: string, imageUrlOrPath: string): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg);
+    const api = makeMsgFor(this.cfg, this.accountId);
     return api.sendImage(toWxid, imageUrlOrPath, false);
   }
 
   async sendVoice(toWxid: string, voiceUrlOrPath: string, durationMs?: number, formatHint?: "mp3" | "silk"): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg);
+    const api = makeMsgFor(this.cfg, this.accountId);
     return api.sendVoice(toWxid, voiceUrlOrPath, durationMs, false, formatHint);
   }
 
@@ -129,7 +133,7 @@ export class WechatpadproApiClient implements WppApiClient {
     thumbUrlOrPath?: string,
     playLengthMs?: number,
   ): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg);
+    const api = makeMsgFor(this.cfg, this.accountId);
     return api.sendVideo(toWxid, videoUrlOrPath, thumbUrlOrPath, playLengthMs, false);
   }
 
@@ -183,29 +187,29 @@ export class WechatpadproApiClient implements WppApiClient {
   }
 
   async revokeMsg(msgId: string, newMsgId: string, toWxid: string, createTime?: number): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg);
+    const api = makeMsgFor(this.cfg, this.accountId);
     return api.revoke(msgId, newMsgId, toWxid, createTime);
   }
 
   // vendor swagger /Msg/Sync body schema = Msg.SyncParamDoc
   async syncMessage(): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg);
+    const api = makeMsgFor(this.cfg, this.accountId);
     return api.sync();
   }
 
   // ============ Group (委托 send/group.ts) ============
   async getChatroomInfo(chatroomId: string): Promise<WppApiResponse> {
-    return makeGroupFor(this.cfg).getInfo(chatroomId);
+    return makeGroupFor(this.cfg, this.accountId).getInfo(chatroomId);
   }
 
   // /Group/GetChatRoomMemberList 404 → /Group/GetChatRoomMemberDetail 200
   async getChatroomMemberList(chatroomId: string): Promise<WppApiResponse> {
-    return makeGroupFor(this.cfg).getMemberDetail(chatroomId);
+    return makeGroupFor(this.cfg, this.accountId).getMemberDetail(chatroomId);
   }
 
   // ============ Friend (委托 send/friend.ts) ============
   async getContactList(): Promise<WppApiResponse> {
-    return makeFriendFor(this.cfg).getContractList();
+    return makeFriendFor(this.cfg, this.accountId).getContractList();
   }
 
   // ============ User (保留原实现: GET /User/GetContractProfile) ============
@@ -217,11 +221,11 @@ export class WechatpadproApiClient implements WppApiClient {
   // ============ Webhook (委托 send/webhook.ts) ============
   async setWebhook(url: string, _authcode: string): Promise<WppApiResponse> {
     // webhook.set 保留 v1.1.17 P0-E enabled:true 修复; authcode 由 ctx 注入 (与调用方传的 cfg.authcode 同值)
-    return makeWebhookFor(this.cfg).set(url);
+    return makeWebhookFor(this.cfg, this.accountId).set(url);
   }
 
   async getWebhook(): Promise<WppApiResponse> {
-    return makeWebhookFor(this.cfg).get();
+    return makeWebhookFor(this.cfg, this.accountId).get();
   }
 
   // setBusinessWebhook 字段不同 (syncMessageUrl/logoutUrl), 保留原实现
@@ -230,11 +234,11 @@ export class WechatpadproApiClient implements WppApiClient {
   }
 
   async startAutoSync(targetUrl: string): Promise<WppApiResponse> {
-    return makeMsgFor(this.cfg).startAutoSync(targetUrl);
+    return makeMsgFor(this.cfg, this.accountId).startAutoSync(targetUrl);
   }
 
   async removeWebhook(): Promise<WppApiResponse> {
-    return makeWebhookFor(this.cfg).remove();
+    return makeWebhookFor(this.cfg, this.accountId).remove();
   }
 }
 

@@ -5,15 +5,16 @@ import { Type } from "typebox";
 import type { ToolMeta } from "./_shared.js";
 import { makeWppFriendCircle } from "../../send/friendcircle.js";
 import { getDefaultAccountRegistry } from "../../account-state.js";
+import { getCurrentAccountId } from "../account-context.js";
 
 function getFriendCircleApi() {
-  const state = getDefaultAccountRegistry().get("default");
+  const state = getDefaultAccountRegistry().get(getCurrentAccountId() ?? "default");
   if (!state) throw new Error("account not found: default");
   return makeWppFriendCircle({
     baseUrl: state.config.apiBaseUrl,
     tokenKey: state.config.tokenKey,
     authcode: state.authcode,
-    accountId: "default",
+    accountId: getCurrentAccountId() ?? "default",
   });
 }
 

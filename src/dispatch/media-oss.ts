@@ -49,6 +49,7 @@ export async function uploadMediaToOss(
   buffer: Buffer,
   type: "image" | "video" | "voice",
   ext: string,
+  accountId: string = "default",
   credentialsPath?: string,
 ): Promise<string | null> {
   try {
@@ -56,8 +57,8 @@ export async function uploadMediaToOss(
     if (!oss) return null;
     const md5 = crypto.createHash("md5").update(buffer).digest("hex");
     // v1.3.35 OSS-STRUCTURE: 新格式 wpp/{account}/{type}/{date}/{md5}.{ext}
-    //   accountId 默认 default (无 ctx 上下文)
-    const ossKey = buildOssKey("default", `${type}s`, `${md5}.${ext}`);
+    // v1.3.56 MULTI-ACCOUNT: accountId 用真实账号 (防多账号媒体路径冲突互相覆盖)
+    const ossKey = buildOssKey(accountId, `${type}s`, `${md5}.${ext}`);
     const tmpDir = await mkdtemp(join(os.tmpdir(), "wpp-oss-"));
     const tmpPath = join(tmpDir, `media.${ext}`);
     try {

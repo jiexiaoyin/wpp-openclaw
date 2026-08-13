@@ -5,7 +5,7 @@
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout, exit } from "node:process";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import {
   listAccountsDetailed,
   validateAccount,
@@ -16,8 +16,14 @@ import {
   getAccountsDir,
   migrateFromV0Config,
   ensureAgentWorkspace,
+  registerAccountInOpenclaw,
+  unregisterAccountFromOpenclaw,
+  readAccountFile,
+  updateAccountFile,
+  getOpenclawRoot,
 } from "../src/setup-wizard.js";
 import { readFile as readFileAsync } from "node:fs/promises";
+import { readdirSync, readFileSync } from "node:fs";
 import { generatePairingCode, getPairingStorePath } from "../src/pairing-store.js";
 
 /** v1.1.42 SETUP-MERGE: 检查 agent id 是否已在 openclaw.json agents.list 里 */
@@ -39,6 +45,28 @@ async function prompt(rl: ReturnType<typeof createInterface>, question: string, 
   return answer || defaultValue || "";
 }
 
+/**
+ * v1.3.56 MULTI-ACCOUNT: 建议下一个 webhook 端口。
+ * 基础 4398, 已用端口 = 现有 accounts/*.json 里的 webhookPort 集合;
+ * 建议值 = 最小的空闲端口 (从 4398 起跳过已用)。
+ */
+function suggestNextWebhookPort(): number {
+  const dir = getAccountsDir();
+  let used = new Set<number>();
+  try {
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const cfg = JSON.parse(readFileSync(join(dir, f), "utf8")) as { webhookPort?: number };
+        if (typeof cfg.webhookPort === "number") used.add(cfg.webhookPort);
+      } catch { /* 坏 json 跳过 */ }
+    }
+  } catch { /* 目录不存在 → 全空闲 */ }
+  let port = 4398;
+  while (used.has(port)) port++;
+  return port;
+}
+
 async function confirm(rl: ReturnType<typeof createInterface>, question: string, defaultYes = false): Promise<boolean> {
   const suffix = defaultYes ? " (Y/n)" : " (y/N)";
   const answer = (await rl.question(`${question}${suffix}: `)).trim().toLowerCase();
@@ -53,20 +81,23 @@ WeChatPadPro OpenClaw Plugin — Setup Wizard (v1.1.0)
 Usage:
   npm run setup                       Interactive menu
   npm run setup list                   List all configured accounts
-  npm run setup add [accountId]        Add a new account
+  npm run setup add [accountId]        Add a new account (独立 agent: wpp-<id>)
   npm run setup validate [accountId]   Validate account config + env vars
   npm run setup diagnose [accountId]   Diagnose runtime health (env/vendor/webhook/agent)
-  npm run setup remove [accountId]     Remove account file
+  npm run setup modify [accountId]     Modify account config (agent/白名单/端口/env名)
+  npm run setup remove [accountId] [--clean]  Remove account file (--clean 连带删 agent/binding)
   npm run setup migrate [configPath]   Migrate v0.1.0 config.json → accounts/<id>.json (B 方案)
   npm run setup pair [accountId]       Generate DM pairing code (v1.2.3 PAIRING)
 
 Examples:
   npm run setup
-  npm run setup add alice
+  npm run setup add alice              # 建 accounts/alice.json + agent wpp-alice + openclaw.json 登记
   npm run setup validate default
   npm run setup diagnose default
   npm run setup list
-  npm run setup remove alice
+  npm run setup modify alice           # 改 alice 的白名单/端口/agent
+  npm run setup remove alice           # 只删 accounts/alice.json
+  npm run setup remove alice --clean   # 删 json + agent workspace + openclaw.json 登记/binding
   npm run setup migrate                  # 用 ./config.json + default id
   npm run setup migrate ./old-config.json  # 指定老路径
   npm run setup pair default             # 生成 default 账号的配对码
@@ -160,7 +191,8 @@ async function addAccount(suggestedId?: string): Promise<number> {
     const tokenKeyEnv = await prompt(rl, "tokenKey env var 名称", `WECHATPRO_${id.toUpperCase()}_TOKEN_KEY`);
     const authcodeEnv = await prompt(rl, "authcode env var 名称", `WECHATPRO_${id.toUpperCase()}_AUTHCODE`);
     const webhookHost = await prompt(rl, "webhook host (建议 127.0.0.1)", "127.0.0.1");
-    const webhookPort = parseInt(await prompt(rl, "webhook port", "4398"), 10) || 4398;
+    const suggestedPort = String(suggestNextWebhookPort());
+    const webhookPort = parseInt(await prompt(rl, "webhook port", suggestedPort), 10) || parseInt(suggestedPort, 10);
     const webhookPath = await prompt(rl, "webhook path", "/wechatpadpro/webhook");
     const webhookSecretEnv = await prompt(rl, "webhookSecret env var (留空=不验签)", "");
     // v1.1.43 SETUP-FULL: 9 字段补全
@@ -197,6 +229,14 @@ async function addAccount(suggestedId?: string): Promise<number> {
     const nickname = await prompt(rl, "nickname", id);
     const requireAtMention = (await prompt(rl, "群聊需 @ 才回复 (true/false)", "true")).toLowerCase() !== "false";
     const debounceMs = parseInt(await prompt(rl, "debounce 毫秒", "1500"), 10) || 1500;
+
+    // v1.3.56 MULTI-ACCOUNT: 每账号独立 agent (一 authcode 一 agent 一账号)
+    //   agent 名仅允许小写字母数字 (OpenClaw agent id 规则), 账号 id 可能含大写 → 小写化
+    const agentId = await prompt(rl, "OpenClaw agent id (独立 agent, 一账号一 agent)", `wpp-${id.toLowerCase()}`);
+    if (!agentId || !/^[a-z0-9-]+$/.test(agentId)) {
+      console.error(`✗ 无效 agentId: '${agentId}' (must match /^[a-z0-9-]+$/)`);
+      return 1;
+    }
 
     const input = {
       id,
@@ -248,8 +288,8 @@ async function addAccount(suggestedId?: string): Promise<number> {
       nickname,
       requireAtMention,
       debounceMs,
-      // v1.1.42 SETUP-MERGE: 同步创建 agent (默认 wpp-wechat)
-      agent: "wpp-wechat",
+      // v1.3.56 MULTI-ACCOUNT: 每账号独立 agent (默认 wpp-<id>, 一 authcode 一 agent 一账号)
+      agent: agentId,
     };
 
     const errors = validateAddInput(input);
@@ -277,10 +317,21 @@ async function addAccount(suggestedId?: string): Promise<number> {
     console.log(`  2. 部署: bash deploy-swap.sh --force`);
     console.log(`  3. 验证: npm run setup validate ${id}`);
 
+    // v1.3.56 MULTI-ACCOUNT: 写后登记 openclaw.json (channels.wechatpadpro.accounts.<id> + per-account binding)
+    try {
+      const reg = await registerAccountInOpenclaw(id, agentId);
+      if (reg.registered || reg.bindingAdded) {
+        console.log(`\n✓ openclaw.json 已登记账号 '${id}' → agent '${agentId}' (channel=wechatpadpro, accountId=${id})`);
+      } else {
+        console.log(`\nℹ openclaw.json 已存在该账号登记, 跳过`);
+      }
+    } catch (e) {
+      console.warn(`\n⚠ openclaw.json 登记失败 (账号文件已写, 可稍后手动): ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     // v1.1.42 SETUP-MERGE (2026-08-09 老板立项): 同步创建 agent 目录
     //   老板 08:15 拍板: 集成进 setup 的 add 命令, 避免 2026-08-08 17:43 wpp-wechat 缺 models.json 事件
     //   调 ensureAgentWorkspace 同步创建 workspace + agentDir + openclaw.json
-    const agentId = input.agent ?? "wpp-wechat";
     const existsInOpenclaw = await checkAgentExistsInOpenclaw(agentId);
     if (existsInOpenclaw) {
       console.log(`\n⚠ 为新账号 '${id}' 准备的 agent '${agentId}' 已存在于 openclaw.json`);
@@ -300,6 +351,7 @@ async function addAccount(suggestedId?: string): Promise<number> {
       try {
         const result = await ensureAgentWorkspace({
           agentId,
+          accountId: id, // v1.3.56: binding 精确路由到该账号
           cloneFrom,
           patchOpenclawJson: ok,
         });
@@ -322,9 +374,14 @@ async function addAccount(suggestedId?: string): Promise<number> {
   }
 }
 
-async function removeCmd(accountId?: string): Promise<number> {
+async function removeCmd(rawArg?: string): Promise<number> {
+  // v1.3.56 MULTI-ACCOUNT: 支持 `npm run setup remove <id> [--clean]`
+  //   --clean = 连带删关联 agent workspace + openclaw.json 账号登记/binding
+  const args = rawArg ? rawArg.split(/\s+/).filter(Boolean) : [];
+  const accountId = args[0];
+  const clean = args.includes("--clean");
   if (!accountId) {
-    console.error("✗ 需指定 accountId: npm run setup remove <id>");
+    console.error("✗ 需指定 accountId: npm run setup remove <id> [--clean]");
     return 1;
   }
   if (!isValidAccountId(accountId)) {
@@ -333,13 +390,135 @@ async function removeCmd(accountId?: string): Promise<number> {
   }
   const rl = createInterface({ input: stdin, output: stdout });
   try {
-    const ok = await confirm(rl, `确认删除 accounts/${accountId}.json? (不可恢复)`, false);
+    let agentId: string | undefined;
+    try {
+      agentId = (await readAccountFile(accountId)).agent;
+    } catch { /* 文件不存在也允许 --clean 清理残留 */ }
+
+    const cleanNote = clean ? " + 关联 agent/binding" : "";
+    const ok = await confirm(rl, `确认删除 accounts/${accountId}.json${cleanNote}? (不可恢复)`, false);
     if (!ok) {
       console.log("已取消");
       return 0;
     }
-    removeAccountFile(accountId);
+    await removeAccountFile(accountId);
     console.log(`✓ accounts/${accountId}.json 已删除`);
+
+    if (clean) {
+      // 1. openclaw.json 账号登记 + binding
+      try {
+        const res = await unregisterAccountFromOpenclaw(accountId);
+        console.log(res.removed ? `✓ openclaw.json 已清理账号 '${accountId}' 登记 + binding` : `ℹ openclaw.json 无该账号登记`);
+      } catch (e) {
+        console.warn(`⚠ openclaw.json 清理失败: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      // 2. 关联 agent workspace (仅当该 agent 是此账号专用, 不删 default 的 wpp-wechat)
+      if (agentId && agentId !== "wpp-wechat" && agentId !== "main") {
+        const root = getOpenclawRoot();
+        const dirs = [`${root}/agents/${agentId}`, `${root}/workspace/${agentId}`];
+        for (const d of dirs) {
+          if (existsSync(d)) {
+            rmSync(d, { recursive: true, force: true });
+            console.log(`✓ 已删除 agent 目录: ${d}`);
+          }
+        }
+      } else if (agentId && (agentId === "wpp-wechat" || agentId === "main")) {
+        console.log(`ℹ 跳过删除 agent '${agentId}' (default 共享, 仅删账号文件)`);
+      }
+    }
+    return 0;
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * v1.3.56 MULTI-ACCOUNT: modify 子命令 — 交互式编辑现有账号配置。
+ * 支持改: agent / 白名单 / env 名 / 端口 / 群策略 / 昵称 等关键字段。
+ */
+async function modifyCmd(accountId?: string): Promise<number> {
+  if (!accountId) {
+    console.error("✗ 需指定 accountId: npm run setup modify <id>");
+    return 1;
+  }
+  if (!isValidAccountId(accountId)) {
+    console.error(`✗ 无效 accountId: '${accountId}'`);
+    return 1;
+  }
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    let cfg;
+    try {
+      cfg = await readAccountFile(accountId);
+    } catch (e) {
+      console.error(`✗ ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    }
+
+    console.log(`\n当前账号 '${accountId}' 配置 (留空 = 保持不变):\n`);
+    const patch: Record<string, unknown> = {};
+
+    // agent (独立 agent, 一账号一 agent)
+    const agent = await prompt(rl, "agent id", cfg.agent ?? `wpp-${accountId}`);
+    if (agent && /^[a-z0-9-]+$/.test(agent)) patch.agent = agent;
+    else if (agent) console.warn(`  ⚠ 无效 agentId '${agent}', 保持原值`);
+
+    // webhook 端口 (多账号需独立端口)
+    const portStr = await prompt(rl, "webhookPort", String(cfg.webhookPort ?? 4398));
+    const port = parseInt(portStr, 10);
+    if (port && port >= 1024 && port <= 65535) patch.webhookPort = port;
+
+    // env 名
+    const tokenKeyEnv = await prompt(rl, "tokenKeyEnv", cfg.tokenKeyEnv ?? "");
+    if (tokenKeyEnv) patch.tokenKeyEnv = tokenKeyEnv;
+    const authcodeEnv = await prompt(rl, "authcodeEnv", cfg.authcodeEnv ?? "");
+    if (authcodeEnv) patch.authcodeEnv = authcodeEnv;
+
+    // 白名单
+    const allowFromStr = await prompt(rl, "allowFrom 私聊白名单 (逗号分隔)", (cfg.allowFrom ?? []).join(","));
+    if (allowFromStr) patch.allowFrom = allowFromStr.split(",").map((s) => s.trim()).filter(Boolean);
+    const groupPolicy = await prompt(rl, "groupPolicy (open/disabled/allowlist/closed)", cfg.groupPolicy ?? "open");
+    if (groupPolicy && ["open", "disabled", "allowlist", "closed"].includes(groupPolicy)) patch.groupPolicy = groupPolicy;
+    const groupAllowStr = await prompt(rl, "groupAllowFrom 群白名单 (逗号分隔)", (cfg.groupAllowFrom ?? []).join(","));
+    if (groupAllowStr) patch.groupAllowFrom = groupAllowStr.split(",").map((s) => s.trim()).filter(Boolean);
+
+    // 其它
+    const selfWxid = await prompt(rl, "selfWxid (bot 自己 wxid)", cfg.selfWxid ?? "");
+    if (selfWxid) patch.selfWxid = selfWxid;
+    const nickname = await prompt(rl, "nickname", cfg.nickname ?? "");
+    if (nickname) patch.nickname = nickname;
+    const apiBaseUrl = await prompt(rl, "apiBaseUrl", cfg.apiBaseUrl ?? "");
+    if (apiBaseUrl) patch.apiBaseUrl = apiBaseUrl;
+
+    if (Object.keys(patch).length === 0) {
+      console.log("ℹ 无修改, 退出");
+      return 0;
+    }
+    console.log(`\n将修改 ${accountId}.json:`);
+    console.log(JSON.stringify(patch, null, 2));
+    if (!(await confirm(rl, "确认写入", true))) {
+      console.log("已取消");
+      return 0;
+    }
+    const { json } = await updateAccountFile(accountId, patch);
+    console.log(`\n✓ 账号 '${accountId}' 已更新`);
+
+    // 若改了 agent → 同步 openclaw.json binding + 建 agent workspace
+    if (patch.agent && patch.agent !== cfg.agent) {
+      try {
+        // 更新 binding: 先删旧 (同 accountId), registerAccountInOpenclaw 幂等会补新的
+        await unregisterAccountFromOpenclaw(accountId);
+        const reg = await registerAccountInOpenclaw(accountId, patch.agent as string);
+        console.log(`\n✓ openclaw.json binding 已更新 → agent '${patch.agent}'`);
+        if (!(await checkAgentExistsInOpenclaw(patch.agent as string))) {
+          console.log(`\n[Step] 同步创建新 agent '${patch.agent}'...`);
+          await ensureAgentWorkspace({ agentId: patch.agent as string, accountId, patchOpenclawJson: true });
+          console.log(`  ✓ agent '${patch.agent}' 已创建`);
+        }
+      } catch (e) {
+        console.warn(`⚠ agent/binding 更新失败 (账号已改, 可稍后手动): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
     return 0;
   } finally {
     rl.close();
@@ -428,24 +607,26 @@ WeChatPadPro OpenClaw Plugin — Setup Wizard
   2. Add new account
   3. Validate account
   4. Diagnose account (运行时健康)
-  5. Remove account
-  6. Migrate (v0.1.0 → v1.1)
-  7. Help
-  8. Exit
-  9. Pair (generate DM pairing code)
+  5. Modify account (编辑配置)
+  6. Remove account (--clean 连带删 agent/binding)
+  7. Migrate (v0.1.0 → v1.1)
+  8. Help
+  9. Exit
+  10. Pair (generate DM pairing code)
 `);
-    const choice = (await rl.question("请输入 1-9 或子命令: ")).trim();
+    const choice = (await rl.question("请输入 1-10 或子命令: ")).trim();
     rl.close();
     switch (choice) {
       case "1": case "list": await listAccounts(); return 0;
       case "2": case "add": return addAccount();
       case "3": case "validate": return validateCmd();
       case "4": case "diagnose": case "diag": return diagnoseCmd();
-      case "5": case "remove": return removeCmd();
-      case "6": case "migrate": return migrateCmd();
-      case "7": case "help": printHelp(); return 0;
-      case "8": case "exit": case "": return 0;
-      case "9": case "pair": return pairCmd();
+      case "5": case "modify": case "edit": return modifyCmd();
+      case "6": case "remove": return removeCmd();
+      case "7": case "migrate": return migrateCmd();
+      case "8": case "help": printHelp(); return 0;
+      case "9": case "exit": case "": return 0;
+      case "10": case "pair": return pairCmd();
       default: console.error(`未知选项: ${choice}`); return 1;
     }
   } finally {
@@ -468,7 +649,9 @@ async function main(): Promise<void> {
     } else if (subCmd === "diagnose" || subCmd === "diag") {
       exitCode = await diagnoseCmd(args[0]);
     } else if (subCmd === "remove" || subCmd === "rm") {
-      exitCode = await removeCmd(args[0]);
+      exitCode = await removeCmd(args.join(" "));
+    } else if (subCmd === "modify" || subCmd === "edit") {
+      exitCode = await modifyCmd(args[0]);
     } else if (subCmd === "migrate") {
       exitCode = await migrateCmd(args[0]);
     } else if (subCmd === "pair") {

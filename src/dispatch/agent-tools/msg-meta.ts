@@ -7,15 +7,16 @@ import { Type } from "typebox";
 import type { ToolMeta } from "./_shared.js";
 import { makeWppMsg } from "../../send/msg.js";
 import { getDefaultAccountRegistry } from "../../account-state.js";
+import { getCurrentAccountId } from "../account-context.js";
 
 function getMsgApi() {
-  const state = getDefaultAccountRegistry().get("default");
+  const state = getDefaultAccountRegistry().get(getCurrentAccountId() ?? "default");
   if (!state) throw new Error("account not found: default");
   return makeWppMsg({
     baseUrl: state.config.apiBaseUrl,
     tokenKey: state.config.tokenKey,
     authcode: state.authcode,
-    accountId: "default",
+    accountId: getCurrentAccountId() ?? "default",
   });
 }
 
@@ -230,7 +231,7 @@ export const MSG_META: ToolMeta = {
       cardWxid?: string, cardNickname?: string, durationMs?: number, size?: number, ats?: string[]) => {
       const { sendMessage } = await import("../../dispatch/send-message.js");
       const r = await sendMessage({
-        accountId: "default",
+        accountId: getCurrentAccountId() ?? "default",
         toWxid,
         type: type as Parameters<typeof sendMessage>[0]["type"],
         content,

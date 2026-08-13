@@ -4,6 +4,25 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.56]
+- 2026-08-13 (MULTI-ACCOUNT — 启用多账号, 一 authcode = 一 agent = 一账号)
+- **配置引导完整化**:
+  - `add`: 每账号独立 agent (默认 `wpp-<id>`), webhookPort 自动分配 (4398 起跳已用), 写后自动登记 openclaw.json
+  - 新增 `modify <id>`: 交互式编辑 (agent/白名单/端口/env名/群策略); 改 agent 自动同步 binding + 建新 agent workspace
+  - `remove <id> --clean`: 连带删 agent workspace + openclaw.json 登记/binding (仅删 json 用不带 --clean)
+- **openclaw.json 登记 (setup-wizard.ts 新增)**: `registerAccountInOpenclaw` / `unregisterAccountFromOpenclaw` (幂等)
+  - channels.wechatpadpro.accounts.<id> + bindings route `{channel:"wechatpadpro", accountId:"<id>"}` (精确匹配)
+- **ensureAgentWorkspace binding 修复**: `channel:"last", accountId:"*"` (死配置) → `channel:"wechatpadpro", accountId:<id>` (per-account 精确路由, 幂等)
+- **运行时账号透传**:
+  - `api-client.ts makeCtx`: accountId 透传真实 id (非 "default")
+  - `media-oss.ts uploadMediaToOss`: 加 accountId 参数 (OSS 路径按账号分桶, 防多账号互相覆盖)
+  - `index.ts outbound`: 缺 accountId 用当前 dispatch 账号 (ALS) 兜底
+  - `dispatcher.ts`: dispatch 队列键并入 accountId (防跨账号同群串行阻塞)
+- **agent-tools 账号感知**: 新增 `src/dispatch/account-context.ts` (AsyncLocalStorage);
+  - dispatchOne 用 accountContext.run(msg.accountId) 包裹 AI 回复生成
+  - 21 个 agent-tools meta 的 getXxxApi() 从 `get("default")` → `get(getCurrentAccountId() ?? "default")`
+- **测试**: 新增 tests/setup-multiaccount.test.ts (13 用例: 读/改/登记/注销/幂等/binding 格式/ALS 穿透/并发隔离); 814/814 全绿; tsc 0 错
+
 ## [v1.3.55]
 - 2026-08-13 (RELEASE-GENERIC — 分享版可被接收方用自己的 OpenClaw 部署)
 - **deploy 脚本通用化**: `OPENCLAW_ROOT` (默认 $HOME/.openclaw) / `GATEWAY_SERVICE` (默认 openclaw-gateway) / `BACKUP_ROOT` (默认 /data) 全 env 可覆盖.

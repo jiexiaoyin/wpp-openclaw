@@ -150,7 +150,7 @@ export async function sendImage(
     const b64 = await resolveImageToBase64(imageUrlOrPath);
     const buf = Buffer.from(b64, "base64");
     if (buf.length > 0) {
-      const ossUrl = await uploadMediaToOss(buf, "image", "jpg");
+      const ossUrl = await uploadMediaToOss(buf, "image", "jpg", accountId);
       if (ossUrl) ossContent = ossUrl;
     }
   } catch (e) {
@@ -204,7 +204,7 @@ export async function sendVoice(
     const { silkBuffer, voiceDurationMs } = await encodeMp3ToSilk(voiceUrlOrPath);
     actualDurationMs = actualDurationMs ?? voiceDurationMs;
     // 上传 OSS (v1.3.22 SELF-MEDIA-OSS 入库用)
-    const ossUrl = await uploadMediaToOss(silkBuffer, "voice", "silk");
+    const ossUrl = await uploadMediaToOss(silkBuffer, "voice", "silk", accountId);
     if (ossUrl) ossContent = ossUrl;
     // 给 vendor 的输入改成 silk base64 (data: URI)
     vendorInput = `data:audio/silk;base64,${silkBuffer.toString("base64")}`;
@@ -262,7 +262,7 @@ export async function sendVideo(
     const b64 = await resolveImageToBase64(videoUrlOrPath);
     const buf = Buffer.from(b64, "base64");
     if (buf.length > 0) {
-      const ossUrl = await uploadMediaToOss(buf, "video", "mp4");
+      const ossUrl = await uploadMediaToOss(buf, "video", "mp4", accountId);
       if (ossUrl) ossContent = ossUrl;
     }
   } catch (e) {

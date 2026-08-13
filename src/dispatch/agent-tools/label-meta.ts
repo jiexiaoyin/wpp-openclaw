@@ -4,15 +4,16 @@ import { Type } from "typebox";
 import type { ToolMeta } from "./_shared.js";
 import { makeWppLabel } from "../../send/index.js";
 import { getDefaultAccountRegistry } from "../../account-state.js";
+import { getCurrentAccountId } from "../account-context.js";
 
 function getLab() {
-  const state = getDefaultAccountRegistry().get("default");
+  const state = getDefaultAccountRegistry().get(getCurrentAccountId() ?? "default");
   if (!state) throw new Error("account not found: default");
   return makeWppLabel({
     baseUrl: state.config.apiBaseUrl,
     tokenKey: state.config.tokenKey,
     authcode: state.authcode,
-    accountId: "default",
+    accountId: getCurrentAccountId() ?? "default",
   });
 }
 

@@ -18,6 +18,7 @@ export function buildFileAutoReply(
 }
 import { buildSessionKey } from "../session-key.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
+import { accountContext } from "./account-context.js";
 import { sendText } from "./outbound.js";
 import { quoteReply } from "../send/quote-reply.js";
 import { buildQuoteContext } from "./reply-helpers.js";
@@ -601,18 +602,21 @@ export async function dispatchInboundToOpenClaw(
     accountId: msg.accountId,
   });
 
+  // v1.3.56 MULTI-ACCOUNT: 队列键并入 accountId — 群 session key 不含 accountId,
+  //   跨账号同群消息会撞同一队列串行阻塞; 加账号后缀隔离
+  const queueKey = `${sessionKey}|${msg.accountId}`;
   // 队列串行: 同 session 的 dispatch 排队, 前一个完成再跑下一个
-  const q = dispatchQueues.get(sessionKey) ?? [];
+  const q = dispatchQueues.get(queueKey) ?? [];
   q.push({ msg, ctx });
-  dispatchQueues.set(sessionKey, q);
-  if (dispatchRunning.has(sessionKey)) {
+  dispatchQueues.set(queueKey, q);
+  if (dispatchRunning.has(queueKey)) {
     debug(`dispatch queued: session=${sessionKey} queueDepth=${q.length} (concurrency guard)`);
     return;
   }
-  dispatchRunning.add(sessionKey);
+  dispatchRunning.add(queueKey);
   try {
-    while ((dispatchQueues.get(sessionKey) ?? []).length > 0) {
-      const job = dispatchQueues.get(sessionKey)!.shift()!;
+    while ((dispatchQueues.get(queueKey) ?? []).length > 0) {
+      const job = dispatchQueues.get(queueKey)!.shift()!;
       try {
         await dispatchOne(job.msg, job.ctx);
       } catch (e) {
@@ -620,10 +624,10 @@ export async function dispatchInboundToOpenClaw(
       }
     }
   } finally {
-    dispatchRunning.delete(sessionKey);
+    dispatchRunning.delete(queueKey);
     // 仅删空队列; 若有残留 (理论不会, 因 while 消费完) 保留防泄漏
-    if ((dispatchQueues.get(sessionKey) ?? []).length === 0) {
-      dispatchQueues.delete(sessionKey);
+    if ((dispatchQueues.get(queueKey) ?? []).length === 0) {
+      dispatchQueues.delete(queueKey);
     }
   }
 }
@@ -707,8 +711,11 @@ async function dispatchOne(
   }
 
   // Step 2: 调 AI 生成回复, deliver 回调负责把 AI reply 发到 vendor
+  // v1.3.56 MULTI-ACCOUNT: 用 ALS 把当前账号注入上下文 — AI 回复生成期间调用的
+  //   agent-tools (execute 拿不到 accountId) 通过 getCurrentAccountId() 取当前账号
   try {
-    await runtime.reply.dispatchReplyWithBufferedBlockDispatcher({
+    await accountContext.run(msg.accountId, async () => {
+      await runtime.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: (ctx as { cfg?: unknown }).cfg ?? getOpenClawConfig() ?? {},
       replyOptions: {},
@@ -738,6 +745,7 @@ async function dispatchOne(
           return result;
         },
       },
+      });
     });
   } catch (e) {
     warn(`dispatch: dispatchReply failed: ${formatErr(e)}`);
