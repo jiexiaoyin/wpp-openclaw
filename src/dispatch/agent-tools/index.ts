@@ -22,6 +22,7 @@ import { SAY_HELLO_META } from "./sayhello-meta.js";
 import { TRANSLATE_META } from "./translate-meta.js";
 import { CUSTOMIZED_META } from "./customized-meta.js";
 import { QW_CONTACT_META } from "./qwcontact-meta.js";
+import { MCP_META } from "./mcp-meta.js";
 
 /** 全部 vendor tag meta 合并为 AGENT_TOOLS_META */
 export const AGENT_TOOLS_META = {
@@ -45,6 +46,7 @@ export const AGENT_TOOLS_META = {
   ...TRANSLATE_META,
   ...CUSTOMIZED_META,
   ...QW_CONTACT_META,
+  ...MCP_META, // v1.3.58 MCP-READONLY: vendor MCP 只读工具 (账号/联系人/群/搜索)
 };
 
 /** Phase F final: AGENT_TOOLS ChannelAgentTool[] 给 plugin.agentTools 注入 */

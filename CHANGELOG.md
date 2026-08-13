@@ -4,6 +4,14 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.58]
+- 2026-08-13 (MCP-READONLY — vendor MCP 只读能力整合给 AI)
+- **新增 mcp-meta.ts**: 7 个 MCP 只读工具给 AI (account_status/get_contact/get_group/get_recent_messages/list_contacts/list_groups/search)
+  - 复用 vendor-mcp-client (Bearer authcode + 超时 + 失败降级)
+  - AI 可直接查账号状态/联系人/群/最近消息/微信搜索 (search 是 MCP 独有)
+- **写工具暂缓**: vendor MCP 6 写工具需 2026-07-28 协议 + elicitation 确认流, 当前 SDK 1.30 打不通 (记录待 vendor 出参考客户端)
+- **测试**: 新增 tests/agent-tools-mcp.test.ts (3 用例: 注册/降级/无凭证安全); 全量测试
+
 ## [v1.3.57]
 - 2026-08-13 (DELIVERY-FIX — 交付前审阅 P0/P1/P2 全量修复)
 - **P0-1 [安全] SSRF**: resolve-media.ts + silk-encoder.ts 裸 fetch → `safeFetchWithCap` (host 白名单 + 字节 cap + 超时), 防 AI 诱导抓内网/云元数据外带
