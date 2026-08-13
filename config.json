@@ -1,0 +1,19 @@
+{
+  "version": "0.1.0",
+  "storage": {
+    "saveHistory": true,
+    "db": {
+      "backend": "mariadb",
+      "mariadb": {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "user": "wechatpro",
+        "password": "",
+        "passwordEnv": "WECHATPRO_DB_PASSWORD",
+        "database": "wechatpro",
+        "connectionLimit": 5
+      }
+    }
+  },
+  "_comment": "WeChatPadPro OpenClaw plugin 全局配置. DB 凭证走 passwordEnv (不入 JSON). 账号独立配置在 accounts/<id>.json."
+}
