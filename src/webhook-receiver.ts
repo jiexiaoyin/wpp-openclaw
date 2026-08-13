@@ -32,6 +32,16 @@ export class WechatpadproWebhookServer implements WppWebhookServer {
     // 注: timeout 暂用全局 REQUEST_TIMEOUT_MS, 暂不开放 override
   }
 
+  /**
+   * v1.3.61 WEBHOOK-SHARED-PORT: 动态注册 path (多账号共享端口, 单 server 实例多 path)。
+   * 幂等: 同 path 已存在则跳过。start 前后均可调用 (start 后注册的 path 立即生效, 因 handler 实时查 this.paths)。
+   */
+  addPath(path: string, onMessage: (payload: WppWebhookPayload) => void | Promise<void>): void {
+    if (this.paths.some((p) => p.path === path)) return;
+    this.paths.push({ path, onMessage });
+    log.info(`[WPP v1.3.61] webhook addPath: ${path} (total ${this.paths.length})`);
+  }
+
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((req, res) => {

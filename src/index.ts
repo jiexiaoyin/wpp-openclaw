@@ -44,6 +44,12 @@ const runtimeTriggerConfigs = new Map<string, WppTriggerConfig>();
 const runtimeTriggerCtxs = new Map<string, WppAccountTriggerCtx>();
 const runtimeInboundHandlers = new Map<string, ReturnType<typeof createWppInboundHandler>>();
 
+// v1.3.61 WEBHOOK-SHARED-PORT: 多账号共享单个 webhook server (单端口 + path 区分, 贴合 vendor 设计)
+//   vendor 按 authcode 区分账号 (Webhook/* 接口 URL query 带 authcode), 回调 URL 用 path 区分 (含 accountId)。
+//   首个账号创建 server, 后续账号复用 + addPath (幂等)。port 用首个账号的 cfg.webhookPort。
+let sharedWebhookServer: WechatpadproWebhookServer | null = null;
+let sharedWebhookServerPort: number | null = null;
+
 function maskSecret(secret: string): string {
   if (!secret) return "(empty)";
   return secret.length <= 4 ? "****" : `${secret.slice(0, 4)}...${secret.slice(-2)}`;
@@ -397,53 +403,57 @@ export async function startAccountById(
     // 双 path: 普通 webhook (sync_message → /Msg/Sync 拉取) + 业务回调 (完整消息)
     const webhookPath = cfg.webhookPath;
     const businessPath = cfg.webhookBusinessPath ?? `${cfg.webhookPath}/business`;
-    const srv = new WechatpadproWebhookServer(
+    // v1.3.61 WEBHOOK-SHARED-PORT: 多账号共享单个 webhook server (单端口 + path 区分, 贴合 vendor 设计)
+    //   vendor 按 authcode 区分账号, 回调 URL path 含 accountId → 一个端口足够。
+    //   首个账号创建 server, 后续账号复用 + addPath (幂等)。port 用首个账号的 cfg.webhookPort。
+    const isFirstWebhookAccount = !sharedWebhookServer;
+    const srv = sharedWebhookServer ?? new WechatpadproWebhookServer(
       cfg.webhookHost,
       cfg.webhookPort,
-      [
-        // 普通 webhook: sync_message 事件 → 主动 /Msg/Sync 拉取 (增量 Synckey 防全量重放)
-        {
-          path: webhookPath,
-          onMessage: async (payload) => {
-            const raw = payload as Record<string, unknown>;
-            if (raw.MessageType === "sync_message") {
-              try {
-                const prevSynckey = await getSynckey(accountId);
-                const sync = await state.apiClient.call<{
-                  CmdList?: { Count?: number; List?: unknown[] };
-                  KeyBuf?: { buffer?: string; iLen?: number };
-                }>("/Msg/Sync", { Scene: 0, Synckey: prevSynckey ?? "" });
-                const newKey = sync?.Data?.KeyBuf?.buffer;
-                if (newKey) {
-                  await saveSynckey(accountId, newKey);
-                }
-                const list = sync?.Data?.CmdList?.List ?? [];
-                log.info(`webhook sync_message: /Msg/Sync pulled ${list.length} message(s) synckey=${prevSynckey ? "incremental" : "full"}`);
-                for (const item of list) {
-                  await inboundHandler.handle(item as Record<string, unknown>);
-                }
-              } catch (e) {
-                log.warn(`webhook sync_message /Msg/Sync failed: ${formatErr(e)}`);
-              }
-              return;
-            }
-            // 其他 vendor webhook 事件 (如 logout) → 尝试 parse
-            await inboundHandler.handle(payload);
-          },
-        },
-        // 业务回调: 完整消息 → 直接 handler
-        {
-          path: businessPath,
-          onMessage: async (payload) => {
-            log.info(`business callback: received payload (top keys=${Object.keys(payload ?? {}).join(",")})`);
-            await inboundHandler.handle(payload);
-          },
-        },
-      ],
+      [], // 初始空 paths, 下方 addPath 逐个注册
       cfg.webhookSecret, // 可选 secret, 配了则启用 signature 验证
     );
-    await srv.start();
-    state.attachWebhookServer(srv);
+    if (!sharedWebhookServer) {
+      sharedWebhookServer = srv;
+      sharedWebhookServerPort = cfg.webhookPort;
+      await srv.start();
+    } else {
+      log.info(`[WPP v1.3.61] reuse shared webhook server port=${sharedWebhookServerPort} (account=${accountId} shares port)`);
+    }
+    // 普通 webhook: sync_message 事件 → 主动 /Msg/Sync 拉取 (增量 Synckey 防全量重放)
+    srv.addPath(webhookPath, async (payload) => {
+      const raw = payload as Record<string, unknown>;
+      if (raw.MessageType === "sync_message") {
+        try {
+          const prevSynckey = await getSynckey(accountId);
+          const sync = await state.apiClient.call<{
+            CmdList?: { Count?: number; List?: unknown[] };
+            KeyBuf?: { buffer?: string; iLen?: number };
+          }>("/Msg/Sync", { Scene: 0, Synckey: prevSynckey ?? "" });
+          const newKey = sync?.Data?.KeyBuf?.buffer;
+          if (newKey) {
+            await saveSynckey(accountId, newKey);
+          }
+          const list = sync?.Data?.CmdList?.List ?? [];
+          log.info(`webhook sync_message: /Msg/Sync pulled ${list.length} message(s) synckey=${prevSynckey ? "incremental" : "full"}`);
+          for (const item of list) {
+            await inboundHandler.handle(item as Record<string, unknown>);
+          }
+        } catch (e) {
+          log.warn(`webhook sync_message /Msg/Sync failed: ${formatErr(e)}`);
+        }
+        return;
+      }
+      // 其他 vendor webhook 事件 (如 logout) → 尝试 parse
+      await inboundHandler.handle(payload);
+    });
+    // 业务回调: 完整消息 → 直接 handler
+    srv.addPath(businessPath, async (payload) => {
+      log.info(`business callback: received payload (top keys=${Object.keys(payload ?? {}).join(",")})`);
+      await inboundHandler.handle(payload);
+    });
+    // v1.3.61: 共享 server 只 attach 给创建账号 (stopAll 只停一次, 防重复 stop)
+    if (isFirstWebhookAccount) state.attachWebhookServer(srv);
   }
 
   // 自动注册 webhook URL 给 vendor (每账号 authcode 不同, 手动 set 易漏; 3 次 backoff 覆盖临时 401/timeout)

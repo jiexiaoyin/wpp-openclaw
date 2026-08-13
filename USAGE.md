@@ -167,7 +167,7 @@ AccountRegistry 多账号支持:
 ```bash
 npm run setup                       # 交互式菜单
 npm run setup list                   # 列所有账号 + 状态
-npm run setup add [accountId]        # 加新账号 (v1.3.56: 每账号独立 agent wpp-<id> + 端口自动分配 + openclaw.json 登记)
+npm run setup add [accountId]        # 加新账号 (v1.3.56: 每账号独立 agent wpp-<id> + 共享 webhook 端口 + openclaw.json 登记)
 npm run setup validate [accountId]   # 校验账号配置 + env
 npm run setup modify [accountId]     # v1.3.56: 交互式编辑 (agent/白名单/端口/env名/群策略)
 npm run setup remove [accountId] [--clean]  # 删账号 file (--clean 连带删 agent + binding)
@@ -177,7 +177,7 @@ npm run setup pair [accountId]       # 生成 DM 配对码
 
 **多账号 (一 authcode = 一 agent = 一账号, v1.3.56)**:
 - `add wechatA` → 建 `accounts/wechatA.json` + agent `wpp-wechatA` + 自动登记 openclaw.json (`channels.wechatpadpro.accounts.wechatA` + binding `{channel:"wechatpadpro", accountId:"wechatA"}`)
-- 每个账号独立 webhook 端口 (4398 起跳), 独立 env (`WECHATPRO_<ID>_TOKEN_KEY/AUTHCODE`)
+- 所有账号共享 webhook 端口 (4398, v1.3.61 path 区分), 独立 env (`WECHATPRO_<ID>_TOKEN_KEY/AUTHCODE`)
 - `remove <id> --clean` 连带清理 agent workspace + binding (防残留)
 
 ### 9.2 示例: 加新账号

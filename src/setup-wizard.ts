@@ -17,6 +17,7 @@ import { readFile as readFileAsync, writeFile as writeFileAsync, access, unlink 
 import { join } from "node:path";
 import { createConnection } from "node:net";
 import { isValidAccountId, listAccountIds, loadAccountConfig } from "./config.js";
+import { stringifyLargeInts } from "./util/bigint.js";
 import { postWppJson } from "./api/client.js";
 import { ctxToCallOpts } from "./send/factory.js";
 import type { WppAccountConfig } from "./types.js";
@@ -390,7 +391,7 @@ export async function writeAccountFile(input: AddAccountInput): Promise<{ filePa
     // 默认 wpp-wechat (专用 agent), 禁止 "main" (P0 污染防护)
     agent: input.agent ?? "wpp-wechat",
   };
-  const json = JSON.stringify(cfg, null, 2) + "\n";
+  const json = stringifyLargeInts(JSON.stringify(cfg, null, 2)) + "\n";
   await writeFileAsync(filePath, json, "utf8");
   return { filePath, json };
 }
@@ -433,7 +434,7 @@ export async function updateAccountFile(
   const existing = await readAccountFile(accountId);
   const merged = { ...existing, ...patch };
   const filePath = join(getAccountsDir(), `${accountId}.json`);
-  const json = JSON.stringify(merged, null, 2) + "\n";
+  const json = stringifyLargeInts(JSON.stringify(merged, null, 2)) + "\n";
   await writeFileAsync(filePath, json, "utf8");
   return { filePath, json };
 }
@@ -449,7 +450,7 @@ async function loadOpenclawJson(): Promise<Record<string, unknown>> {
 }
 
 async function saveOpenclawJson(cfg: Record<string, unknown>): Promise<void> {
-  await writeFileAsync(join(resolveOpenclawRoot(), "openclaw.json"), JSON.stringify(cfg, null, 2) + "\n", "utf8");
+  await writeFileAsync(join(resolveOpenclawRoot(), "openclaw.json"), stringifyLargeInts(JSON.stringify(cfg, null, 2)) + "\n", "utf8");
 }
 
 /**
@@ -688,7 +689,7 @@ export async function migrateFromV0Config(
     if (e instanceof Error && e.message.startsWith("accounts/")) throw e;
     // file 不存在, 继续
   }
-  await writeFileAsync(newFile, JSON.stringify(newCfg, null, 2) + "\n", "utf8");
+  await writeFileAsync(newFile, stringifyLargeInts(JSON.stringify(newCfg, null, 2)) + "\n", "utf8");
 
   return {
     accountId,
@@ -901,7 +902,7 @@ export async function ensureAgentWorkspace(
         match: { channel: "wechatpadpro" },
       });
     }
-    await writeFile(configJsonPath, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+    await writeFile(configJsonPath, stringifyLargeInts(JSON.stringify(cfg, null, 2)) + "\n", "utf8");
   }
 
   return {

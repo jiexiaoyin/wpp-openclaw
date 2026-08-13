@@ -49,25 +49,11 @@ async function prompt(rl: ReturnType<typeof createInterface>, question: string, 
 }
 
 /**
- * v1.3.56 MULTI-ACCOUNT: 建议下一个 webhook 端口。
- * 基础 4398, 已用端口 = 现有 accounts/*.json 里的 webhookPort 集合;
- * 建议值 = 最小的空闲端口 (从 4398 起跳过已用)。
+ * v1.3.61 WEBHOOK-SHARED-PORT: 多账号共享 webhook 端口 (单端口 + path 区分, 贴合 vendor 设计)。
+ * 所有账号统一建议 4398 — vendor 按 authcode 区分账号, 回调 URL path 含 accountId, 无需独立端口。
  */
 function suggestNextWebhookPort(): number {
-  const dir = getAccountsDir();
-  let used = new Set<number>();
-  try {
-    for (const f of readdirSync(dir)) {
-      if (!f.endsWith(".json")) continue;
-      try {
-        const cfg = JSON.parse(readFileSync(join(dir, f), "utf8")) as { webhookPort?: number };
-        if (typeof cfg.webhookPort === "number") used.add(cfg.webhookPort);
-      } catch { /* 坏 json 跳过 */ }
-    }
-  } catch { /* 目录不存在 → 全空闲 */ }
-  let port = 4398;
-  while (used.has(port)) port++;
-  return port;
+  return 4398;
 }
 
 async function confirm(rl: ReturnType<typeof createInterface>, question: string, defaultYes = false): Promise<boolean> {

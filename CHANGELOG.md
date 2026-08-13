@@ -4,6 +4,17 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.61]
+- 2026-08-13 (WEBHOOK-SHARED-PORT + P2-FIX — 多账号 webhook 单端口 + P2 收尾)
+- **webhook 共享端口 (贴合 vendor 设计)**: vendor 按 authcode 区分账号 (Webhook/* 接口 URL query 带 authcode), 回调 URL path 含 accountId → **单端口 + path 区分**, 不再每账号独立端口
+  - `webhook-receiver.ts` 加 `addPath()` (动态注册 path, 幂等, start 前后均可)
+  - `index.ts` 加全局共享 webhook server (首个账号创建, 后续复用 + addPath; 只 attach 给创建账号防重复 stop)
+  - `setup.ts` suggestNextWebhookPort 固定 4398 (不再递增)
+  - 文档更新 (GETTING_STARTED/USAGE)
+- **P2-1 BigInt**: setup-wizard.ts 5 处 JSON 写加 `stringifyLargeInts` (防未来大整数字段丢精度)
+- **P2-2 c8 覆盖率**: 加 `c8` devDep + `npm run coverage` (总覆盖率 77.78%, 工具类 90-100%)
+- **测试**: 826/826 串行全绿; tsc 0 错
+
 ## [v1.3.60]
 - 2026-08-13 (MCP-MULTIACCOUNT — MCP 多账号适配)
 - **MCP client 重构为 per-account 连接**: token 从账号 `config.authcodeEnv` 解析 (每账号独立 authcode env), 连接 Map key=accountId
