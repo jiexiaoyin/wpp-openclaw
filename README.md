@@ -1,4 +1,4 @@
-# WeChatPadPro OpenClaw Plugin v1.2.0
+# WeChatPadPro OpenClaw Plugin v1.3.54
 
 **基于 WeChatPadPro (微信 Pad 协议 HTTP API) 的 OpenClaw 适配插件**
 
@@ -6,11 +6,13 @@
 
 ## 状态
 
-- **版本**: v1.2.0 (生产已部署)
-- **能力**: 收发文本/图片/语音/视频/文件、AI 引用回复、图片 AI 识别(v1 schema 64KB)、语音转文字、文件确定性回复、多账号
+- **版本**: v1.3.54 (生产已部署)
+- **能力**: 收发文本/图片/语音/视频/文件、AI 引用回复、图片 AI 识别(v1 schema 64KB)、语音收发(silk 自动转码)、群接龙自动触发 AI、文件确定性回复、多账号
+- **语音 SILK-ONLY** (v1.3.52): vendor `/Msg/SendVoice` 只收 silk, mp3 自动转码, 转码失败降级发文件 (v1.3.53)
+- **接龙 RELAY-TRIGGER** (v1.3.54): 群接龙消息自动触发 AI, AI 根据接龙主题智能应景回复 (无需 @, 5 分钟节流防刷屏)
 - **MCP 增强** (v1.2.0): 集成 vendor MCP (`127.0.0.1:8062/mcp`), 文件消息经 `wechat_get_recent_messages` 尝试拿 CDN URL → OSS → AI 读到 (需 vendor realtime 权限 + `mcpEnabled=true`)
 - **OpenClaw 契约**: v2026.7.1+ 完整兼容 (register/api, config, meta, capabilities, gateway)
-- **测试**: 534/534 全绿 (49 test files, ~8000 LOC)
+- **测试**: 801/801 全绿 (73 test files)
 - **生产部署**: ✅ `/root/.openclaw/extensions/wechatpadpro/` 已上线
 
 从零开始安装见 [GETTING_STARTED.md](./GETTING_STARTED.md)。详细 phase 进度见 [ROADMAP.md](./ROADMAP.md), 版本历史见 [CHANGELOG.md](./CHANGELOG.md)。
@@ -20,9 +22,9 @@
 - **多账号架构**: `AccountRegistry` class (纯 in-memory), 单账号/多账号同代码路径
 - **B 方案独立账号配置**: `accounts/<id>.json`, 凭证走 env var (老板铁律)
 - **共存模式**: 与 GeWe 插件并行运行, 不替换
-- **完整 vendor 覆盖**: 231 endpoints (20 tag) 1:1 实现 + 159 agent tools
+- **完整 vendor 覆盖**: 254 endpoints (swagger) + 159+ agent tools
 - **结构化日志**: 仿 pino 接口, `formatErr` 自动保留 stack (silent killer 永久救回)
-- **OpenClaw v2026.7.1+ API 完整对齐**: `register(api)` + 6 config helpers + meta + capabilities + gateway
+- **OpenClaw v2026.7.1+ API 完整对齐**: `register(api)` + 6 config helpers + meta + capabilities + gateway + outbound
 
 ## 前置依赖 (已部署, 见 DEPLOY.md)
 
@@ -49,7 +51,7 @@ cp .env.example .env
 # 3. 交互式引导配置账号 (推荐)
 npm run setup add default
 
-# 4. 编译 + 测试 (539 case)
+# 4. 编译 + 测试 (801 case)
 npm run build
 npm test
 
@@ -59,7 +61,7 @@ bash deploy.sh
 
 真实部署: `bash deploy-swap.sh --force` (见 [DEPLOY.md](./DEPLOY.md))
 
-## 部署流程 (v1.3.18 SOP)
+## 部署流程 (v1.3.54 SOP)
 
 | 脚本 | 用途 | 命令 |
 |---|---|---|
@@ -97,7 +99,7 @@ wechatpadpro-openclaw/
 │   └── default.json               # B 方案: 默认账号配置
 ├── db/
 │   └── schema.sql                 # MariaDB schema (wpp_ 前缀)
-├── src/                           # 12490 LOC, 102 .ts 文件
+├── src/                           # 17509 LOC, 124 .ts 文件
 │   ├── index.ts                   # plugin 入口 (register + wppChannelPlugin)
 │   ├── config.ts                  # 全局配置加载
 │   ├── config-helpers.ts          # 6 OpenClaw channel config helpers
@@ -108,22 +110,23 @@ wechatpadpro-openclaw/
 │   ├── api/                       # vendor HTTP client (fetch + 3 retry)
 │   ├── core/                      # logger, env, paths, constants, signature, runtime-config
 │   ├── db.ts / storage/db/        # MariaDB adapter
-│   ├── dispatch/                  # OpenClaw 集成 (dispatcher/outbound/agent-tools)
+│   ├── dispatch/                  # OpenClaw 集成 (dispatcher/outbound/send-message/silk-encoder/agent-tools)
 │   ├── inbound/                   # 接收 pipeline (parser/triggers/debouncer/relay/enrich/media-enrich/handler)
 │   ├── monitor/                   # metrics
-│   ├── send/                      # 20 tag 231 send 函数
+│   ├── send/                      # 20+ tag send 函数
 │   ├── storage/                   # DB adapter + media (S3) + silk + stt
 │   ├── ws-client.ts               # WS 客户端
 │   ├── webhook-receiver.ts        # HTTP webhook 接收 (HMAC 验签 + body cap)
 │   └── ...
-├── tests/                         # 8000 LOC, 48 .test.ts
+├── tests/                         # 801 tests, 73 .test.ts
 │   ├── agent-tools.test.ts
 │   ├── inbound.test.ts
+│   ├── send-voice-degrade.test.ts  # v1.3.53 语音转码降级
+│   ├── outbound-runtime.test.ts    # v1.3.43-47 outbound/identity/filename
 │   ├── media-enrich.test.ts
 │   ├── quote-xml.test.ts
-│   ├── shouldquote-*.test.ts
 │   └── ...
-└── dist/                          # tsc 编译产物 (102 .js)
+└── dist/                          # tsc 编译产物 (124 .js)
 ```
 
 ## 关键命令
@@ -132,7 +135,7 @@ wechatpadpro-openclaw/
 npm run check       # tsc --noEmit (类型检查)
 npm run build       # tsc (编译到 dist/)
 npm run dev         # tsc --watch --noEmit (dev 模式)
-npm test            # 跑 700+ 测试
+npm test            # 跑 800+ 测试
 npm run setup       # 交互式账号管理 (add/list/validate/diagnose/migrate/pair)
 bash deploy.sh      # dry-run 部署验证 (默认, 不上 prod)
 bash deploy-swap.sh --force  # 真实 atomic 部署

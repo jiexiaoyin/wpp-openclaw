@@ -1,11 +1,11 @@
 # Usage Guide (USAGE.md)
 
-> **当前部署版本: v1.2.0** (2026-08-09)
-> **CHANGELOG**: 49 个版本条目,最新见 [CHANGELOG.md](./CHANGELOG.md)
+> **当前部署版本: v1.3.54** (2026-08-13)
+> **CHANGELOG**: 54 个版本条目,最新见 [CHANGELOG.md](./CHANGELOG.md)
 > **快速开始**: 见 [GETTING_STARTED.md](./GETTING_STARTED.md)
 > **老板铁律**(必读): 见 [DEV.md §10](./DEV.md#10-老板铁律项目铁律勿违反)
 
-WeChatPadPro OpenClaw Plugin 在 OpenClaw 框架下的使用指南 (159 agent tools + 配置 + 路由).
+WeChatPadPro OpenClaw Plugin 在 OpenClaw 框架下的使用指南 (179+ agent tools + 配置 + 路由).
 
 ## 1. 加载到 OpenClaw
 
@@ -28,7 +28,7 @@ WeChatPadPro OpenClaw Plugin 在 OpenClaw 框架下的使用指南 (159 agent to
 5. OpenClaw 调 `wppChannelPlugin.config.{listAccountIds, resolveAccount, ...}` 查账号
 6. OpenClaw 调 `wppChannelPlugin.gateway.startAccount(ctx)` 启动账号
 
-## 2. 159 Agent Tools (AI 可调用)
+## 2. 179+ Agent Tools (AI 可调用)
 
 完整清单见 [FEATURES.md](./FEATURES.md)。
 
@@ -124,15 +124,18 @@ AccountRegistry 多账号支持:
   "webhookPort": 4398,
   "webhookPath": "/wechatpadpro/default/webhook",
   "webhookSecret": "",  // 配了则启用 signature 验签
-  "allowFrom": [],
+  "allowFrom": ["q139198824", "jsnjzhou"],  // 私聊白名单 (老板主号等)
   "groupPolicy": "allowlist",
-  "groupAllowFrom": [],
-  "selfWxid": "q139198824",
-  "nickname": "接晓银",
-  "agent": "wpp-wechat",
+  "groupAllowFrom": ["xxx@chatroom"],
+  "selfWxid": "wxid_eezdbu1ytws422",  // ⚠️ bot 自己 wxid (益融小助理), 不是老板号
+  "nickname": "益融小助理",            // bot 昵称 (群 @ 中文匹配)
+  "agent": "wpp-wechat",               // ⚠️ 必填且禁止 "main"
   "requireAtMention": true,
   "debounceMs": 1500
 }
+```
+
+> ⚠️ **selfWxid 语义 (v1.3.52 审计教训)**: `selfWxid` 必须是 **bot 自己** 的 wxid (handler.ts 用 `fromWxid===selfWxid` 判 bot 自聊), 不是老板主号。当前 = 益融小助理 `wxid_eezdbu1ytws422`。
 ```
 
 ## 7. 监控
@@ -146,7 +149,7 @@ AccountRegistry 多账号支持:
 ### 7.3 日志
 - 全部走 `core/logger.ts` (仿 pino 接口, 4 级: INFO/WARN/ERROR/DEBUG)
 - DEBUG 启用: `WPP_DEBUG=1` env
-- 格式: `ISO-timestamp LEVEL [WPP v1.2.0] msg key=value key2=value2`
+- 格式: `ISO-timestamp LEVEL [WPP v1.3.54] msg key=value key2=value2`
 
 ## 8. 老板的 OpenClaw 上下文
 

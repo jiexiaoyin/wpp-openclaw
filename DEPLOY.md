@@ -1,10 +1,10 @@
 # Deployment Guide (DEPLOY.md)
 
-WeChatPadPro OpenClaw Plugin v1.2.0 部署到 OpenClaw gateway 详细指南.
+WeChatPadPro OpenClaw Plugin v1.3.54 部署到 OpenClaw gateway 详细指南.
 
 ## 1. 前置检查 (Pre-deploy)
 
-> v1.2.0: 539 tests 全绿, tsc 0 错, deploy.sh 19 PASS / 0 FAIL / 0 WARN
+> v1.3.54: 801 tests 全绿, tsc 0 错, deploy.sh 19 PASS / 0 FAIL / 0 WARN
 
 ### 1.1 老板铁律
 - **凭证单一来源 env var** (B 方案, 2026-08-01 拍板)
@@ -91,7 +91,7 @@ bash deploy-swap.sh --force     # 跳过 dry-run gate (老板手动确认后用)
 1. **改 WECHATPRO_DB_PASSWORD** 到真密码: `sudo nano /root/.openclaw/gateway.systemd.env`
 2. **配 accounts/default.json** 的 tokenKey/authcode (从 vendor 后台拿, 走 env var)
 3. **重启 gateway**: `systemctl --user restart openclaw-gateway`
-4. **验证 plugin registered**: `journalctl --user -u openclaw-gateway -n 50 | grep "WPP v1.2.0"`
+4. **验证 plugin registered**: `journalctl --user -u openclaw-gateway -n 50 | grep "WPP v1.3.54"`
 5. **验证 webhook 监听**: `ss -tlnp | grep 4398`
 
 ## 4. Rollback (回滚)

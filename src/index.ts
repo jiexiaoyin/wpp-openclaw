@@ -976,7 +976,7 @@ export const plugin = {
   name: PLUGIN_NAME,
   version: PLUGIN_VERSION,
   description:
-    "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw channel plugin. AccountRegistry class 多账号管理. 共存模式与 GeWe 插件并行.",
+    "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw channel plugin. AccountRegistry class 多账号管理. 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复. 共存模式与 GeWe 插件并行.",
   configSchema: {
     type: "object",
     additionalProperties: true,

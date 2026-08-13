@@ -2,7 +2,7 @@
   "name": "wechatpadpro",
   "id": "wechatpadpro",
   "version": "1.3.54",
-  "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin. 单账号 demo (B 方案 accounts/<id>.json 独立配置, 后续多账号可扩展). 共存模式与 本项目 并行. 完整 236 paths API 覆盖.",
+  "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 254 paths API 覆盖.",
   "channelId": "wechatpadpro",
   "channelName": "WeChatPadPro (微信 Pad 协议)",
   "kind": "plugin",
@@ -40,7 +40,7 @@
           },
           "webhookHost": {
             "type": "string",
-            "description": "webhook 接收主机 (默认 0.0.0.0)"
+            "description": "webhook 接收主机 (安全加固: 127.0.0.1 仅本机, 由 nginx 反代暴露公网)"
           },
           "webhookPort": {
             "type": "number",
@@ -66,9 +66,10 @@
             "enum": [
               "open",
               "disabled",
-              "allowlist"
+              "allowlist",
+              "closed"
             ],
-            "description": "群聊策略"
+            "description": "群聊策略 (open 放行 / disabled 拒绝 / allowlist 白名单 / closed 拒绝)"
           },
           "groupAllowFrom": {
             "type": "array",
@@ -216,7 +217,7 @@
           },
           "msgTypeTrigger": {
             "type": "object",
-            "description": "消息类型触发配置 (e.g. 只处理图片/语音)",
+            "description": "消息类型触发配置 (可选精确控制; 接龙已默认自动触发 v1.3.54, 无需配此字段)",
             "properties": {
               "enabled": {
                 "type": "boolean"
@@ -225,7 +226,8 @@
                 "type": "array",
                 "items": {
                   "type": "string"
-                }
+                },
+                "description": "app 消息类型白名单 (接龙=49; 旧 chat-history=53)"
               }
             }
           },
@@ -324,7 +326,7 @@
         },
         "webhookHost": {
           "label": "Webhook Host",
-          "placeholder": "0.0.0.0"
+          "placeholder": "127.0.0.1"
         },
         "webhookSecret": {
           "label": "Webhook Secret",

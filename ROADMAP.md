@@ -1,21 +1,22 @@
 # Roadmap (ROADMAP.md)
 
-WeChatPadPro OpenClaw Plugin 路线图 (当前 v1.2.0).
+WeChatPadPro OpenClaw Plugin 路线图 (当前 v1.3.54).
 
-## 状态总览 (2026-08-09)
+## 状态总览 (2026-08-13)
 
 | Phase | 内容 | 状态 | 验证 |
 |---|---|---|---|
 | **Phase A** | Foundation (core/logger/env/paths + util/exec) | ✅ | 16 tests |
 | **Phase B** | Storage (storage/db adapter pattern) | ✅ | 12 tests |
-| **Phase C** | API (231 paths via 20 tag modules) | ✅ | 11 tests |
-| **Phase D** | Inbound (4-way triggers + debouncer + relay + enrich) | ✅ | 27 tests |
+| **Phase C** | API (254 paths via 20+ tag modules) | ✅ | 11 tests |
+| **Phase D** | Inbound (4-way triggers + relay trigger + debouncer + enrich) | ✅ | 27 tests |
 | **Phase E** | Monitor (metrics + webhook + ws-client) | ✅ | 8 tests |
-| **Phase F** | Outbound + 159 agentTools | ✅ | 9 tests |
+| **Phase F** | Outbound + 179+ agentTools + sendMedia/identity | ✅ | 9 tests |
 | **Phase G** | 多账号 (AccountContext + Registry + OpenClaw v3 API) | ✅ | 7 sub-phases |
 | **Phase H** | deploy.sh + 8 docs + .env.example | ✅ | dry-run 19 PASS |
+| **Phase I** | 语音 SILK-ONLY + 转码降级 + 接龙触发 (v1.3.52-54) | ✅ | 801/801 |
 
-**总测试**: 534/534 全绿 (49 文件, ~8000 LOC)
+**总测试**: 801/801 全绿 (73 文件)
 
 ## 已完成 (v1.1.48 ~ v1.2.0)
 
@@ -73,7 +74,7 @@ WeChatPadPro OpenClaw Plugin 路线图 (当前 v1.2.0).
 
 ## 进度指标
 
-- **src**: 102 .ts 文件 / 12490 LOC
-- **tests**: 49 文件 / ~8000 LOC / 539 pass
+- **src**: 124 .ts 文件 / 17509 LOC
+- **tests**: 73 文件 / 801 pass
 - **deploy**: deploy.sh 19 PASS / 0 FAIL
 - **备份**: 每次部署自动备份到 /data/

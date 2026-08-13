@@ -1,6 +1,6 @@
 # Features (FEATURES.md)
 
-WeChatPadPro OpenClaw Plugin **v1.2.0** 完整功能清单: 159 agent tools + 231 vendor endpoints (20 tag modules) + 6 channel config helpers + Prometheus metrics。
+WeChatPadPro OpenClaw Plugin **v1.3.54** 完整功能清单: 179+ agent tools + 254 vendor endpoints + 6 channel config helpers + Prometheus metrics + 群接龙自动触发 + 语音 silk 自动转码。
 
 ## 1. 159 Agent Tools (OpenClaw AI 可调用)
 
@@ -69,12 +69,14 @@ Admin / Finder / Search / Webhook / Wxapp / OfficialAccounts / TenPay 等小 tag
 |---|---|
 | **@mention** | 群聊需 @bot (默认 enabled) |
 | **keyword** | 命中关键词触发 (config 中 enabled 才生效) |
-| **msgType** | 特定消息类型触发 (接龙 type=53 等) |
+| **msgType** | 特定消息类型触发 (接龙 type=49 等, config 可选精确控制) |
 | **quoteBot** | 引用 bot 消息触发 |
+| **relay (v1.3.54)** | **接龙消息强制触发** (无需 @): 识别 type=49 app + `#接龙` 标题 → 自动 dispatch AI |
 
 其它规则: blacklist 短路, chatroomDebug 强制触发, groupPolicy 门禁 (open/disabled/allowlist/closed), DM allowFrom fail-closed。
 
 > 注: `requireAtMention` 配置当前未在 `shouldTrigger` 内实现 (字段存在但未消费)。
+> 注: **接龙强制触发**走 handler 独立路径 (非 shouldTrigger 4-way), 同群同接龙 5 分钟节流 (relay.ts isRelayMessage + RELAY_THROTTLE_MS)。
 
 ## 5. 媒体处理 (v1.1.56+)
 
@@ -82,12 +84,22 @@ Admin / Finder / Search / Webhook / Wxapp / OfficialAccounts / TenPay 等小 tag
 |---|---|
 | 图片 v0 | content 含 `<img>` XML → `/Tools/CdnDownloadImage` 完整大图 → OSS |
 | 图片 v1 | content="收到一张图片" → `/Tools/DownloadImg + local_id` → 64KB JPEG (vendor 硬限) → OSS |
-| 语音 | `/Tools/DownloadVoice` → OSS + SiliconFlow STT 转写文字 |
+| 语音(收) | `/Tools/DownloadVoice` → OSS + SiliconFlow STT 转写文字 |
+| 语音(发) | **SILK-ONLY (v1.3.52)**: vendor `/Msg/SendVoice` 只收 silk (Type=4) → mp3 自动 ffmpeg PCM 24kHz → silk encoder → Type=4; 转码失败 → **VOICE-DEGRADE (v1.3.53) 降级发文件** (sendFileViaApp) |
 | 视频 | `/Tools/DownloadVideo` → OSS |
 | 文件 v0 | `<appmsg><type>6/8</type>` → `/Tools/DownloadFile` → OSS |
 | 文件 v1 | 仅文件名元数据 (vendor 无下载 API) → 确定性回复 (v1.2.0 绕过 AI) |
 
 AI 多模态通过 ctx `MediaUrls/MediaPaths/MediaTypes` 数组看到媒体 (gewe 范式)。
+
+## 5b. 群接龙自动触发 (v1.3.54)
+
+真实 vendor 接龙推送是 **type=49 (app, category=app_message)**, 标题/content 以 `#接龙` 开头 (旧代码只认 53 chat-history, 从不匹配 — 集成 bug 已修)。
+
+- **识别**: `relay.ts isRelayMessage()` — type=53 兼容 || type=49 && (`#接龙` 或 "接龙"+编号条目)
+- **触发**: handler 接龙消息强制 dispatch (无需 @), 注入 `[接龙] 标题 + 条目列表` 到 AI 上下文
+- **应景回复**: wpp-wechat agent 提示词指引 AI 根据接龙主题智能应景 (销售冲量→加油, 报名→确认, 聚餐→氛围…), 禁止固定模板
+- **节流**: 同群同接龙标题 5 分钟内只触发一次 (vendor 每次有人接龙推完整接龙, 防刷屏)
 
 ## 6. 引用回复 (v1.1.55 修复)
 

@@ -2,16 +2,18 @@
 
 WeChatPadPro OpenClaw Plugin 开发指南 (架构 / 调试 / 测试 / 添加功能 / 会话交接).
 
-## 0. 当前状态 (Session Handover — 2026-08-11)
+## 0. 当前状态 (Session Handover — 2026-08-13)
 
 ### 0.1 版本基线
-- **dev version**: `1.3.40`(src/core/constants.ts PLUGIN_VERSION)
-- **deploy version**: `1.3.40`(/root/.openclaw/extensions/wechatpadpro/, 生产已上线)
-- **CHANGELOG**: 最新 v1.3.40
-- **测试**: 731/731 全绿
+- **dev version**: `1.3.54`(src/core/constants.ts PLUGIN_VERSION)
+- **deploy version**: `1.3.54`(/root/.openclaw/extensions/wechatpadpro/, 生产已上线)
+- **CHANGELOG**: 最新 v1.3.54
+- **测试**: 801/801 全绿
+- **git**: 基线 `fc2388e` (v1.3.43-53) + `90f9903` (v1.3.54), 工作树干净
 - **账号**: 益融小助理 (wxid_eezdbu1ytws422), authcode `71bed0f5-626a-43ad-9831-b2d7017b27e0` (2026-08-11 gewe 迁移)
+- **华为群**: 19908568237@chatroom (Nova 16SE 接龙, v1.3.54 接龙触发对象)
 
-### 0.2 近期关键变更 (v1.3.26 ~ v1.3.40)
+### 0.2 近期关键变更 (v1.3.26 ~ v1.3.54)
 - **v1.3.26**: listAccountIds async→sync 契约修复 (OpenClaw health 同步调用 + spread 展开)
 - **v1.3.27**: BigInt 序列化 + safe-fetch 3 AI 域名白名单 + media-enrich 拆 6 子模块
 - **v1.3.28/29**: 图片/视频朋友圈发布 (publishImages/publishVideo + agent-tools)
@@ -26,6 +28,20 @@ WeChatPadPro OpenClaw Plugin 开发指南 (架构 / 调试 / 测试 / 添加功�
 - **v1.3.38**: 借鉴 gewe (pending-reply 路由 + attachments 数组兼容)
 - **v1.3.39**: filehelper 特殊会话命令 (只处理命令)
 - **v1.3.40**: filehelper 命令注册表 (白名单增删 + 自动 /help 兼容)
+- **v1.3.41**: 朋友圈发布控制 (friendCirclePublishEnabled 默认 false + admin 白名单)
+- **v1.3.42**: comment replyCommnetId ""→0 修复 (Go int32)
+- **v1.3.43**: outbound 字段 + deliveryMode=direct (修 cron 晨报 permanent error)
+- **v1.3.44**: outbound.sendMedia (修图片降级文件卡片)
+- **v1.3.45**: messaging.targetResolver (修 unknown target)
+- **v1.3.46**: outbound 返值 identity 字段 (修 adapter_returned_no_identity)
+- **v1.3.47**: inferFileNameForMedia 纯函数 (修文件无后缀)
+- **v1.3.48**: silk-encoder pipeline (mp3→silk, 修 SendVoice ret=-2)
+- **v1.3.49**: SendVoice Type 枚举对齐 (SILK=4)
+- **v1.3.50**: formatHint 透传
+- **v1.3.51**: silk ≤60KB 降 bitrate 重转
+- **v1.3.52**: **SILK-ONLY** — SendVoice 唯一收口, silk 透传 Type=4, mp3 强制转码, 去掉降级 raw mp3
+- **v1.3.53**: **VOICE-DEGRADE** — 转码失败降级发文件 (sendFileViaAppFromUrl) + api-coverage 自动拉 swagger
+- **v1.3.54**: **RELAY-TRIGGER** — 接龙消息 (type=49 app) 强制触发 AI + 5 分钟节流 (isRelayMessage)
 
 ### 0.3 架构变更 (2026-08-11 gewe 迁移)
 - **gewe-multi-agent 已移除**, 益融小助理迁到 WPP
@@ -250,7 +266,7 @@ journalctl --user -u openclaw-gateway -n 20 | grep "loaded account config: <id>"
 ### 5.1 测试框架
 - `node:test` + `node:assert/strict` (0 依赖)
 - `tsx --test tests/*.test.ts` 跑全部
-- **当前测试量**: 49 文件 / ~8000 LOC / 539 case (分批跑 7-15s/run)
+- **当前测试量**: 73 文件 / 801 case (分批跑 7-15s/run)
 
 ### 5.2 测试覆盖要求
 - **新功能**: ≥ 5 case (正常 + 边界 + 错误 + 多账号隔离)
@@ -270,7 +286,7 @@ test("X — 2 个实例完全隔离", async () => {
 ### 5.4 跑测试 + 类型检查
 ```bash
 npm run check    # tsc --noEmit
-npm test         # 全部 539 case
+npm test         # 全部 801 case
 # 单个文件:
 npx tsx --test tests/safe-regex.test.ts
 # 注: gateway-compat / quote-trigger / e2e 已用 mock 修复 (e2e-helper USE_MOCK 默认 true), 不再卡死

@@ -1,6 +1,6 @@
 # 快速开始 (GETTING_STARTED.md)
 
-> **当前版本: v1.3.30** · 从零到可用 · 预计 20 分钟
+> **当前版本: v1.3.54** · 从零到可用 · 预计 20 分钟
 > 详细部署见 [DEPLOY.md](./DEPLOY.md),开发见 [DEV.md](./DEV.md),功能清单见 [FEATURES.md](./FEATURES.md)。
 
 ---
@@ -15,7 +15,8 @@
 | AI 回复 | 私聊 @ 或群聊 @ 机器人 → OpenClaw agent 生成回复 |
 | 引用回复 | AI 引用用户消息回复(type=57 引用卡片,v1.1.55 修复) |
 | 图片识别 | AI 多模态看图(v1 schema 走 64KB 截断,v1.1.56) |
-| 语音转文字 | silk 转码 + SiliconFlow STT |
+| 语音收发 | 发语音: **vendor 只收 silk**,mp3 自动转码(v1.3.52),转码失败降级发文件(v1.3.53);收语音: silk 转码 + SiliconFlow STT |
+| 接龙自动回复 | 群接龙消息自动触发 AI(v1.3.54),AI 根据接龙主题智能应景回复 |
 | 文件兜底 | 文件消息确定性回复(绕过 AI,防误读,v1.2.0) |
 | 多账号 | AccountRegistry 多账号隔离(可扩展) |
 
@@ -66,7 +67,7 @@ bash deploy-swap.sh --force   # 真实原子部署(自动备份/重启 gateway)
 
 ```bash
 systemctl --user status openclaw-gateway          # active (running)
-journalctl --user -u openclaw-gateway -n 50 | grep "WPP v1.2.0"   # 插件已加载
+journalctl --user -u openclaw-gateway -n 50 | grep "WPP v1.3.54"  # 插件已加载
 journalctl --user -u openclaw-gateway -n 50 | grep "account fully started"  # 账号已启动
 ```
 
@@ -108,7 +109,7 @@ journalctl --user -u openclaw-gateway -n 50 | grep "account fully started"  # �
 | `adminUsers` | `string[]` | 管理员 wxid 列表 (默认 `[selfWxid]`), 限频/脱敏/优先回复豁免预留 |
 | `commandAllowlist` | `{allowlist, prefix?, blockMessage?}` | 命令白名单: 设了才拦截 `/xxx` 命令 (不在白名单静默拒绝, 不进 AI) |
 | `keywordTrigger` | `{enabled, keywords[], mode?}` | 关键词触发器: 设了关键词后才触发 AI 处理 |
-| `msgTypeTrigger` | `{enabled, appMsgTypes?[]}` | 消息类型触发: 只处理指定类型 (如 53 接龙) |
+| `msgTypeTrigger` | `{enabled, appMsgTypes?[]}` | 消息类型触发: 只处理指定类型 (如接龙 49) — **接龙已默认自动触发 (v1.3.54), 此字段是可选精确控制** |
 | `quoteBotTrigger` | `{enabled}` | 引用 bot 消息触发 |
 | `blacklistGroups` | `string[]` | 黑名单群: 拒绝处理任何消息 |
 | `groupContextEnabled` | bool 默认 `false` | 缓冲非触发群消息进上下文, 触发时注入 AI |
@@ -141,15 +142,18 @@ journalctl --user -u openclaw-gateway -n 50 | grep "account fully started"  # �
 | 图片 | 发一张图 | AI 识别图内容(v1 schema 64KB) |
 | 文件 | 发 PDF/zip | 固定回复"收到文件…无法读取内容"(v1.2.0) |
 | 语音 | 发语音 | AI 看到转写文字 |
+| 接龙 | 群里发 `#接龙 xxx` | AI **自动**回复(v1.3.54, 无需 @, 5 分钟内同接龙只回一次) |
 
 **引用回复**(老板常用): 引用 bot 之前发的消息 → AI 用引用卡片回复(type=57,title=AI 回复文字)。
+
+**AI 发语音**(老板常用): agent 用 voice 类型发 → 插件自动转 silk(v1.3.52);转码失败自动降级发文件(v1.3.53),用户都能收到。
 
 ---
 
 ## 5. 验证命令
 
 ```bash
-npm test                          # 700+/700+ 全绿
+npm test                          # 800+/800+ 全绿
 npm run setup validate default    # 账号配置静态检查 (11 项)
 npm run setup diagnose default    # 运行时诊断 (env/vendor连通/webhook/agent) ← 推荐
 journalctl --user -u openclaw-gateway -f   # 实时看 AI 回复链路
@@ -177,6 +181,9 @@ ss -tlnp | grep 4398              # webhook 监听确认
 | 私聊全被拒 | `allowFrom` 空 | 加发送者 wxid 到 allowFrom |
 | 图片 AI 看不清 | v1 schema 64KB 截断 | 大图让 AI 部分识别,或联系 vendor 解封 |
 | 文件读不到内容 | v1 schema 无下载 API | 默认固定回复"无法读取"; 开 MCP (mcpEnabled=true + vendor realtime) 后可读 |
+| 接龙没触发 | 接龙标题不含 `#接龙`(非标准模板) | 日志看 `relay detected`; 若标题不带 #接龙, 联系加识别规则 |
+| AI 发语音失败 | mp3 转 silk 失败 | 日志看 `[WPP v1.3.53 VOICE-DEGRADE]` — 已自动降级发文件; 连续失败查 silk 二进制 / ffmpeg |
+| 接龙 AI 重复回 | 同一接龙反复推送 | 内置 5 分钟节流, 日志看 `relay throttled` |
 
 ---
 
