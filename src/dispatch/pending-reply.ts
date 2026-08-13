@@ -20,12 +20,15 @@ const lastGroupMentionByAccount = new Map<string, { roomId: string; msgId: strin
 const TTL_MS = 10 * 60 * 1000; // 10 分钟过期 (防内存泄漏)
 
 /** 触发时记录: msgId → 路由上下文 (群@ 或 私聊) */
+// v1.3.59 P1-1 (2026-08-13 完整审阅): rememberReply 写时顺带清理过期条目,
+//   防 Map 只写不读无限增长 (生产无读取路径, TTL 剪枝从不触发)
 export function rememberReply(
   msgId: string,
   entry: Omit<PendingReplyEntry, "__storedAt">,
 ): void {
   if (!msgId) return;
   pendingReplies.set(msgId, { ...entry, __storedAt: Date.now() });
+  if (pendingReplies.size > 500) cleanupPendingReplies();
 }
 
 /** 按 msgId 查路由上下文 */

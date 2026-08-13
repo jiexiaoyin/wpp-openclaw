@@ -69,10 +69,18 @@ export async function connectMcpClient(): Promise<boolean> {
       );
       const client = new Client({ name: "wechatpadpro", version: "1.2.0" });
       // v1.2.1 P2-fix: 连接也加 5s 硬超时 (Promise.race, 防 vendor 接受但挂住)
-      await Promise.race([
-        client.connect(transport),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("mcp connect timeout")), MCP_TIMEOUT_MS)),
-      ]);
+      // v1.3.59 P0-3: 保存 timer 引用 + clearTimeout, 防 timer 泄漏 (否则 --test-force-exit 杀测试)
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          client.connect(transport),
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error("mcp connect timeout")), MCP_TIMEOUT_MS);
+          }),
+        ]);
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
       _client = client;
       _transport = transport;
       _connectedAt = Date.now();

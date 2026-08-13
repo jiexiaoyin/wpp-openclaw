@@ -7,6 +7,7 @@ import {
   API_RETRY_BASE_MS,
   VENDOR_BASE_PATH,
   DEFAULT_ACCOUNT_ID,
+  API_JSON_MAX_BYTES,
 } from "../core/constants.js";
 import { warn, error, formatErr } from "../core/logger.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
@@ -90,6 +91,8 @@ export function resolveCallCtx(baseUrl: string, opts: WppCallOptions): ResolvedC
   if (baseUrl && opts.tokenKey) {
     return { baseUrl, tokenKey: opts.tokenKey, authcode: opts.authcode };
   }
+  // v1.3.59 P2 (2026-08-13 完整审阅): 缺凭证回落 default 前警告 (多账号下易跨账号凭证泄露)
+  warn(`[WPP v1.3.59] resolveCallCtx: 缺凭证 (baseUrl=${baseUrl ? "有" : "空"} tokenKey=${opts.tokenKey ? "有" : "空"}) — 回落 default 账号凭证, 多账号场景请显式传凭证`);
   try {
     // 兜底取默认账号凭证 (单账号 demo); 多账号时调用方应带 baseUrl+tokenKey 直接返回
     const state = getDefaultAccountRegistry().get(DEFAULT_ACCOUNT_ID);
@@ -160,7 +163,17 @@ export async function postWppJson<T = unknown>(
       });
       clearTimeout(timer);
 
+      // v1.3.59 P2 (2026-08-13 完整审阅): JSON 响应体字节 cap (媒体端点经此下载 base64, 防巨型响应 OOM)
+      const cl = Number(res.headers.get("content-length") ?? 0);
+      if (cl > API_JSON_MAX_BYTES) {
+        lastErr = new Error(`postWppJson ${endpoint} response too large: ${cl} > ${API_JSON_MAX_BYTES}`);
+        return { Code: -2, CodeValue: "RESPONSE_TOO_LARGE", Data: undefined, raw: null };
+      }
       const text = await res.text();
+      if (text.length > API_JSON_MAX_BYTES) {
+        lastErr = new Error(`postWppJson ${endpoint} response too large: ${text.length} > ${API_JSON_MAX_BYTES}`);
+        return { Code: -2, CodeValue: "RESPONSE_TOO_LARGE", Data: undefined, raw: null };
+      }
       const latency = Date.now() - start;
 
       if (!res.ok) {

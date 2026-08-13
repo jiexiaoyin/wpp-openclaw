@@ -503,7 +503,7 @@ async function modifyCmd(accountId?: string): Promise<number> {
       console.log("已取消");
       return 0;
     }
-    const { json } = await updateAccountFile(accountId, patch);
+    await updateAccountFile(accountId, patch);
     console.log(`\n✓ 账号 '${accountId}' 已更新`);
 
     // 若改了 agent → 同步 openclaw.json binding + 建 agent workspace
@@ -511,7 +511,7 @@ async function modifyCmd(accountId?: string): Promise<number> {
       try {
         // 更新 binding: 先删旧 (同 accountId), registerAccountInOpenclaw 幂等会补新的
         await unregisterAccountFromOpenclaw(accountId);
-        const reg = await registerAccountInOpenclaw(accountId, patch.agent as string);
+        await registerAccountInOpenclaw(accountId, patch.agent as string);
         console.log(`\n✓ openclaw.json binding 已更新 → agent '${patch.agent}'`);
         if (!(await checkAgentExistsInOpenclaw(patch.agent as string))) {
           console.log(`\n[Step] 同步创建新 agent '${patch.agent}'...`);

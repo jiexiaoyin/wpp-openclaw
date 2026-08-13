@@ -26,6 +26,12 @@ import { execAsync } from "../util/exec.js";
 import { uniqueId } from "../util/id.js";
 import { safeFetchWithCap } from "../util/safe-fetch.js";
 import { logObj as log } from "../core/logger.js";
+import { readLocalMedia } from "../api/resolve-media.js";
+
+/** v1.3.59 P0-2: 本地路径读走 readLocalMedia 三重校验 (.. 拒绝 + resolve + allowedRoots), 防任意文件读 */
+async function readLocalMediaSafe(input: string): Promise<Buffer> {
+  return readLocalMedia(input);
+}
 
 // 老板 6-12 16:36 偏好: 成功发为微信语音消息, 失败降级为文件消息 (上层 caller 决定)
 // 当前 plugin 不主动降级, 默认行为 = sendVoice 失败抛错
@@ -56,7 +62,9 @@ export async function encodeMp3ToSilk(input: string | Buffer): Promise<SilkEncod
         return { silkBuffer: buf, voiceDurationMs: 0 };
       }
       if (existsSync(input)) {
-        const buf = readFileSync(input);
+        // v1.3.59 P0-2 (2026-08-13 完整审阅): 本地路径读必须走 readLocalMedia 三重校验
+        //   (.. 拒绝 + path.resolve + allowedRoots), 防 AI 诱导读任意 .silk 文件外带
+        const buf = await readLocalMediaSafe(input);
         return { silkBuffer: buf, voiceDurationMs: 0 };
       }
       throw new Error(`silk input not resolvable: ${input.slice(0, 80)}`);
@@ -75,6 +83,8 @@ export async function encodeMp3ToSilk(input: string | Buffer): Promise<SilkEncod
       mp3Path = join(tmpDir, `input_${uniqueId()}.mp3`);
       writeFileSync(mp3Path, buf);
     } else if (existsSync(input)) {
+      // v1.3.59 P0-2: mp3 本地路径同样走 readLocalMedia 校验 (防读 allowedRoots 外文件)
+      await readLocalMediaSafe(input);
       mp3Path = input;
     } else {
       throw new Error(`Unsupported input: ${typeof input} (not URL/data/path/Buffer)`);

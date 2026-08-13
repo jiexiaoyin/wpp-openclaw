@@ -13,12 +13,26 @@
 import { Type } from "typebox";
 import type { ToolMeta } from "./_shared.js";
 import { callMcpTool } from "../../vendor-mcp-client.js";
+import { getDefaultAccountRegistry } from "../../account-state.js";
+import { getCurrentAccountId } from "../account-context.js";
+
+/**
+ * v1.3.59 P1 (2026-08-13 完整审阅): MCP 只读工具受账号 mcpEnabled 门控。
+ *   accounts/<id>.json 显式 mcpEnabled:false (防白耗 5s connect) → AI 调 MCP 工具返回提示, 不真连。
+ */
+function mcpEnabledForCurrentAccount(): boolean {
+  const state = getDefaultAccountRegistry().get(getCurrentAccountId() ?? "default");
+  return state?.config.mcpEnabled !== false;
+}
 
 /**
  * 调 MCP 只读工具, 返回可读文本。
  * callMcpTool 返回 {content:[{type:"text",text}]} 或 null → 归一化成 text (供 AI 读)。
  */
 async function readMcp(name: string, args: Record<string, unknown> = {}): Promise<string> {
+  if (!mcpEnabledForCurrentAccount()) {
+    return `MCP 未启用 (账号 mcpEnabled=false), 无法调用 ${name}`;
+  }
   const r = await callMcpTool(name, args);
   if (!r) return `MCP ${name} 调用失败 (vendor MCP 不可用或无 WECHATPRO_AUTHCODE env)`;
   const result = r as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };

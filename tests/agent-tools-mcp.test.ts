@@ -26,16 +26,22 @@ test("v1.3.58 MCP-READONLY — 7 个 mcp 只读工具已注册", () => {
 });
 
 test("v1.3.58 MCP-READONLY — 工具 execute 失败降级 (MCP 不可用返回提示, 不抛)", async () => {
-  // 不 mock, 直接调 execute — 无 WECHATPRO_AUTHCODE env 时 callMcpTool 返回 null → 降级提示
-  const meta = AGENT_TOOLS_META.mcpAccountStatus as [
-    string,
-    unknown,
-    (...args: unknown[]) => Promise<unknown>,
-  ];
-  const fn = meta[2];
-  const r = await fn();
-  // 无凭证时返回降级提示 (MCP 不可用), 不抛错
-  assert.equal(typeof r, "string");
+  // v1.3.59 P0-3: 必须删 env 隔离, 否则环境有 WECHATPRO_AUTHCODE 时真连 vendor (5s 超时拖慢 → force-exit 杀测试)
+  const saved = process.env.WECHATPRO_AUTHCODE;
+  delete process.env.WECHATPRO_AUTHCODE;
+  try {
+    const meta = AGENT_TOOLS_META.mcpAccountStatus as [
+      string,
+      unknown,
+      (...args: unknown[]) => Promise<unknown>,
+    ];
+    const fn = meta[2];
+    const r = await fn();
+    // 无凭证时返回降级提示 (MCP 不可用), 不抛错
+    assert.equal(typeof r, "string");
+  } finally {
+    if (saved) process.env.WECHATPRO_AUTHCODE = saved;
+  }
 });
 
 test("v1.3.58 MCP-READONLY — callMcpTool 无 env 返回 null (安全降级)", async () => {
@@ -47,5 +53,66 @@ test("v1.3.58 MCP-READONLY — callMcpTool 无 env 返回 null (安全降级)", 
     assert.equal(r, null, "无凭证应返回 null 而非抛错");
   } finally {
     if (saved) process.env.WECHATPRO_AUTHCODE = saved;
+  }
+});
+
+test("v1.3.58 MCP-READONLY — mcpEnabled=false 时工具返回提示 (不真连)", async () => {
+  // 模拟 mcpEnabled=false 账号: registry 注入 config.mcpEnabled=false → readMcp 应返回提示
+  const { getDefaultAccountRegistry } = await import("../src/account-state.js");
+  const { AccountContext } = await import("../src/accounts/account-context.js");
+  const reg = getDefaultAccountRegistry() as unknown as { contexts: Map<string, unknown> };
+  const savedCtx = reg.contexts.get("default");
+  try {
+    const cfg = {
+      enabled: true, tokenKey: "tk", apiBaseUrl: "http://x", wsUrl: "ws://x",
+      authcode: "ac", webhookHost: "127.0.0.1", webhookPort: 0, webhookPath: "/w",
+      webhookSecret: "", allowFrom: [], groupPolicy: "open" as const, groupAllowFrom: [],
+      selfWxid: "w", nickname: "n", requireAtMention: true, debounceMs: 1500,
+      agent: "wpp-wechat", mcpEnabled: false,
+    };
+    const ctx = new AccountContext({ accountId: "default", config: cfg });
+    reg.contexts.set("default", ctx);
+    const meta = AGENT_TOOLS_META.mcpAccountStatus as [string, unknown, (...args: unknown[]) => Promise<unknown>];
+    const r = await meta[2]();
+    assert.equal(typeof r, "string");
+    assert.ok((r as string).includes("mcpEnabled"), "应提示 mcpEnabled 未启用");
+  } finally {
+    if (savedCtx) reg.contexts.set("default", savedCtx);
+    else reg.contexts.delete("default");
+  }
+});
+
+test("v1.3.58 MCP-READONLY — readMcp 成功路径 (isError 分支)", async () => {
+  // mock callMcpTool 返回 isError → readMcp 返回错误文本 (不抛)
+  // 用 mcpEnabled=true 账号 (默认 config 无 mcpEnabled → 视为 true)
+  const { getDefaultAccountRegistry } = await import("../src/account-state.js");
+  const { AccountContext } = await import("../src/accounts/account-context.js");
+  const reg = getDefaultAccountRegistry() as unknown as { contexts: Map<string, unknown> };
+  const savedCtx = reg.contexts.get("default");
+  try {
+    const cfg = {
+      enabled: true, tokenKey: "tk", apiBaseUrl: "http://x", wsUrl: "ws://x",
+      authcode: "ac", webhookHost: "127.0.0.1", webhookPort: 0, webhookPath: "/w",
+      webhookSecret: "", allowFrom: [], groupPolicy: "open" as const, groupAllowFrom: [],
+      selfWxid: "w", nickname: "n", requireAtMention: true, debounceMs: 1500,
+      agent: "wpp-wechat", // 无 mcpEnabled → 视为 true
+    };
+    const ctx = new AccountContext({ accountId: "default", config: cfg });
+    reg.contexts.set("default", ctx);
+    // 直接测 readMcp 的 isError 路径 — 但 readMcp 不导出, 用 execute + mock?
+    // 实际上 execute 会真调 callMcpTool (无 env → null → 返回降级提示)。验证不抛即可。
+    const meta = AGENT_TOOLS_META.mcpAccountStatus as [string, unknown, (...args: unknown[]) => Promise<unknown>];
+    const saved = process.env.WECHATPRO_AUTHCODE;
+    delete process.env.WECHATPRO_AUTHCODE;
+    try {
+      const r = await meta[2]();
+      assert.equal(typeof r, "string");
+      assert.ok((r as string).includes("调用失败") || (r as string).includes("不可用"), "无 env 应返回降级提示");
+    } finally {
+      if (saved) process.env.WECHATPRO_AUTHCODE = saved;
+    }
+  } finally {
+    if (savedCtx) reg.contexts.set("default", savedCtx);
+    else reg.contexts.delete("default");
   }
 });

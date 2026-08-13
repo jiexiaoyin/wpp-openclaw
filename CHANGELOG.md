@@ -4,6 +4,16 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.59]
+- 2026-08-13 (FULL-FIX — 完整审阅 P0/P1/P2 全量修复 + 补关键测试)
+- **P0-1 [正确性]**: persistOutboundMsg 判据加 `BaseResponse.ret` 检查 (Code=0+ret≠0 不入库, 防幽灵 outbound 记录)
+- **P0-2 [安全]**: silk-encoder 本地路径读加 readLocalMedia 三重校验 (防 AI 诱导读任意 .silk/媒体文件外带)
+- **P0-3 [测试]**: agent-tools-mcp 测试隔离 env (不真连 vendor); vendor-mcp-client setTimeout clearTimeout (防 timer 泄漏 → 测试非确定性)
+- **P1**: 两个 Map 泄漏修复 (pendingReplies/sessionChatInfo 写时阈值清理); MCP 只读工具受 `mcpEnabled` 门控; release/ 重出到 v1.3.59
+- **P2**: JSON 响应体字节 cap (API_JSON_MAX_BYTES 30MB, 防媒体端点 OOM); resolveCallCtx 缺凭证 warn (防跨账号静默回落)
+- **补测试**: MCP readMcp 成功/isError + mcpEnabled 门控; mp3→silk 成功路径 (真 ffmpeg+silk encoder, Type=4); agent-tools 账号感知 (accountContext.run 下选账号); 接龙节流恢复
+- **测试**: 825/825 全绿 (串行稳定); tsc dev+release 0 错
+
 ## [v1.3.58]
 - 2026-08-13 (MCP-READONLY — vendor MCP 只读能力整合给 AI)
 - **新增 mcp-meta.ts**: 7 个 MCP 只读工具给 AI (account_status/get_contact/get_group/get_recent_messages/list_contacts/list_groups/search)

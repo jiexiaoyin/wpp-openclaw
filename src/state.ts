@@ -41,6 +41,14 @@ export function setSessionChatInfo(
     ...info,
     updatedAt: Date.now(),
   });
+  // v1.3.59 P1-1 (2026-08-13 完整审阅): 生产无读取路径 (outbound 从不读), TTL 剪枝从不触发
+  //   → Map 无限增长。写时顺带清理过期 (阈值触发, 不常驻扫描)。
+  if (sessionChatInfo.size > 500) {
+    const now = Date.now();
+    for (const [k, v] of sessionChatInfo) {
+      if (now - v.updatedAt > TTL_MS) sessionChatInfo.delete(k);
+    }
+  }
 }
 
 /**

@@ -2,7 +2,7 @@
 
 export const CHANNEL_ID = "wechatpadpro";
 export const PLUGIN_NAME = "wechatpadpro";
-export const PLUGIN_VERSION = "1.3.58";
+export const PLUGIN_VERSION = "1.3.59";
 
 // 默认 bot 昵称 (群 @ 触发检测用; accounts/<id>.json nickname 优先, 配置驱动 + 默认兜底)
 export const DEFAULT_BOT_NICKNAME = "YourBot";
@@ -59,6 +59,8 @@ export const WEBHOOK_BODY_LIMIT_BYTES = 10 * 1024 * 1024;
 export const API_TIMEOUT_MS = 30_000;
 // API retries 3 次
 export const API_MAX_RETRIES = 3;
+// v1.3.59 P2: JSON 响应体字节 cap (媒体端点经此下载 base64, 防巨型响应 OOM; 30MB 够图片/小文件)
+export const API_JSON_MAX_BYTES = 30 * 1024 * 1024;
 // vendor basePath 是 /api
 export const VENDOR_BASE_PATH = "/api";
 
