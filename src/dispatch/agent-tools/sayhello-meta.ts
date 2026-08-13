@@ -8,7 +8,7 @@ import { getCurrentAccountId } from "../account-context.js";
 
 function getSay() {
   const state = getDefaultAccountRegistry().get(getCurrentAccountId() ?? "default");
-  if (!state) throw new Error("account not found: default");
+  if (!state) throw new Error(`account not found: ${getCurrentAccountId() ?? "default"}`);
   return makeWppSayHello({
     baseUrl: state.config.apiBaseUrl,
     tokenKey: state.config.tokenKey,

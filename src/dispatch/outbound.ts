@@ -174,7 +174,7 @@ export async function sendVoice(
   voiceUrlOrPath: string,
   durationMs?: number,
   formatHint?: "mp3" | "silk",
-): Promise<{ ok: boolean; msgId?: string; error?: string }> {
+): Promise<{ ok: boolean; msgId?: string; newMsgId?: string; createTime?: number; error?: string }> {
   const state = getDefaultAccountRegistry().get(accountId);
   if (!state) return { ok: false, error: `account not found: ${accountId}` };
   // ============================================================
@@ -239,8 +239,9 @@ export async function sendVoice(
     return { ok: false, error: `vendor Code=${r.Code} ret=${baseRet ?? "?"}` };
   }
   await persistOutbound(state, peerKind, toWxid, "voice", ossContent, r);
-  const d = (r.Data ?? {}) as { msgId?: string };
-  return { ok: true, msgId: d.msgId };
+  // v1.3.57 P1-2: 用 extractOutboundMsgIds (vendor 响应在 Data.List[0].NewMsgId, 顶层 msgId 是 undefined)
+  const ids = extractOutboundMsgIds(r);
+  return { ok: true, msgId: ids.msgId, newMsgId: ids.newMsgId, createTime: ids.createTime };
 }
 
 export async function sendVideo(
@@ -248,7 +249,7 @@ export async function sendVideo(
   toWxid: string,
   videoUrlOrPath: string,
   thumbUrl?: string,
-): Promise<{ ok: boolean; msgId?: string; error?: string }> {
+): Promise<{ ok: boolean; msgId?: string; newMsgId?: string; createTime?: number; error?: string }> {
   const state = getDefaultAccountRegistry().get(accountId);
   if (!state) return { ok: false, error: `account not found: ${accountId}` };
   let imageBase64 = thumbUrl ?? "";
@@ -275,8 +276,9 @@ export async function sendVideo(
     return { ok: false, error: `vendor Code=${r.Code} ret=${baseRet ?? "?"}` };
   }
   await persistOutbound(state, peerKind, toWxid, "video", ossContent, r);
-  const d = (r.Data ?? {}) as { msgId?: string };
-  return { ok: true, msgId: d.msgId };
+  // v1.3.57 P1-2: 用 extractOutboundMsgIds (与 text/image 一致, 拿 newMsgId/createTime)
+  const ids = extractOutboundMsgIds(r);
+  return { ok: true, msgId: ids.msgId, newMsgId: ids.newMsgId, createTime: ids.createTime };
 }
 
 export async function revokeMsg(

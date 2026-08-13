@@ -24,6 +24,7 @@ import { parseQuoteXml } from "../src/inbound/parser/quote.js";
 import { isValidWxid, isGroupWxid, isValidAtUser } from "../src/inbound/parser/wxid.js";
 import {
   createWppInboundHandler,
+  __resetRelayThrottle,
 } from "../src/inbound/handler.js";
 import { enrichAndSaveMessage } from "../src/inbound/enrich.js";
 import { resetAdapter, setBackend, setAdapterForTest } from "../src/storage/db/factory.js";
@@ -459,6 +460,70 @@ test("v1.3.54 RELAY-TRIGGER — 接龙 type=49 消息强制触发 dispatch (即�
   const relay = dispatched.find((d) => d.msgId === relayMsgId);
   assert.equal(relay?.trigger, "msgType", "接龙触发 via 应为 msgType");
   assert.ok(relay?.content?.startsWith("[接龙]"), "接龙内容应被解析成 [接龙] 前缀注入 AI 上下文");
+});
+
+test("v1.3.54 RELAY-TRIGGER — 同群同接龙 5 分钟内节流 (第 2 条不触发)", async () => {
+  resetAdapter();
+  const fake = new FakeDbForEnrich();
+  setAdapterForTest(fake);
+  const dispatched: WppInboundMessage[] = [];
+  const handler = createWppInboundHandler({
+    accountId: "default",
+    triggerConfig: { ...defaultTriggerConfig(), groupPolicy: "open" },
+    triggerCtx: { botWxid: "wxid_bot", allowFrom: [] },
+    enableDispatch: true,
+    onDispatch: async (msg) => { dispatched.push(msg); },
+  });
+  __resetRelayThrottle(); // 清节流状态
+  const payload = {
+    fromWxid: "wxid_m1", chatroomId: "g1@chatroom", msgType: 49,
+    content: "#接龙 促销\n1. a\n2. b", msgId: "relay-1",
+  } as unknown as WppWebhookPayload;
+  await handler.handle(payload);
+  await handler.flushAll();
+  assert.equal(dispatched.length, 1, "第 1 条触发");
+  // 第 2 条同接龙 (新 msgId) → 应被节流
+  await handler.handle({ ...payload, msgId: "relay-2" } as unknown as WppWebhookPayload);
+  await handler.flushAll();
+  assert.equal(dispatched.length, 1, "5 分钟内同接龙第 2 条应被节流");
+});
+
+test("v1.3.54 RELAY-TRIGGER — 不同接龙标题不互相节流", async () => {
+  resetAdapter();
+  const fake = new FakeDbForEnrich();
+  setAdapterForTest(fake);
+  const dispatched: WppInboundMessage[] = [];
+  const handler = createWppInboundHandler({
+    accountId: "default",
+    triggerConfig: { ...defaultTriggerConfig(), groupPolicy: "open" },
+    triggerCtx: { botWxid: "wxid_bot", allowFrom: [] },
+    enableDispatch: true,
+    onDispatch: async (msg) => { dispatched.push(msg); },
+  });
+  __resetRelayThrottle();
+  await handler.handle({ fromWxid: "wxid_m1", chatroomId: "g1@chatroom", msgType: 49, content: "#接龙 接龙A\n1. a", msgId: "r1" } as unknown as WppWebhookPayload);
+  await handler.flushAll();
+  await handler.handle({ fromWxid: "wxid_m1", chatroomId: "g1@chatroom", msgType: 49, content: "#接龙 接龙B\n1. x", msgId: "r2" } as unknown as WppWebhookPayload);
+  await handler.flushAll();
+  assert.equal(dispatched.length, 2, "不同接龙标题都应触发");
+});
+
+test("v1.3.57 P0-2 — 接龙强制触发不绕过黑名单群 (via=blocked 不 dispatch)", async () => {
+  resetAdapter();
+  const fake = new FakeDbForEnrich();
+  setAdapterForTest(fake);
+  const dispatched: WppInboundMessage[] = [];
+  const handler = createWppInboundHandler({
+    accountId: "default",
+    triggerConfig: { ...defaultTriggerConfig(), groupPolicy: "open", blacklistGroups: ["black@chatroom"] },
+    triggerCtx: { botWxid: "wxid_bot", allowFrom: [] },
+    enableDispatch: true,
+    onDispatch: async (msg) => { dispatched.push(msg); },
+  });
+  __resetRelayThrottle();
+  await handler.handle({ fromWxid: "wxid_m1", chatroomId: "black@chatroom", msgType: 49, content: "#接龙 黑名单\n1. a", msgId: "r-black" } as unknown as WppWebhookPayload);
+  await handler.flushAll();
+  assert.equal(dispatched.length, 0, "黑名单群接龙不应被强制触发 (P0-2)");
 });
 
 

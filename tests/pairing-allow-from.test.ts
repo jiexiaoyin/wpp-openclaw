@@ -44,6 +44,14 @@ function restoreAccounts() {
 
 beforeEach(() => {
   backupAccounts();
+  // v1.3.57 P2-7 (2026-08-13 交付审阅): 清掉非备份的残留测试账号文件, 防并行竞态
+  if (existsSync(ACCOUNTS_REAL_DIR)) {
+    for (const f of readdirSync(ACCOUNTS_REAL_DIR)) {
+      if (f.endsWith(".json") && !backup.has(f)) {
+        try { rmSync(join(ACCOUNTS_REAL_DIR, f)); } catch {}
+      }
+    }
+  }
 });
 
 after(() => {

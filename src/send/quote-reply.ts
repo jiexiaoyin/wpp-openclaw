@@ -72,7 +72,9 @@ async function resolveDisplayName(
   wxid: string | undefined,
 ): Promise<string | undefined> {
   if (!wxid || wxid.endsWith("@chatroom")) return undefined; // 群 ID 无昵称可查
-  const cached = nicknameCache.get(wxid);
+  // v1.3.57 P2-2 (2026-08-13 交付审阅): 缓存 key 并入 acct (同 wxid 跨账号昵称可能不同, 防串号)
+  const cacheKey = `${acct}:${wxid}`;
+  const cached = nicknameCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < NICKNAME_CACHE_TTL_MS) return cached.nick;
   try {
     const state = getDefaultAccountRegistry().get(acct);
@@ -85,7 +87,7 @@ async function resolveDisplayName(
     );
     const nick = resp.Data?.ContactList?.[0]?.NickName?.string;
     if (nick) {
-      nicknameCache.set(wxid, { nick, ts: Date.now() });
+      nicknameCache.set(cacheKey, { nick, ts: Date.now() });
       return nick;
     }
   } catch {
@@ -242,7 +244,8 @@ export async function quoteReply(params: QuoteReplyParams): Promise<{ ok: boolea
   const baseRespRet = d.BaseResponse?.ret;
   info(`[WPP v1.2.0 REVERT] vendor resp: Code=${resp.Code} ret=${baseRespRet} msgId=${d.msgId ?? 0} newMsgId=${d.newMsgId ?? 0} type=${d.type ?? 0}`);
   // 判据陷阱: Code=0 只是 HTTP 200, 真正成功看 Data.BaseResponse.ret === 0 (msgId=0 时 Code=0 不代表成功)
-  const ok = resp.Code === 0 && baseRespRet === 0;
+  // v1.3.57 P2-3 (2026-08-13 交付审阅): Code=200 也视为成功 (与 outbound.ts isSendOk 对齐)
+  const ok = (resp.Code === 0 || resp.Code === 200) && (baseRespRet === 0 || baseRespRet === undefined);
   if (ok) await persistQuoteReply(acct, toWxid, content, resp);
   return {
     ok,

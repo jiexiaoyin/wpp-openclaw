@@ -862,11 +862,14 @@ export async function ensureAgentWorkspace(
     const cfg = JSON.parse(raw) as Record<string, unknown>;
     const agents = (cfg.agents ?? {}) as Record<string, unknown>;
     const list = (agents.list ?? []) as Array<Record<string, unknown>>;
-    list.push({
-      id: agentId,
-      workspace: workspaceDir,
-      agentDir: agentDir,
-    });
+    // v1.3.57 P2-6 (2026-08-13 交付审阅): agents.list 去重 (重复调用会写重复 agent 条目)
+    if (!list.some((a) => a.id === agentId)) {
+      list.push({
+        id: agentId,
+        workspace: workspaceDir,
+        agentDir: agentDir,
+      });
+    }
     const bindings = (cfg.bindings ?? []) as Array<Record<string, unknown>>;
     // v1.3.56 MULTI-ACCOUNT binding 修复: channel "last" 是占位符(不命中任何流量),
     //   accountId "*" 是通配(路由到同一 agent) — 都错。

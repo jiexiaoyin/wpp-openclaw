@@ -98,9 +98,20 @@ export interface WppSendResult {
   error?: string;
 }
 
+/**
+ * v1.3.57 P1-1 (2026-08-13 交付审阅): vendor 成功判据统一 — Code=0/200 只是 HTTP 层,
+ * 真正成功看 Data.BaseResponse.ret===0 (与 outbound.ts isSendOk 一致, 防 file/link 等 5 类
+ * 在 vendor 返 Code=0+ret=-2 时误报成功)。
+ */
+function isVendorOk(resp: WppApiResponse): boolean {
+  if (resp.Code !== 0 && resp.Code !== 200) return false;
+  const baseRet = (resp.Data as { BaseResponse?: { ret?: number } } | undefined)?.BaseResponse?.ret;
+  return baseRet === 0 || baseRet === undefined;
+}
+
 /** WppApiResponse → 统一 SendResult (msg 域工具返回格式归一化) */
 export function normalizeSendResp(resp: WppApiResponse): WppSendResult {
-  const ok = resp.Code === 0 || resp.Code === 200;
+  const ok = isVendorOk(resp);
   const d = (resp.Data ?? {}) as { msgId?: number | string };
   return {
     ok,
@@ -171,11 +182,11 @@ export async function sendMessage(p: WppSendMessageParams): Promise<WppSendResul
           ? "silk"
           : "mp3";
       const r = await sendVoice(accountId, toWxid, mediaContent, p.durationMs, formatHint);
-      return { ok: r.ok, msgId: s(r.msgId), error: r.error };
+      return { ok: r.ok, msgId: s(r.msgId), newMsgId: s(r.newMsgId), createTime: r.createTime, error: r.error };
     }
     case "video": {
       const r = await sendVideo(accountId, toWxid, mediaContent, p.thumbUrl);
-      return { ok: r.ok, msgId: s(r.msgId), error: r.error };
+      return { ok: r.ok, msgId: s(r.msgId), newMsgId: s(r.newMsgId), createTime: r.createTime, error: r.error };
     }
     case "file":
       return callMsg(accountId, (api) => api.sendFile(toWxid, mediaContent, attName || p.fileName || "file"));

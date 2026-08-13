@@ -73,6 +73,9 @@ function ensureBackup() {
 
 beforeEach(() => {
   ensureBackup();
+  // v1.3.57 P2-7 (2026-08-13 交付审阅): 每个测试前清掉残留测试账号文件,
+  //   防并行文件 (config-helpers.test.ts listAccountIds) 读到中间态竞态
+  clearAccounts();
 });
 
 after(() => {

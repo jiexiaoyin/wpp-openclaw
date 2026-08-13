@@ -4,6 +4,23 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.57]
+- 2026-08-13 (DELIVERY-FIX — 交付前审阅 P0/P1/P2 全量修复)
+- **P0-1 [安全] SSRF**: resolve-media.ts + silk-encoder.ts 裸 fetch → `safeFetchWithCap` (host 白名单 + 字节 cap + 超时), 防 AI 诱导抓内网/云元数据外带
+- **P0-2 [正确性] 接龙门禁**: 接龙强制触发前检查 `via!=="blocked"` (黑名单群/自回环绕过)
+- **P1-1**: `normalizeSendResp` 复用 isSendOk 判据 (file/link 等 5 类防假成功)
+- **P1-2**: `sendVoice`/`sendVideo` 用 `extractOutboundMsgIds` (拿 newMsgId/createTime, 与 text/image 对齐)
+- **P2-1**: 接龙节流 key 并入 accountId (防多账号同群互相节流)
+- **P2-2**: 引用昵称缓存 key 并入 acct (防跨账号昵称串号)
+- **P2-3**: quoteReply 成功判据接受 Code=200
+- **P2-4**: handler 引用媒体查询加 `direction:"any"` (引用 bot outbound 消息可查)
+- **P2-5**: agent-tools 报错信息含真实账号 (20 个 meta)
+- **P2-6**: ensureAgentWorkspace agents.list 去重 + setup.ts checkAgentExistsInOpenclaw 用 OPENCLAW_ROOT
+- **P2-7**: 测试写真实 accounts/ 的竞态修复 (beforeEach 清残留)
+- **relay title fallback**: parseRelayText 无 `<title>` 标签时用 `#接龙 xxx` 首行作 title (否则不同接龙 title 全空 → 节流 key 相同互相节流)
+- **测试**: 新增节流/黑名单绕过/不同标题测试; 817/817 全绿; tsc 0 错
+- **MCP 调研**: vendor MCP 13 工具 (7 只读 + 6 写), 写工具需 `mcp:write` + **confirmation elicitation** (当前 SDK 不支持自动确认, 待设计确认流)
+
 ## [v1.3.56]
 - 2026-08-13 (MULTI-ACCOUNT — 启用多账号, 一 authcode = 一 agent = 一账号)
 - **配置引导完整化**:

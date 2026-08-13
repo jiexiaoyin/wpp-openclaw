@@ -9,7 +9,7 @@ import { getCurrentAccountId } from "../account-context.js";
 
 function getFriendCircleApi() {
   const state = getDefaultAccountRegistry().get(getCurrentAccountId() ?? "default");
-  if (!state) throw new Error("account not found: default");
+  if (!state) throw new Error(`account not found: ${getCurrentAccountId() ?? "default"}`);
   return makeWppFriendCircle({
     baseUrl: state.config.apiBaseUrl,
     tokenKey: state.config.tokenKey,

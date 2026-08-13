@@ -27,9 +27,12 @@ import { readdirSync, readFileSync } from "node:fs";
 import { generatePairingCode, getPairingStorePath } from "../src/pairing-store.js";
 
 /** v1.1.42 SETUP-MERGE: 检查 agent id 是否已在 openclaw.json agents.list 里 */
+// v1.3.57 P2-6 (2026-08-13 交付审阅): 用 OPENCLAW_ROOT env 覆盖 (与 setup-wizard registerAccountInOpenclaw 一致),
+//   不再硬编码 /root/.openclaw (设了 OPENCLAW_ROOT 时误判 → 重复创建 agent)
 async function checkAgentExistsInOpenclaw(agentId: string): Promise<boolean> {
   try {
-    const raw = await readFileAsync("/root/.openclaw/openclaw.json", "utf8");
+    const root = process.env.OPENCLAW_ROOT || (process.env.HOME ? `${process.env.HOME}/.openclaw` : "/root/.openclaw");
+    const raw = await readFileAsync(join(root, "openclaw.json"), "utf8");
     const cfg = JSON.parse(raw) as { agents?: { list?: Array<{ id?: string }> } };
     const list = cfg?.agents?.list ?? [];
     return list.some((a) => a.id === agentId);

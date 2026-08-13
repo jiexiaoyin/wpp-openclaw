@@ -10,7 +10,7 @@ import { getCurrentAccountId } from "../account-context.js";
 
 function getGroupApi() {
   const state = getDefaultAccountRegistry().get(getCurrentAccountId() ?? "default");
-  if (!state) throw new Error("account not found: default");
+  if (!state) throw new Error(`account not found: ${getCurrentAccountId() ?? "default"}`);
   return makeWppGroup({
     baseUrl: state.config.apiBaseUrl,
     tokenKey: state.config.tokenKey,

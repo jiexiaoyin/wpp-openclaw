@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execAsync } from "../util/exec.js";
 import { uniqueId } from "../util/id.js";
+import { safeFetchWithCap } from "../util/safe-fetch.js";
 import { logObj as log } from "../core/logger.js";
 
 // 老板 6-12 16:36 偏好: 成功发为微信语音消息, 失败降级为文件消息 (上层 caller 决定)
@@ -188,11 +189,10 @@ async function fetchToBuffer(input: string): Promise<Buffer> {
     if (idx < 0) throw new Error("invalid data URI");
     return Buffer.from(input.slice(idx + 1), "base64");
   }
-  // http(s) URL
-  const resp = await fetch(input);
-  if (!resp.ok) throw new Error(`fetch ${input} failed: HTTP ${resp.status}`);
-  const ab = await resp.arrayBuffer();
-  return Buffer.from(ab);
+  // http(s) URL — v1.3.57 P0-SSRF (2026-08-13 交付审阅): 裸 fetch → safeFetchWithCap
+  //   (host 白名单 + 20MB cap + 30s 超时 + 流式), 防 AI 诱导抓内网/云元数据
+  const buf = await safeFetchWithCap(input, { signal: AbortSignal.timeout(30_000) }, 20 * 1024 * 1024);
+  return buf;
 }
 
 /**

@@ -57,6 +57,9 @@ export function parseRelayText(raw: string): RelayParseResult {
   const titleMatch = text.match(/<title>([\s\S]*?)<\/title>/);
   const titleRaw = titleMatch?.[1] ?? "";
   const title = stripGroupPrefix(titleRaw).trim();
+  // v1.3.57 (2026-08-13): 无 <title> 标签时 (真实接龙 type=49 常无), 用 "#接龙 xxx" 首行作 title —
+  //   否则所有接龙 title 为空 → 接龙节流 key 相同 → 不同接龙互相节流
+  const titleWithFallback = title || text.split("\n")[0]?.trim() || "";
 
   // 列表条目 — vendor push 用 `<recorditem>` 块或裸 `\n<index>. <nickname>: <text>`
   // 实测: vendor binary 不一定写 <recorditem>, 而是直接 `<index>. <text>` per line
@@ -68,7 +71,7 @@ export function parseRelayText(raw: string): RelayParseResult {
     items = parsePlainList(text);
   }
 
-  return { title, items };
+  return { title: titleWithFallback, items };
 }
 
 function parseRecordItem(block: string, idx: number): RelayItem {

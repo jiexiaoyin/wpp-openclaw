@@ -36,6 +36,10 @@ const pendingEnrichs = new Map<string, Promise<void>>();
 // key = `${peerId}:${content 首行前 30 字}` (同一接龙 title 指纹); 被 @ 的消息 content 不同 → 不受节流影响。
 const RELAY_THROTTLE_MS = 5 * 60 * 1000;
 const relayTriggerAt = new Map<string, number>();
+/** 测试注入: 重置接龙节流状态 (防测试间污染) */
+export function __resetRelayThrottle(): void {
+  relayTriggerAt.clear();
+}
 
 /** 追踪一次 enrich (key = accountId:sender, 同 sender 串行) */
 function trackEnrich<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -369,7 +373,9 @@ export function createWppInboundHandler(
               }
             }
             if (quotedMsgId) {
-              const quoted = await getMessageByMsgIdOrNewId(quotedMsgId, undefined, m.accountId)
+              // v1.3.57 P2-4 (2026-08-13 交付审阅): 引用解析查全方向 — bot 回复也入库 (outbound),
+              //   用户引用 bot 的图/文件时默认 direction=inbound 查不到, 加 any (与 dispatcher.ts:216 对齐)
+              const quoted = await getMessageByMsgIdOrNewId(quotedMsgId, undefined, m.accountId, { direction: "any" })
                 ?? (await getMessageById(quotedMsgId, m.accountId));
               if (quoted?.content) {
                 // 匹配 enrich 注入的 [图片]/[视频]/[语音]/[文件] URL, 取第一个注入
@@ -440,9 +446,13 @@ export function createWppInboundHandler(
         // v1.3.54 RELAY-TRIGGER (老板 8-12 拍板): 接龙消息强制触发 AI (即使没人 @)
         //   老板诉求"对华为群接龙进行鼓励" — 群内接龙活动要让 AI 介入给鼓励, 不能静默
         //   节流: 同群同接龙 5 分钟内只触发一次 (vendor 每次有人接龙都推完整接龙, 全回会刷屏)
+        //   v1.3.57 P0-2 + P2-1 (2026-08-13 交付审阅): 强制触发前检查 via!=="blocked" (防黑名单群/
+        //   自回环绕过); 节流 key 并入 accountId (防多账号同群互相节流)
         if (opts.enableDispatch !== false && isRelayMessage(m)) {
+          const t = triggerResults.get(m);
+          if (t?.via === "blocked") continue; // P0-2: 黑名单群/自回环/非白名单 → 不强制触发
           const titleKey = (m.content ?? "").split("\n")[0]?.slice(0, 30) ?? "";
-          const throttleKey = `${m.peerId}:${titleKey}`;
+          const throttleKey = `${m.accountId}:${m.peerId}:${titleKey}`; // P2-1: 并入 accountId
           const now = Date.now();
           const lastAt = relayTriggerAt.get(throttleKey) ?? 0;
           if (now - lastAt >= RELAY_THROTTLE_MS) {

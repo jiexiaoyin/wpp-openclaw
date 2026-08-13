@@ -8,25 +8,22 @@
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { safeFetchWithCap } from "../util/safe-fetch.js";
 
 export async function resolveImageToBase64(input: string): Promise<string> {
   if (!input) throw new Error("resolveImageToBase64: empty input");
   const m = DATA_URI_RE.exec(input);
   if (m && m[1]) return m[1].trim();
   if (/^https?:\/\//i.test(input)) {
-    const MAX_BYTES = 15 * 1024 * 1024; // 15MB cap
-    let r: Response;
+    // v1.3.57 P0-SSRF (2026-08-13 交付审阅): 裸 fetch → safeFetchWithCap
+    //   (host 白名单 + 15MB cap + 流式), 防 AI 诱导抓内网/云元数据外带
+    const MAX_BYTES = 15 * 1024 * 1024; // 15MB cap (与旧值一致)
     try {
-      r = await fetch(input, { signal: AbortSignal.timeout(30_000) });
-    } catch {
-      throw new Error(`resolveImageToBase64: download failed (${sanitizeHost(input)})`);
+      const buf = await safeFetchWithCap(input, { signal: AbortSignal.timeout(30_000) }, MAX_BYTES);
+      return buf.toString("base64");
+    } catch (e) {
+      throw new Error(`resolveImageToBase64: download failed (${sanitizeHost(input)}): ${(e as Error).message}`);
     }
-    if (!r.ok) throw new Error(`resolveImageToBase64: HTTP ${r.status} (${sanitizeHost(input)})`);
-    const cl = Number(r.headers.get("content-length") ?? 0);
-    if (cl > MAX_BYTES) throw new Error(`resolveImageToBase64: too large ${cl}B`);
-    const buf = Buffer.from(await r.arrayBuffer());
-    if (buf.length > MAX_BYTES) throw new Error(`resolveImageToBase64: too large ${buf.length}B`);
-    return buf.toString("base64");
   }
   if (input.startsWith("file://")) {
     const p = input.slice("file://".length);
