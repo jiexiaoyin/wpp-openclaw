@@ -3,10 +3,10 @@ node_modules/
 dist/
 dist-release/
 release/
-release-docs/
 *.log
 .env
 *.bak
+# release-docs/ 是分享版文档源 (已脱敏, 需版本管理, 不 ignore)
 
 # OpenClaw 部署版(部署由 deploy.sh 管理)
 config.local.json

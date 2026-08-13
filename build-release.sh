@@ -33,10 +33,15 @@ sed -i 's/接晓银/助手/g' dist-release/src/dispatch/intent-llm.js
 #   保留 env 覆盖逻辑, 只去掉默认域名 (防泄露 + 强制接收方配置自己的域名)
 #   注意 sed 分隔符用 # (内容含 || 管道, 用 | 会冲突)
 sed -i 's#WPP_VENDOR_HOST || "wx.juhe.chat"#WPP_VENDOR_HOST || ""#g; s#wx\.juhe\.chat##g' dist-release/src/util/safe-fetch.js
-echo "清洗完成: 接晓银→助手, wx.juhe.chat→(env 配置)"
+# v1.3.54 脱敏补强: silk 内部路径 (/root/silk_decoder/silk/...) → 通用相对路径 (接收方配 WPP_SILK_ENCODER/DECODER_PATH env 覆盖)
+sed -i 's#/root/silk_decoder/silk/encoder#silk/encoder#g; s#/root/silk_decoder/silk/decoder#silk/decoder#g' \
+  dist-release/src/dispatch/silk-encoder.js dist-release/src/storage/silk.js
+# v1.3.54 脱敏补强: index.js 运行时字符串里的真实群ID/老板wxid → 通用占位 (filehelper 命令示例 + targetResolver hint)
+sed -i 's#q139198824#YOUR_WXID#g; s#19908568237@chatroom#123456789@chatroom#g; s#53889526119@chatroom#123456789@chatroom#g; s#57737516566@chatroom#123456789@chatroom#g' dist-release/src/index.js
+echo "清洗完成: 接晓银→助手, wx.juhe.chat→(env 配置), silk 路径→silk/encoder, 群ID/wxid→通用占位"
 
 echo "=== [4.5/6] 校验无个性化值 ==="
-PERSONAL="wx\.juhe\.chat|接晓银|q139198824|wxid_dbdmq8riblxo12|knowhub|益融|淮安|盱眙|wechatpadpromax"
+PERSONAL="wx\.juhe\.chat|接晓银|q139198824|wxid_dbdmq8riblxo12|wxid_eezdbu1ytws422|71bed0f5|19908568237|53889526119|57737516566|jsnjzhou|zhuqixia520520|knowhub|益融|淮安|盱眙|wechatpadpromax|silk_decoder|/root/silk_decoder"
 PERSONAL_HITS=$(find dist-release -name "*.js" -exec grep -lE "$PERSONAL" {} \; 2>/dev/null | head -5)
 if [ -n "$PERSONAL_HITS" ]; then
   echo "⚠ dist-release 仍含个性化值:"
@@ -64,6 +69,7 @@ const f='release/openclaw.plugin.json';
 let s=fs.readFileSync(f,'utf8');
 s=s.replace(/wx\.juhe\.chat/g,'YOUR_VENDOR_HOST');
 s=s.replace(/adminmax\.knowhub\.cloud/g,'YOUR_VENDOR_HOST');
+s=s.replace(/adminmax/gi,'vendor');
 s=s.replace(/knowhub/g,'vendor');
 s=s.replace(/益融小助理/g,'YourBot');
 s=s.replace(/\/opt\/1panel\/[^ \"]*/g,'YOUR_DEPLOY_PATH');
@@ -94,7 +100,7 @@ const fs=require('fs');
 const p=JSON.parse(fs.readFileSync('release/package.json','utf8'));
 p.scripts = { setup: 'node scripts/setup.js' };
 delete p.devDependencies;
-p.description = 'WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw 适配插件. 完整 236 paths API 覆盖.';
+p.description = 'WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw 适配插件. 语音 silk 自动转码 + 转码失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 254 paths API 覆盖.';
 fs.writeFileSync('release/package.json', JSON.stringify(p,null,2));
 "
 
@@ -102,6 +108,16 @@ echo "=== [7/6] 发布包清单 ==="
 echo "release/ 内容:"
 find release -maxdepth 2 -type f | grep -v node_modules | head -25
 echo "发布包体积: $(du -sh release | cut -f1)"
+
+echo "=== [8/6] 发布包最终脱敏校验 ==="
+FINAL_PERSONAL="wx\.juhe\.chat|接晓银|q139198824|wxid_dbdmq8riblxo12|wxid_eezdbu1ytws422|71bed0f5|19908568237|53889526119|57737516566|jsnjzhou|zhuqixia520520|knowhub|益融|淮安|盱眙|wechatpadpromax|silk_decoder|/root/silk_decoder|56Z8kt5ySirXyyGj|71bed0f5-626a"
+FINAL_HITS=$(grep -rlE "$FINAL_PERSONAL" release/ 2>/dev/null | grep -v node_modules | head -5)
+if [ -n "$FINAL_HITS" ]; then
+  echo "⚠ release/ 仍含个性化值:"
+  echo "$FINAL_HITS"
+  exit 1
+fi
+echo "✅ release/ 无个性化值 (发布包可安全分享)"
 echo ""
 echo "✅ 发布包就绪: release/"
 echo "   接收方步骤: 拷贝 release/ → npm ci → cp accounts/default.json.example accounts/default.json → npm run setup add → 配置"
