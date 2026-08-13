@@ -1009,6 +1009,21 @@ export const plugin = {
     additionalProperties: true,
     properties: {},
   },
+  // v1.3.62 OPENCLAW-GUIDED-SETUP (2026-08-13 老板拍板): 让 OpenClaw `configure --section plugins` 能引导本插件配置。
+  //   OpenClaw 引导写 plugins.entries.wechatpadpro.config, 插件 config.ts 读它兜底 (见 loadAccountConfig)。
+  //   引导字段: tokenKey/authcode (敏感, env 优先) + apiBaseUrl/wsUrl + allowFrom/群策略 + agent。
+  //   注意: 这是"单账号 default 兜底"; 多账号 (每账号独立 agent) 仍走 CLI `npm run setup add <id>`。
+  configUiHints: {
+    tokenKey: { label: "WeChatPadPro TokenKey", sensitive: true, help: "vendor 后台获取; 也可用 WECHATPRO_TOKEN_KEY env" },
+    authcode: { label: "授权码 authcode", sensitive: true, help: "vendor 启动时生成; 也可用 WECHATPRO_AUTHCODE env" },
+    apiBaseUrl: { label: "API Base URL", placeholder: "https://wx.juhe.chat", help: "vendor HTTP API 地址" },
+    wsUrl: { label: "WebSocket URL", placeholder: "wss://wx.juhe.chat/ws/sync", help: "vendor WS 推送地址" },
+    allowFrom: { label: "私聊白名单 (逗号分隔)", help: "空 = 拒绝所有 DM (fail-closed)" },
+    groupPolicy: { label: "群聊策略", help: "open/disabled/allowlist/closed" },
+    groupAllowFrom: { label: "群白名单 (逗号分隔, @chatroom)", help: "groupPolicy=allowlist 时用" },
+    agent: { label: "OpenClaw agent id", help: "绑定 agent (如 wpp-wechat), 禁止 main" },
+    webhookPort: { label: "webhook 端口", help: "默认 4398 (多账号共享)" },
+  },
 
   /**
    * OpenClaw 启动时调 register(api), 我们用 api.registerChannel 注册 channel

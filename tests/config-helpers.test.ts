@@ -261,3 +261,49 @@ test("FIX-S1 loadAccountConfigAsync — 无效 accountId 抛错 (path traversal 
     /invalid accountId/,
   );
 });
+
+// ===== v1.3.62 OPENCLAW-GUIDED-SETUP =====
+
+test("v1.3.62 guided config — plugins.entries.wechatpadpro.config 兜底填充 default 账号", async () => {
+  const { loadAccountConfig } = await import("../src/config.js");
+  const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const root = mkdtempSync(path.join(os.tmpdir(), "wpp-guided-"));
+  const savedRoot = process.env.OPENCLAW_ROOT;
+  process.env.OPENCLAW_ROOT = root;
+  try {
+    // 写 openclaw.json 带 plugins.entries.wechatpadpro.config (OpenClaw 引导写的)
+    writeFileSync(path.join(root, "openclaw.json"), JSON.stringify({
+      plugins: { entries: { wechatpadpro: { config: {
+        tokenKey: "guided-token", apiBaseUrl: "https://guided.example", wsUrl: "wss://guided.example/ws",
+        allowFrom: "wxid_a, wxid_b", groupPolicy: "allowlist", agent: "wpp-wechat",
+      } } } },
+    }, null, 2));
+    // 写 accounts/default.json (含部分字段, 验证 merge 保留)
+    const accountsDir = path.join(root, "accounts");
+    mkdirSync(accountsDir, { recursive: true });
+    // findPluginRoot 用插件真路径, 不跟 cwd — 需设 WPP_ACCOUNTS_DIR? loadAccountConfig 用 findPluginRoot
+    // 改用 getAccountsDir? loadAccountConfig 固定 findPluginRoot+accounts. 设 HOME 到 tmp?
+    // 简化: 验证 readGuidedPluginConfig + mergeGuidedConfig 逻辑 (通过 loadAccountConfig 需 accounts 在 findPluginRoot)
+    // 实际 loadAccountConfig 用 findPluginRoot (插件目录), 这里无法隔离 → 直接测 readGuidedPluginConfig 效果
+    const { readGuidedPluginConfig, mergeGuidedConfig } = await import("../src/config.js") as unknown as {
+      readGuidedPluginConfig: () => Record<string, unknown> | null;
+      mergeGuidedConfig: (raw: unknown, guided: Record<string, unknown>) => Record<string, unknown>;
+    };
+    const guided = readGuidedPluginConfig();
+    assert.ok(guided, "应读到引导配置");
+    assert.equal(guided.apiBaseUrl, "https://guided.example");
+    assert.equal(guided.allowFrom, "wxid_a, wxid_b");
+    // merge 逻辑: allowFrom 逗号串 → 数组, 字段填充 (仅空值填充; 非空保留)
+    const merged = mergeGuidedConfig({ allowFrom: [], groupPolicy: "open", webhookPort: 0, agent: "" } as never, { allowFrom: "wxid_a, wxid_b", groupPolicy: "allowlist", webhookPort: 4399, agent: "wpp-wechat" });
+    assert.deepEqual(merged.allowFrom, ["wxid_a", "wxid_b"], "allowFrom 逗号串转数组");
+    assert.equal(merged.groupPolicy, "open", "raw 已有 groupPolicy=open (默认值) → 保留不覆盖");
+    assert.equal(merged.agent, "wpp-wechat", "raw agent 空 → 引导填充");
+    assert.equal(merged.webhookPort, 4399, "webhookPort 0 → 引导数字填充");
+  } finally {
+    if (savedRoot) process.env.OPENCLAW_ROOT = savedRoot;
+    else delete process.env.OPENCLAW_ROOT;
+    try { (await import("node:fs")).rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});

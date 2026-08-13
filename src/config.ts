@@ -3,8 +3,9 @@
 // src/config.ts - 配置加载 (带 LRU cache 减少 sync I/O)
 
 import { readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { logObj as log } from "./core/logger.js";
+import { logObj as log, formatErr } from "./core/logger.js";
 import { DEFAULT_ACCOUNT_ID } from "./core/constants.js";
 import { findPluginRoot } from "./core/paths.js";
 import { LruCache } from "./core/lru.js";
@@ -69,6 +70,51 @@ export function isValidAccountId(accountId: string): boolean {
   return typeof accountId === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(accountId);
 }
 
+// ============ v1.3.62 OPENCLAW-GUIDED-SETUP ============
+// OpenClaw `configure --section plugins` 引导写 plugins.entries.wechatpadpro.config。
+// 插件从该配置读兜底 (default 账号, 字段级 merge: OpenClaw 引导值优先, 文件已有值保留)。
+
+/** 读 OpenClaw 引导的插件配置 (plugins.entries.wechatpadpro.config), 无则 null (导出供测试) */
+export function readGuidedPluginConfig(): Record<string, unknown> | null {
+  const root = process.env.OPENCLAW_ROOT || (process.env.HOME ? `${process.env.HOME}/.openclaw` : "/root/.openclaw");
+  try {
+    const raw = readFileSync(join(root, "openclaw.json"), "utf8");
+    const cfg = JSON.parse(raw) as {
+      plugins?: { entries?: { wechatpadpro?: { config?: Record<string, unknown> } } };
+    };
+    const guided = cfg?.plugins?.entries?.wechatpadpro?.config;
+    return guided && Object.keys(guided).length > 0 ? guided : null;
+  } catch {
+    return null; // openclaw.json 缺失/损坏 → 无引导配置 (不阻塞)
+  }
+}
+
+/** 字段级 merge: guided 值仅在 raw 为空/缺失时填充 (导出供测试) */
+export function mergeGuidedConfig(raw: WppAccountConfig, guided: Record<string, unknown>): WppAccountConfig {
+  const out = { ...raw };
+  const stringField = (key: string): void => {
+    const v = guided[key];
+    if (typeof v === "string" && v && !(out as Record<string, unknown>)[key]) {
+      (out as Record<string, unknown>)[key] = v;
+    }
+  };
+  const stringArrayField = (key: string): void => {
+    const v = guided[key];
+    if (typeof v === "string" && v && (!Array.isArray((out as Record<string, unknown>)[key]) || ((out as Record<string, unknown>)[key] as unknown[]).length === 0)) {
+      (out as Record<string, unknown>)[key] = v.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+  };
+  // 字符串字段
+  stringField("tokenKey"); stringField("apiBaseUrl"); stringField("wsUrl");
+  stringField("groupPolicy"); stringField("agent"); stringField("webhookPath"); stringField("nickname"); stringField("selfWxid");
+  // 数字字段
+  const port = guided.webhookPort;
+  if (typeof port === "number" && port > 0 && !out.webhookPort) out.webhookPort = port;
+  // 数组字段 (OpenClaw 引导用逗号串)
+  stringArrayField("allowFrom"); stringArrayField("groupAllowFrom");
+  return out;
+}
+
 export async function loadAccountConfig(accountId: string = DEFAULT_ACCOUNT_ID): Promise<WppAccountConfig> {
   if (!isValidAccountId(accountId)) {
     throw new Error(`invalid accountId (must match /^[a-zA-Z0-9_-]{1,64}$/): ${JSON.stringify(accountId)}`);
@@ -99,6 +145,19 @@ export async function loadAccountConfig(accountId: string = DEFAULT_ACCOUNT_ID):
   } catch (e) {
     const err = e as NodeJS.ErrnoException; if (err.code === "ENOENT") throw new Error(`account config not found: ${p}`);
     throw e;
+  }
+  // v1.3.62 OPENCLAW-GUIDED-SETUP (2026-08-13 老板拍板): OpenClaw `configure --section plugins` 引导写
+  //   plugins.entries.wechatpadpro.config。对 default 账号, 从该配置兜底填充缺失字段 (OpenClaw 引导优先, 文件已有值保留)。
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    try {
+      const guided = readGuidedPluginConfig();
+      if (guided) {
+        raw = mergeGuidedConfig(raw, guided);
+        log.info(`account=${accountId}: merged guided config from openclaw.json plugins.entries.wechatpadpro.config (OpenClaw 引导)`);
+      }
+    } catch (e) {
+      log.warn(`account=${accountId}: read guided plugin config failed (non-fatal): ${formatErr(e)}`);
+    }
   }
   // 凭证优先从环境变量取
   if (raw.tokenKeyEnv) {

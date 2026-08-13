@@ -1,11 +1,22 @@
 {
   "name": "wechatpadpro",
   "id": "wechatpadpro",
-  "version": "1.3.61",
+  "version": "1.3.62",
   "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 254 paths API 覆盖.",
   "channelId": "wechatpadpro",
   "channelName": "WeChatPadPro (微信 Pad 协议)",
   "kind": "plugin",
+  "configUiHints": {
+    "tokenKey": { "label": "WeChatPadPro TokenKey", "sensitive": true, "help": "vendor 后台获取; 也可用 WECHATPRO_TOKEN_KEY env" },
+    "authcode": { "label": "授权码 authcode", "sensitive": true, "help": "vendor 启动时生成; 也可用 WECHATPRO_AUTHCODE env" },
+    "apiBaseUrl": { "label": "API Base URL", "placeholder": "https://wx.juhe.chat", "help": "vendor HTTP API 地址" },
+    "wsUrl": { "label": "WebSocket URL", "placeholder": "wss://wx.juhe.chat/ws/sync", "help": "vendor WS 推送地址" },
+    "allowFrom": { "label": "私聊白名单 (逗号分隔)", "help": "空 = 拒绝所有 DM (fail-closed)" },
+    "groupPolicy": { "label": "群聊策略", "help": "open/disabled/allowlist/closed" },
+    "groupAllowFrom": { "label": "群白名单 (逗号分隔, @chatroom)", "help": "groupPolicy=allowlist 时用" },
+    "agent": { "label": "OpenClaw agent id", "help": "绑定 agent (如 wpp-wechat), 禁止 main" },
+    "webhookPort": { "label": "webhook 端口", "help": "默认 4398 (多账号共享)" }
+  },
   "channels": [
     "wechatpadpro"
   ],

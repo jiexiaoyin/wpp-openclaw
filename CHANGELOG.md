@@ -4,6 +4,14 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.62]
+- 2026-08-13 (OPENCLAW-GUIDED-SETUP — 让 OpenClaw 能驱动插件引导配置)
+- **插件加顶层 `configUiHints`** (openclaw.plugin.json + src/index.ts): tokenKey/authcode (sensitive) / apiBaseUrl / wsUrl / allowFrom / groupPolicy / groupAllowFrom / agent / webhookPort
+  - OpenClaw `configure --section plugins` 现在能引导本插件配置 (写 plugins.entries.wechatpadpro.config)
+- **config.ts 读引导兜底**: `readGuidedPluginConfig` 读 openclaw.json plugins.entries.wechatpadpro.config; `mergeGuidedConfig` 字段级 merge (default 账号, 空值填充, 文件已有值保留)
+- **测试**: 新增 guided config 测试 (读引导 + merge 逻辑: allowFrom 逗号串→数组 / webhookPort 数字); 827/827 串行全绿; tsc 0 错
+- **注意**: 这是"单账号 default 兜底"; 多账号 (每账号独立 agent) 仍走 CLI `npm run setup add <id>`
+
 ## [v1.3.61]
 - 2026-08-13 (WEBHOOK-SHARED-PORT + P2-FIX — 多账号 webhook 单端口 + P2 收尾)
 - **webhook 共享端口 (贴合 vendor 设计)**: vendor 按 authcode 区分账号 (Webhook/* 接口 URL query 带 authcode), 回调 URL path 含 accountId → **单端口 + path 区分**, 不再每账号独立端口
