@@ -54,6 +54,9 @@ for arg in "$@"; do
   esac
 done
 
+# v1.3.55 RELEASE-GENERIC (2026-08-13): 接收方用自己的 OpenClaw 部署 — 根目录可 env 覆盖
+OPENCLAW_ROOT="${OPENCLAW_ROOT:-$HOME/.openclaw}"
+
 # ============ 状态收集 ============
 declare -a STEP_RESULTS=()
 declare -a STEP_WARNINGS=()
@@ -96,17 +99,17 @@ if [ ! -f "package.json" ] || [ ! -f "openclaw.plugin.json" ]; then
 fi
 log_step PASS "preflight" "CWD = $(pwd)"
 
-# 2. 检查 /root/.openclaw/extensions/ 当前状态 (read-only 探测, 不写)
-EXTENSIONS_DIR="/root/.openclaw/extensions"
+# 2. 检查 ${OPENCLAW_ROOT}/extensions/ 当前状态 (read-only 探测, 不写)
+EXTENSIONS_DIR="${OPENCLAW_ROOT}/extensions"
 WPP_EXT="${EXTENSIONS_DIR}/wechatpadpro"
 if [ -d "$WPP_EXT" ]; then
   log_step INFO "extensions probe" "wechatpadpro 已在 prod (${WPP_EXT}) — dry-run 不动它"
 else
-  log_step INFO "extensions probe" "wechatpadpro 不在 prod (符合预期: 之前已撤回)"
+  log_step INFO "extensions probe" "wechatpadpro 不在 prod (${OPENCLAW_ROOT} 下未找到)"
 fi
 
 # 3. 明确声明 dry-run
-log_step INFO "DRY-RUN MODE" "永不动 /root/.openclaw/, 永不动 src/, 只读 + rebuild dist/"
+log_step INFO "DRY-RUN MODE" "永不动 ${OPENCLAW_ROOT}/, 永不动 src/, 只读 + rebuild dist/"
 
 # ============ Build ============
 echo ""
@@ -343,13 +346,8 @@ fi
 echo ""
 echo -e "${GREEN}✔ DRY-RUN PASS — 全部 step 通过, 0 警告${NC}"
 echo ""
-echo "可考虑真实部署步骤 (手动, 不在本脚本范围):"
-echo "  1. 备份当前 prod: cp -a /root/.openclaw/extensions/wechatpadpro /data/wpp-prod-backup-\$(date +%s)"
-echo "  2. 部署: cp -a dist/ /root/.openclaw/extensions/wechatpadpro/dist/"
-echo "  3. 拷贝 manifest: cp openclaw.plugin.json /root/.openclaw/extensions/wechatpadpro/"
-echo "  4. v1.1.11 P2-N11: 拷贝 schema.sql, 让 plugin init 时自动执行 CREATE TABLE"
-echo "     cp db/schema.sql /root/.openclaw/extensions/wechatpadpro/db/"
-echo "  5. 重启 gateway: systemctl --user restart openclaw-gateway"
-echo "  6. 验证: journalctl --user -u openclaw-gateway -n 50"
-echo "  7. 确认日志不再有 'applySchemaSql: schema.sql not found' warning"
+echo "可考虑真实部署 (推荐用 deploy-swap.sh --force, 自动处理上述步骤):"
+echo "  1. 备份当前 prod: cp -a ${OPENCLAW_ROOT}/extensions/wechatpadpro \${BACKUP_ROOT:-/data}/wpp-prod-backup-\$(date +%s)"
+echo "  2. 部署: bash deploy-swap.sh --force"
+echo "  3. 验证: journalctl --user -u \${GATEWAY_SERVICE:-openclaw-gateway} -n 50"
 exit 0

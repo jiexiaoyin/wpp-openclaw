@@ -57,33 +57,66 @@ export WPP_SILK_DECODER_PATH="/path/to/silk/decoder"
 
 ## 2. 安装 (5 步)
 
+**前提**: 你的 OpenClaw gateway 已运行 (v2026.7.1+ 兼容的 channel 插件契约), 本插件随包的 `deploy.sh` 会自动注册到你的 OpenClaw。
+
 ```bash
+# 0. 定位你的 OpenClaw 根目录 (默认 $HOME/.openclaw, 非默认可 env 覆盖)
+export OPENCLAW_ROOT="${OPENCLAW_ROOT:-$HOME/.openclaw}"      # 例如 /home/you/.openclaw
+export GATEWAY_SERVICE="${GATEWAY_SERVICE:-openclaw-gateway}" # systemd user 服务名 (docker 环境忽略)
+export BACKUP_ROOT="${BACKUP_ROOT:-/data}"                    # 备份目录 (无 /data 权限可设 /tmp)
+
 # 1. 解压发布包 (zip 不含依赖)
 unzip wpp-plugin-release.zip
 cd wpp-plugin-release
 
-# 2. 安装依赖 (发布包不含 node_modules, 这一步会联网下载 ~92MB)
+# 2. 安装依赖 (发布包不含 node_modules, 这一步会联网下载)
 npm ci
 
 # 3. 配账号 (交互式向导, 填你自己的服务端地址 + wxid)
 cp accounts/default.json.example accounts/default.json
 npm run setup add default
 
-# 4. 设环境变量 (export 上面 3 个, 或写进 systemd env)
+# 4. 设环境变量 (WECHATPRO_TOKEN_KEY / WECHATPRO_AUTHCODE / WECHATPRO_DB_PASSWORD / WPP_VENDOR_HOST / WPP_SILK_ENCODER_PATH)
 
-# 5. 部署
+# 5. 部署 (dry-run 验证 → 真实部署, 自动: 拷贝插件到 $OPENCLAW_ROOT/extensions/ + 注册 openclaw.json + 重启 gateway)
 bash deploy.sh                # 验证 (19 项全 PASS 再继续)
 bash deploy-swap.sh --force   # 真实部署
 ```
 
-> **为什么 zip 只有 130KB?** 发布包只含编译产物 (dist/), **不含 node_modules** (依赖约 92MB)。接收方 `npm ci` 时会根据 `package.json` 自动下载全部依赖, 这是标准发布做法, 不是缺文件。
+> **为什么 zip 只有 164KB?** 发布包只含编译产物 (dist/), **不含 node_modules** (依赖约 92MB)。接收方 `npm ci` 时会根据 `package.json` 自动下载全部依赖, 这是标准发布做法, 不是缺文件。
+
+### 2.1 用自己的 OpenClaw 部署 (三种环境)
+
+| 你的 OpenClaw 部署方式 | 怎么做 |
+|---|---|
+| **systemd user 服务** (默认, 如 `openclaw-gateway`) | 直接 `bash deploy-swap.sh --force`, 自动重启 + verify |
+| **docker 容器** | 设 `GATEWAY_SERVICE=` 留空让脚本跳过重启, 部署后 `docker restart <容器>`; 或手动用 2.2 手动方式 |
+| **非 root 用户 / 自定义路径** | 设 `OPENCLAW_ROOT=/你的路径/.openclaw`, 其余照常 |
+
+### 2.2 手动接入 (不想用脚本, 或 docker/自定义 OpenClaw)
+
+```bash
+# 1. 拷贝插件到你的 OpenClaw 插件目录
+mkdir -p "$OPENCLAW_ROOT/extensions/wechatpadpro"
+cp -a dist openclaw.plugin.json package.json config.json accounts "$OPENCLAW_ROOT/extensions/wechatpadpro/"
+cp -a node_modules "$OPENCLAW_ROOT/extensions/wechatpadpro/"   # 需要 node_modules
+
+# 2. 在 openclaw.json 注册插件
+#    openclaw.json 里加:
+#      "plugins": { "allow": ["wechatpadpro"], "entries": { "wechatpadpro": { "enabled": true } } }
+
+# 3. 创建 agent + bindings 路由 (把 wechatpadpro 渠道消息路由到你的 agent)
+#    openclaw agents add wpp-wechat    (或 npm run setup add 时自动建)
+
+# 4. 重启你的 gateway
+```
 
 部署完成验证:
 
 ```bash
-systemctl --user status openclaw-gateway          # active (running)
-journalctl --user -u openclaw-gateway -n 50 | grep "WPP v"   # 插件已加载
-journalctl --user -u openclaw-gateway -n 50 | grep "account fully started"  # 账号已启动
+systemctl --user status "${GATEWAY_SERVICE:-openclaw-gateway}"          # active (running)
+journalctl --user -u "${GATEWAY_SERVICE:-openclaw-gateway}" -n 50 | grep "wppChannelPlugin registered"  # 插件已注册
+journalctl --user -u "${GATEWAY_SERVICE:-openclaw-gateway}" -n 50 | grep "account fully started"        # 账号已启动
 ```
 
 ---

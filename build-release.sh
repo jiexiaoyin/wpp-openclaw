@@ -90,6 +90,12 @@ fs.writeFileSync('release/config.json', JSON.stringify(c,null,2));
 # 只拷 accounts 模板 (绝不拷真实 default.json/alice.json.disabled — 含老板配置+凭证, 泄露!)
 mkdir -p release/accounts
 cp accounts/default.json.example release/accounts/
+# 部署脚本 (v1.3.55 RELEASE-GENERIC: 已通用化, OPENCLAW_ROOT/GATEWAY_SERVICE/BACKUP_ROOT 可 env 覆盖)
+cp deploy.sh release/
+cp deploy-swap.sh release/
+# db schema (plugin init 自动建表用; 之前漏拷, 接收方日志会有 schema.sql not found warning)
+mkdir -p release/db
+cp db/schema.sql release/db/
 # 发布版文档 (对外开源版, 无 dev 内部引用) — 源在 release-docs/ (独立维护, 不被 rm -rf 删除)
 cp release-docs/GETTING_STARTED.md release/
 cp release-docs/README.md release/

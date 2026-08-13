@@ -4,6 +4,16 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.55]
+- 2026-08-13 (RELEASE-GENERIC — 分享版可被接收方用自己的 OpenClaw 部署)
+- **deploy 脚本通用化**: `OPENCLAW_ROOT` (默认 $HOME/.openclaw) / `GATEWAY_SERVICE` (默认 openclaw-gateway) / `BACKUP_ROOT` (默认 /data) 全 env 可覆盖.
+  - `deploy-swap.sh`: openclaw.json 不存在则 fail 并提示; gateway 非 systemd 则跳过重启 + journalctl verify, 提示手动重启; GATEWAY_ENV 不存在跳过 env 注入
+  - `deploy.sh`: OPENCLAW_ROOT 可覆盖探测/手动部署提示
+- **setup-wizard.ts**: openclawRoot / backupDir 支持 `OPENCLAW_ROOT` / `BACKUP_ROOT` env (接收方非 root 环境)
+- **build-release.sh**: 发布包收进 `deploy.sh` + `deploy-swap.sh` (通用化后) + `db/schema.sql` (补漏拷, 防接收方 schema.sql not found warning)
+- **release-docs/GETTING_STARTED.md**: 加"用自己的 OpenClaw 部署"三种环境表 (systemd/docker/非root) + 手动接入步骤
+- **测试**: 801/801 全绿; tsc 0 错
+
 ## [v1.3.54]
 - 2026-08-12 (RELAY-TRIGGER — 接龙消息触发 AI 鼓励, 华为群)
 - **根因 (老板反馈"接龙一直没 LLM 介入")**: 真实 vendor 接龙推送是 **type=49 (app, category=app_message)**, 但 handler 只判断 `msgType===53` (describeMsgType 映射的 chat-history) → relay 解析从未执行; 且 msgTypeTrigger 未配置 → 接龙消息不触发 dispatch → **AI 完全不介入**。v1.3.37 RELAY-PARSE 测试用的 53 是假设, 跟真实 vendor 数据不符 (集成 bug)。

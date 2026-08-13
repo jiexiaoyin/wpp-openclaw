@@ -220,7 +220,7 @@ export async function diagnoseAccount(accountId: string): Promise<CheckResult[]>
   // ---- agent 绑定 ----
   if (cfg.agent) {
     try {
-      const raw = await readFileAsync("/root/.openclaw/openclaw.json", "utf8");
+      const raw = await readFileAsync(`${process.env.OPENCLAW_ROOT || "/root/.openclaw"}/openclaw.json`, "utf8");
       const ocfg = JSON.parse(raw) as { agents?: { list?: Array<{ id?: string }> } };
       const exists = (ocfg.agents?.list ?? []).some((a) => a.id === cfg.agent);
       check(`agent '${cfg.agent}' 在 openclaw.json`, exists, exists ? "pass" : "fail", exists ? "OK" : "未找到, 需 npm run setup add 时同步创建");
@@ -619,8 +619,9 @@ export async function ensureAgentWorkspace(
     agentId,
     cloneFrom,
     patchOpenclawJson = true,
-    openclawRoot = "/root/.openclaw",
-    backupDir = `/data/openclaw-create-agent-${Date.now()}`,
+    // v1.3.55 RELEASE-GENERIC: OpenClaw 根目录可 env 覆盖 (接收方用自己的 OpenClaw)
+    openclawRoot = process.env.OPENCLAW_ROOT || "/root/.openclaw",
+    backupDir = `${process.env.BACKUP_ROOT || "/data"}/openclaw-create-agent-${Date.now()}`,
   } = opts;
 
   const workspaceDir = `${openclawRoot}/workspace/${agentId}`;
