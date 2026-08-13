@@ -12,55 +12,75 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { MCP_BASE_URL, MCP_AUTH_TOKEN_ENV, MCP_TIMEOUT_MS, LOG_TAG } from "./core/constants.js";
 import { info, warn, error as logError, formatErr } from "./core/logger.js";
+import { getDefaultAccountRegistry } from "./account-state.js";
 
 // ============ 模块级单例 (lazy init) ============
+// v1.3.60 MCP-MULTIACCOUNT (2026-08-13): 多账号适配 — 连接按 accountId 隔离。
+//   token 从账号 config.authcodeEnv 解析 (每账号独立 authcode env), 连接 Map key=accountId。
+//   单账号 (default) 行为不变 (用 WECHATPRO_AUTHCODE)。
 
-let _client: Client | null = null;
-let _transport: StreamableHTTPClientTransport | null = null;
-let _token: string | null = null;
-let _connectedAt: number = 0;
-let _connectPromise: Promise<boolean> | null = null;
+interface McpConn {
+  client: Client;
+  transport: StreamableHTTPClientTransport;
+  token: string;
+  connectedAt: number;
+  connectPromise: Promise<boolean> | null;
+}
+const _conns = new Map<string, McpConn>();
 
-/** 读取 MCP 鉴权 token (env var, 复用 WECHATPRO_AUTHCODE) */
-export function getMcpToken(): string | null {
-  if (_token) return _token;
-  const t = process.env[MCP_AUTH_TOKEN_ENV];
-  if (t) _token = t;
-  return _token;
+/**
+ * 解析指定账号的 MCP token (Bearer authcode)。
+ * 多账号: 账号 config.authcodeEnv → env 值; 单账号/default: WECHATPRO_AUTHCODE。
+ */
+export function getMcpToken(accountId?: string): string | null {
+  if (accountId && accountId !== "default") {
+    try {
+      const state = getDefaultAccountRegistry().get(accountId);
+      const authcodeEnv = state?.config.authcodeEnv || "WECHATPRO_AUTHCODE";
+      return process.env[authcodeEnv] ?? null;
+    } catch {
+      return process.env[MCP_AUTH_TOKEN_ENV] ?? null;
+    }
+  }
+  return process.env[MCP_AUTH_TOKEN_ENV] ?? null;
 }
 
 /**
- * 连接 vendor MCP (幂等, 并发安全)。
+ * 连接 vendor MCP (幂等, 并发安全, per-account)。
  * 失败不抛 — 返回 false, 调用方走 fallback (不卡主链路)。
  */
-export async function connectMcpClient(): Promise<boolean> {
-  const token = getMcpToken();
+export async function connectMcpClient(accountId?: string): Promise<boolean> {
+  const token = getMcpToken(accountId);
   if (!token) {
-    warn(`${LOG_TAG} [VENDOR-MCP] connect skipped: no ${MCP_AUTH_TOKEN_ENV} env var`);
+    warn(`${LOG_TAG} [VENDOR-MCP] connect skipped: no authcode for account=${accountId ?? "default"}`);
     return false;
   }
+  const key = accountId ?? "default";
+  const existing = _conns.get(key);
   // 已连接且 5 分钟内 → 直接 true
-  if (_client && _transport && Date.now() - _connectedAt < 5 * 60 * 1000) {
+  if (existing?.client && existing?.transport && Date.now() - existing.connectedAt < 5 * 60 * 1000) {
     return true;
   }
-  // 并发连接去重 (放最前, 防并发过期调用各自开新连接)
-  if (_connectPromise) return _connectPromise;
+  // 并发连接去重
+  if (existing?.connectPromise) return existing.connectPromise;
 
-  _connectPromise = (async () => {
+  const entry: McpConn = { client: null as never, transport: null as never, token, connectedAt: 0, connectPromise: null };
+  _conns.set(key, entry);
+  entry.connectPromise = (async () => {
     try {
       // v1.2.1 P2-fix: 重连前 close 旧 transport (防 SSE 连接每 5 分钟泄漏)
-      if (_transport) {
-        try { await _transport.close(); } catch { /* ignore */ }
+      if (entry.transport) {
+        try { await entry.transport.close(); } catch { /* ignore */ }
       }
-      if (_client) {
-        try { await _client.close(); } catch { /* ignore */ }
+      if (entry.client) {
+        try { await entry.client.close(); } catch { /* ignore */ }
       }
       const transport = new StreamableHTTPClientTransport(
         new URL(MCP_BASE_URL),
         {
           requestInit: {
             headers: {
-              Authorization: `Bearer ${token}`,
+              Authorization: `Bearer ${entry.token}`,
               "Content-Type": "application/json",
             },
             // 注: SDK 内部覆盖 signal (requestInit.signal 死代码), 用下方 Promise.race 硬超时
@@ -81,51 +101,57 @@ export async function connectMcpClient(): Promise<boolean> {
       } finally {
         if (timeoutId) clearTimeout(timeoutId);
       }
-      _client = client;
-      _transport = transport;
-      _connectedAt = Date.now();
-      info(`${LOG_TAG} [VENDOR-MCP] connected: url=${MCP_BASE_URL}`);
+      entry.client = client;
+      entry.transport = transport;
+      entry.connectedAt = Date.now();
+      info(`${LOG_TAG} [VENDOR-MCP] connected: url=${MCP_BASE_URL} account=${key}`);
       return true;
     } catch (e) {
-      logError(`${LOG_TAG} [VENDOR-MCP] connect failed: ${formatErr(e)}`, { url: MCP_BASE_URL });
-      _client = null;
-      _transport = null;
+      logError(`${LOG_TAG} [VENDOR-MCP] connect failed: ${formatErr(e)}`, { url: MCP_BASE_URL, account: key });
+      entry.client = null as never;
+      entry.transport = null as never;
       return false;
     } finally {
-      _connectPromise = null;
+      entry.connectPromise = null;
     }
   })();
-  return _connectPromise;
+  return entry.connectPromise;
 }
 
 /**
  * 调 vendor MCP 工具。失败不抛 → 返回 null, 调用方 fallback。
+ * v1.3.60: accountId 参数 — 多账号下用对应账号的 MCP 连接/token。
  */
 export async function callMcpTool(
   name: string,
   args: Record<string, unknown> = {},
+  accountId?: string,
 ): Promise<unknown | null> {
-  const ok = await connectMcpClient();
-  if (!ok || !_client) return null;
+  const key = accountId ?? "default";
+  const ok = await connectMcpClient(key);
+  const conn = _conns.get(key);
+  if (!ok || !conn?.client) return null;
   try {
-    const result = await _client.callTool({
+    const result = await conn.client.callTool({
       name,
       arguments: args,
     }, undefined, { timeout: MCP_TIMEOUT_MS });
-    info(`${LOG_TAG} [VENDOR-MCP] callTool ok: ${name} args=${JSON.stringify(args).slice(0, 100)}`);
+    info(`${LOG_TAG} [VENDOR-MCP] callTool ok: ${name} account=${key} args=${JSON.stringify(args).slice(0, 100)}`);
     return result;
   } catch (e) {
-    warn(`${LOG_TAG} [VENDOR-MCP] callTool failed: ${name} ${formatErr(e)}`, { tool: name });
+    warn(`${LOG_TAG} [VENDOR-MCP] callTool failed: ${name} account=${key} ${formatErr(e)}`, { tool: name });
     return null;
   }
 }
 
 /** 获取 vendor MCP 工具列表 (诊断用) */
-export async function listMcpTools(): Promise<string[] | null> {
-  const ok = await connectMcpClient();
-  if (!ok || !_client) return null;
+export async function listMcpTools(accountId?: string): Promise<string[] | null> {
+  const key = accountId ?? "default";
+  const ok = await connectMcpClient(key);
+  const conn = _conns.get(key);
+  if (!ok || !conn?.client) return null;
   try {
-    const tools = await _client.listTools();
+    const tools = await conn.client.listTools();
     return tools.tools.map((t) => t.name);
   } catch (e) {
     warn(`${LOG_TAG} [VENDOR-MCP] listTools failed: ${formatErr(e)}`);
@@ -133,19 +159,19 @@ export async function listMcpTools(): Promise<string[] | null> {
   }
 }
 
-/** 断开 MCP (shutdown 时调用) */
+/** 断开 MCP (shutdown 时调用, 全部账号) */
 export async function disconnectMcpClient(): Promise<void> {
-  if (_transport) {
-    try {
-      await _transport.close();
-    } catch (e) {
-      warn(`${LOG_TAG} [VENDOR-MCP] disconnect warn: ${formatErr(e)}`);
+  for (const [key, conn] of _conns) {
+    if (conn.transport) {
+      try {
+        await conn.transport.close();
+      } catch (e) {
+        warn(`${LOG_TAG} [VENDOR-MCP] disconnect warn (${key}): ${formatErr(e)}`);
+      }
     }
   }
-  _client = null;
-  _transport = null;
-  _connectedAt = 0;
-  info(`${LOG_TAG} [VENDOR-MCP] disconnected`);
+  _conns.clear();
+  info(`${LOG_TAG} [VENDOR-MCP] disconnected all (${_conns.size} remaining)`);
 }
 
 // ============ 文件下载增强 (MCP 视角) ============
@@ -161,8 +187,10 @@ export async function disconnectMcpClient(): Promise<void> {
 export async function resolveFileViaMcp(
   localId: number,
   filename: string,
+  accountId?: string,
 ): Promise<{ cdnUrl: string; originContent: string } | null> {
-  const recent = await callMcpTool("wechat_get_recent_messages", { limit: 500 });
+  // v1.3.60 MULTI-ACCOUNT: 传 accountId → 用对应账号的 MCP 连接/token
+  const recent = await callMcpTool("wechat_get_recent_messages", { limit: 500 }, accountId);
   if (!recent) {
     warn(`${LOG_TAG} [VENDOR-MCP] resolveFileViaMcp: get_recent_messages null (fallback)`);
     return null;

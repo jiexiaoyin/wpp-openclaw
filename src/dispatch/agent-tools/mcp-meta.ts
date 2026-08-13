@@ -27,13 +27,15 @@ function mcpEnabledForCurrentAccount(): boolean {
 
 /**
  * 调 MCP 只读工具, 返回可读文本。
+ * v1.3.60 MULTI-ACCOUNT: 传当前账号 id 给 callMcpTool (per-account token/连接)。
  * callMcpTool 返回 {content:[{type:"text",text}]} 或 null → 归一化成 text (供 AI 读)。
  */
 async function readMcp(name: string, args: Record<string, unknown> = {}): Promise<string> {
+  const accountId = getCurrentAccountId();
   if (!mcpEnabledForCurrentAccount()) {
-    return `MCP 未启用 (账号 mcpEnabled=false), 无法调用 ${name}`;
+    return `MCP 未启用 (账号 ${accountId ?? "default"} mcpEnabled=false), 无法调用 ${name}`;
   }
-  const r = await callMcpTool(name, args);
+  const r = await callMcpTool(name, args, accountId);
   if (!r) return `MCP ${name} 调用失败 (vendor MCP 不可用或无 WECHATPRO_AUTHCODE env)`;
   const result = r as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
   if (result.isError) return `MCP ${name} 返回错误: ${result.content?.[0]?.text ?? "unknown"}`;

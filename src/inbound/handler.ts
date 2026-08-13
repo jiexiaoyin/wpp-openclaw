@@ -325,7 +325,7 @@ export function createWppInboundHandler(
             // 路径 2: MCP 增强 (旧路径, 只调只读工具, 不碰写)
             if (!gotUrl && opts.vendorCtx && localId && opts.mcpEnabled !== false) {
               try {
-                const fR = await enrichFileMessageViaMcp(localId, filename);
+                const fR = await enrichFileMessageViaMcp(localId, filename, m.accountId);
                 if (fR.mediaUrl) {
                   m.content = `${m.content}\n[文件] ${filename} (${ext ? ext.toUpperCase() : "未知格式"}) ${fR.mediaUrl}`;
                   log.info(`[WPP v1.2.0 VENDOR-MCP] file via MCP ok: msgId=${m.msgId} localId=${localId} url=${fR.mediaUrl}`);

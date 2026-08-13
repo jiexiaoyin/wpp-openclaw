@@ -4,6 +4,15 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.60]
+- 2026-08-13 (MCP-MULTIACCOUNT — MCP 多账号适配)
+- **MCP client 重构为 per-account 连接**: token 从账号 `config.authcodeEnv` 解析 (每账号独立 authcode env), 连接 Map key=accountId
+  - `getMcpToken(accountId?)` / `connectMcpClient(accountId?)` / `callMcpTool(name, args, accountId?)` / `listMcpTools(accountId?)`
+  - 单账号 (default) 行为不变 (WECHATPRO_AUTHCODE)
+  - mcp-meta 传当前账号 id; resolveFileViaMcp / enrichFileMessageViaMcp 透传 accountId
+- **修复**: 之前 MCP 全局单例用 default 的 authcode → 非 default 账号 MCP 工具查错账号数据
+- **测试**: 新增 getMcpToken 按账号 authcodeEnv 解析 (tests/agent-tools-mcp.test.ts); 826/826 串行全绿; tsc 0 错
+
 ## [v1.3.59]
 - 2026-08-13 (FULL-FIX — 完整审阅 P0/P1/P2 全量修复 + 补关键测试)
 - **P0-1 [正确性]**: persistOutboundMsg 判据加 `BaseResponse.ret` 检查 (Code=0+ret≠0 不入库, 防幽灵 outbound 记录)

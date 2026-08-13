@@ -116,3 +116,33 @@ test("v1.3.58 MCP-READONLY — readMcp 成功路径 (isError 分支)", async () 
     else reg.contexts.delete("default");
   }
 });
+
+test("v1.3.60 MULTI-ACCOUNT — getMcpToken 按账号 authcodeEnv 解析", async () => {
+  const { getMcpToken } = await import("../src/vendor-mcp-client.js");
+  const { getDefaultAccountRegistry } = await import("../src/account-state.js");
+  const { AccountContext } = await import("../src/accounts/account-context.js");
+  const reg = getDefaultAccountRegistry() as unknown as { contexts: Map<string, unknown> };
+  const saved = reg.contexts.get("accX");
+  try {
+    const cfg = {
+      enabled: true, tokenKey: "tk", apiBaseUrl: "http://x", wsUrl: "ws://x",
+      authcode: "", authcodeEnv: "WECHATPRO_ACCX_AUTHCODE",
+      webhookHost: "127.0.0.1", webhookPort: 0, webhookPath: "/w",
+      webhookSecret: "", allowFrom: [], groupPolicy: "open" as const, groupAllowFrom: [],
+      selfWxid: "w", nickname: "n", requireAtMention: true, debounceMs: 1500,
+      agent: "wpp-accx",
+    };
+    reg.contexts.set("accX", new AccountContext({ accountId: "accX", config: cfg }));
+    const savedEnv = process.env.WECHATPRO_ACCX_AUTHCODE;
+    process.env.WECHATPRO_ACCX_AUTHCODE = "accx-token-123";
+    try {
+      assert.equal(getMcpToken("accX"), "accx-token-123", "accX 用 authcodeEnv=WECHATPRO_ACCX_AUTHCODE");
+    } finally {
+      if (savedEnv === undefined) delete process.env.WECHATPRO_ACCX_AUTHCODE;
+      else process.env.WECHATPRO_ACCX_AUTHCODE = savedEnv;
+    }
+  } finally {
+    if (saved) reg.contexts.set("accX", saved);
+    else reg.contexts.delete("accX");
+  }
+});

@@ -169,9 +169,11 @@ export async function enrichFileMessageFromV1Binary(
 export async function enrichFileMessageViaMcp(
   localId: number,
   filename: string,
+  accountId?: string,
 ): Promise<FileEnrichResult> {
   const { resolveFileViaMcp: mcpResolve } = await import("../../vendor-mcp-client.js");
-  const resolved = await mcpResolve(localId, filename);
+  // v1.3.60 MULTI-ACCOUNT: 传 accountId → MCP 用对应账号 token
+  const resolved = await mcpResolve(localId, filename, accountId);
   if (!resolved?.cdnUrl) {
     return { mediaUrl: null, filename, size: null, error: "mcp no cdn url" };
   }
