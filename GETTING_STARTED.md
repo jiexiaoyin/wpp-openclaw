@@ -1,6 +1,6 @@
 # 快速开始 (GETTING_STARTED.md)
 
-> **当前版本: v1.3.54** · 从零到可用 · 预计 20 分钟
+> **当前版本: v1.3.62** · 从零到可用 · 预计 20 分钟
 > 本包只含编译产物, 不含 TypeScript 源码。
 
 ---
@@ -55,7 +55,21 @@ export WPP_SILK_DECODER_PATH="/path/to/silk/decoder"
 
 ---
 
-## 2. 安装 (5 步)
+## 2. 安装 (6 步)
+
+> **先部署服务端, 再装插件**: 插件依赖服务端提供 HTTP API + WS。
+
+### 2.0 部署服务端 (vendor, 本包已含)
+
+```bash
+# 解压 → 配置 → 运行 (详细见 vendor/README.md)
+mkdir -p vendor && tar xzf vendor/20260809_030557_linux64_v8_m4.1.12.29_p8.0.75.53.tar.gz -C vendor
+#   编辑 conf/app.conf: user_token_key = "<你的 TokenKey>", redislink 指向你的 Redis
+cd vendor && ./wechatpadpromax08
+#   验证: curl http://127.0.0.1:8062  (swagger: http://127.0.0.1:8062/swagger/)
+```
+
+> 插件需能访问服务端: 同机用 `http://127.0.0.1:8062`, 跨机用 nginx 反代 + `WPP_VENDOR_HOST`。
 
 **前提**: 你的 OpenClaw gateway 已运行 (v2026.7.1+ 兼容的 channel 插件契约), 本插件随包的 `deploy.sh` 会自动注册到你的 OpenClaw。
 
@@ -79,11 +93,11 @@ npm run setup add default
 # 4. 设环境变量 (WECHATPRO_TOKEN_KEY / WECHATPRO_AUTHCODE / WECHATPRO_DB_PASSWORD / WPP_VENDOR_HOST / WPP_SILK_ENCODER_PATH)
 
 # 5. 部署 (dry-run 验证 → 真实部署, 自动: 拷贝插件到 $OPENCLAW_ROOT/extensions/ + 注册 openclaw.json + 重启 gateway)
-bash deploy.sh                # 验证 (19 项全 PASS 再继续)
+bash deploy.sh                # 验证 (18+ 项全 PASS 再继续)
 bash deploy-swap.sh --force   # 真实部署
 ```
 
-> **为什么 zip 只有 164KB?** 发布包只含编译产物 (dist/), **不含 node_modules** (依赖约 92MB)。接收方 `npm ci` 时会根据 `package.json` 自动下载全部依赖, 这是标准发布做法, 不是缺文件。
+> **发布包含服务端**: zip 13M = 编译产物 (dist/) + 配套服务端 (vendor/) + 文档。**不含 node_modules** (依赖约 92MB), 接收方 `npm ci` 时自动下载, 这是标准发布做法, 不是缺文件。
 
 ### 2.1 用自己的 OpenClaw 部署 (三种环境)
 
