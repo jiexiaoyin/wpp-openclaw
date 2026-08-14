@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { info, warn, debug, formatErr } from "../core/logger.js";
 export function buildFileAutoReply(content) {
     if (!content)
@@ -66,6 +67,13 @@ function buildSessionKeyForMsg(msg) {
         peerKind: msg.peerKind,
         peerId: msg.peerId,
     });
+}
+function resolveAccountAgentId(msg) {
+    const registry = getDefaultAccountRegistry();
+    const accountCtx = registry.get(msg.accountId);
+    if (!accountCtx)
+        return undefined;
+    return accountCtx.config.agent;
 }
 function resolveGroupContextEnabled(msg) {
     try {
@@ -392,7 +400,34 @@ function buildCtxPayload(msg, sessionKey, injectedContext) {
         MediaTypes: mediaTypes,
     };
 }
+const _outboundDedup = new Map();
+export const OUTBOUND_DEDUP_WINDOW_MS = 5 * 60 * 1000;
+export const ACK_TEMPLATE_RE = /\[[^\]]*(Previous reply already sent|No further action|Reply.*delivered|reply delivered successfully)[^\]]*\]/i;
+export function sweepOutboundDedup(now) {
+    if (_outboundDedup.size < 1024)
+        return;
+    for (const [k, ts] of _outboundDedup) {
+        if (now - ts > OUTBOUND_DEDUP_WINDOW_MS)
+            _outboundDedup.delete(k);
+    }
+}
+export function dedupKeyFor(accountId, toWxid, text) {
+    const h = createHash("sha1").update(text).digest("hex");
+    return `${accountId}|${toWxid}|${h}`;
+}
 async function sendAiReply(accountId, toWxid, text, replyTo) {
+    if (ACK_TEMPLATE_RE.test(text)) {
+        warn(`[WPP v1.3.63 ACK-TEMPLATE-DROP] suppressed AI self-generated ack template: textLen=${text.length} head="${text.slice(0, 60).replace(/\n/g, " ")}" account=${accountId} to=${toWxid}`);
+        return { ok: true, msgId: "ack-template-dropped" };
+    }
+    const now = Date.now();
+    const dedupKey = dedupKeyFor(accountId, toWxid, text);
+    sweepOutboundDedup(now);
+    const lastAt = _outboundDedup.get(dedupKey);
+    if (lastAt !== undefined && (now - lastAt) < OUTBOUND_DEDUP_WINDOW_MS) {
+        warn(`[WPP v1.3.63 OUTBOUND-DEDUPE] suppressed duplicate within ${Math.round((now - lastAt) / 1000)}s: account=${accountId} to=${toWxid} len=${text.length}`);
+        return { ok: true, msgId: "dedup-suppressed" };
+    }
     const registry = getDefaultAccountRegistry();
     const ctx = registry.get(accountId);
     if (!ctx) {
@@ -413,11 +448,15 @@ async function sendAiReply(accountId, toWxid, text, replyTo) {
                 createtime: replyTo.createtime,
                 innerType: replyTo.innerType,
             });
-            return qr.ok
-                ? { ok: true, msgId: qr.data?.msgId }
-                : { ok: false, error: qr.msg };
+            if (qr.ok) {
+                _outboundDedup.set(dedupKey, now);
+                return { ok: true, msgId: qr.data?.msgId };
+            }
+            return { ok: false, error: qr.msg };
         }
         const r = await sendText(accountId, toWxid, text);
+        if (r.ok)
+            _outboundDedup.set(dedupKey, now);
         return r.ok ? { ok: true, msgId: r.msgId } : { ok: false, error: r.error };
     }
     catch (e) {
@@ -514,11 +553,16 @@ async function dispatchOne(msg, ctx = {}) {
             return;
         }
     }
+    const accountAgentId = resolveAccountAgentId(msg);
+    const cfgBase = (ctx.cfg ?? getOpenClawConfig() ?? {});
+    const cfgWithAgent = (accountAgentId && !cfgBase.agentId)
+        ? { ...cfgBase, agentId: accountAgentId }
+        : cfgBase;
     try {
         await accountContext.run(msg.accountId, async () => {
             await runtime.reply.dispatchReplyWithBufferedBlockDispatcher({
                 ctx: ctxPayload,
-                cfg: ctx.cfg ?? getOpenClawConfig() ?? {},
+                cfg: cfgWithAgent,
                 replyOptions: {},
                 dispatcherOptions: {
                     deliver: async (payload, _info) => {

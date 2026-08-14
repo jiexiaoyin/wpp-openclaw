@@ -22,6 +22,15 @@ const runtimeTriggerCtxs = new Map();
 const runtimeInboundHandlers = new Map();
 let sharedWebhookServer = null;
 let sharedWebhookServerPort = null;
+export function deriveWebhookPaths(cfg) {
+    const webhookPath = cfg.webhookPathToken
+        ? cfg.webhookPath.replace(/\/wechatpadpro\//, `/wechatpadpro/${cfg.webhookPathToken}/`)
+        : cfg.webhookPath;
+    const businessPath = cfg.webhookPathToken
+        ? `${webhookPath}/business`
+        : (cfg.webhookBusinessPath ?? `${cfg.webhookPath}/business`);
+    return { webhookPath, businessPath };
+}
 function maskSecret(secret) {
     if (!secret)
         return "(empty)";
@@ -290,10 +299,8 @@ export async function startAccountById(accountId, _agentId = "main") {
     else if (!cfg.authcode) {
         log.warn(`ws client skipped (no authcode): ${accountId}`);
     }
+    const { webhookPath, businessPath } = deriveWebhookPaths(cfg);
     if (!state.webhookServer) {
-        const webhookPath = cfg.webhookPath;
-        const businessPath = cfg.webhookBusinessPath ?? `${cfg.webhookPath}/business`;
-        const isFirstWebhookAccount = !sharedWebhookServer;
         const srv = sharedWebhookServer ?? new WechatpadproWebhookServer(cfg.webhookHost, cfg.webhookPort, [], cfg.webhookSecret);
         if (!sharedWebhookServer) {
             sharedWebhookServer = srv;
@@ -330,11 +337,10 @@ export async function startAccountById(accountId, _agentId = "main") {
             log.info(`business callback: received payload (top keys=${Object.keys(payload ?? {}).join(",")})`);
             await inboundHandler.handle(payload);
         });
-        if (isFirstWebhookAccount)
-            state.attachWebhookServer(srv);
+        state.attachWebhookServer(srv, [webhookPath, businessPath]);
     }
     if (cfg.autoSetWebhook && cfg.webhookPublicUrl && cfg.authcode) {
-        const url = `${cfg.webhookPublicUrl.replace(/\/$/, "")}${cfg.webhookPath}`;
+        const url = `${cfg.webhookPublicUrl.replace(/\/$/, "")}${webhookPath}`;
         const maxAttempts = cfg.setWebhookRetries ?? 3;
         let lastErr;
         let ok = false;
@@ -396,7 +402,6 @@ export async function startAccountById(accountId, _agentId = "main") {
         log.warn(`autoSetWebhook enabled but authcode missing: account=${accountId} (跳过 setWebhook)`);
     }
     if (cfg.autoSetWebhook && cfg.webhookPublicUrl && cfg.authcode) {
-        const businessPath = cfg.webhookBusinessPath ?? `${cfg.webhookPath}/business`;
         const syncMessageUrl = `${cfg.webhookPublicUrl.replace(/\/$/, "")}${businessPath}`;
         const logoutUrl = `${cfg.webhookPublicUrl.replace(/\/$/, "")}${businessPath}/logout`;
         try {
@@ -420,7 +425,7 @@ export async function startAccountById(accountId, _agentId = "main") {
         }
     }
     log.info(`[WPP v${PLUGIN_VERSION} STARTUP] account=${accountId} ` +
-        `webhook=${cfg.webhookHost}:${cfg.webhookPort}${cfg.webhookPath} ` +
+        `webhook=${cfg.webhookHost}:${cfg.webhookPort}${webhookPath} ` +
         `autoSetWebhook=${cfg.autoSetWebhook !== false} ` +
         `mcpEnabled=${cfg.mcpEnabled !== false} ` +
         `groupContext=${cfg.groupContextEnabled === true ? "ON" : "OFF"} ` +
@@ -440,6 +445,17 @@ export async function startAllAccounts(agentId = "main") {
 }
 export async function shutdown() {
     await getDefaultAccountRegistry().stopAll();
+    if (sharedWebhookServer) {
+        try {
+            await sharedWebhookServer.stop();
+        }
+        catch (e) {
+            log.warn(`shared webhook server stop error (non-fatal): ${formatErr(e)}`);
+        }
+        sharedWebhookServer = null;
+        sharedWebhookServerPort = null;
+        log.info("shared webhook server stopped + cleared");
+    }
     try {
         const { disconnectMcpClient } = await import("./vendor-mcp-client.js");
         await disconnectMcpClient();

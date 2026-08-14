@@ -1,6 +1,6 @@
 import { logObj as log, formatErr } from "../../core/logger.js";
 import { parseImageXml } from "./xml.js";
-import { loadOssConfig, uploadToOss, downloadImageBase64, buildOssKey } from "./shared.js";
+import { loadOssConfig, uploadToOss, downloadImageBase64, buildOssKey, sanitizeFilenamePart } from "./shared.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +20,7 @@ export async function enrichImageMessage(ctx, xml) {
         const img = Buffer.from(b64, "base64");
         tmpPath = path.join(os.tmpdir(), `wpp-img-${crypto.randomBytes(6).toString("hex")}.jpg`);
         fs.writeFileSync(tmpPath, img);
-        const filename = `${parsed.md5 ?? crypto.randomBytes(8).toString("hex")}.jpg`;
+        const filename = `${sanitizeFilenamePart(parsed.md5)}.jpg`;
         const ossKey = buildOssKey(ctx.accountId, "images", filename);
         const url = await uploadToOss(oss, tmpPath, ossKey);
         log.info(`[WPP v1.2.0] image enrich OSS: ${url} (${img.length} bytes)`);
@@ -70,7 +70,7 @@ export async function enrichImageMessageFromV1(ctx, localId, toWxid, md5) {
         }
         tmpPath = path.join(os.tmpdir(), `wpp-v1-img-${crypto.randomBytes(6).toString("hex")}.jpg`);
         fs.writeFileSync(tmpPath, img);
-        const filename = `${md5 ?? crypto.randomBytes(8).toString("hex")}-${localId}.jpg`;
+        const filename = `${sanitizeFilenamePart(md5)}-${localId}.jpg`;
         const ossKey = buildOssKey(ctx.accountId, "images", filename);
         const url = await uploadToOss(oss, tmpPath, ossKey);
         log.info(`[WPP v1.2.0 V1-SCHEMA-ENRICH] image enrich (v1 schema) ok: localId=${localId} url=${url} (${img.length} bytes, vendor 64KB cap)`);
@@ -107,7 +107,7 @@ export async function enrichImageMessageFromV1Cdn(ctx, cdnCtx, md5) {
         }
         tmpPath = path.join(os.tmpdir(), `wpp-v1-img-cdn-${crypto.randomBytes(6).toString("hex")}.jpg`);
         fs.writeFileSync(tmpPath, img);
-        const filename = `${md5 ?? crypto.randomBytes(8).toString("hex")}.jpg`;
+        const filename = `${sanitizeFilenamePart(md5)}.jpg`;
         const ossKey = buildOssKey(ctx.accountId, "images", filename);
         const url = await uploadToOss(oss, tmpPath, ossKey);
         log.info(`[WPP v1.2.5 IMAGE-CDN-DOWNLOAD] ok: ${url} (${img.length} bytes, variant=${cdnCtx.variant ?? "?"})`);

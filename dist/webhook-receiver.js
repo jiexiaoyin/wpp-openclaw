@@ -24,6 +24,13 @@ export class WechatpadproWebhookServer {
         this.paths.push({ path, onMessage });
         log.info(`[WPP v1.3.61] webhook addPath: ${path} (total ${this.paths.length})`);
     }
+    removePath(path) {
+        const before = this.paths.length;
+        this.paths = this.paths.filter((p) => p.path !== path);
+        if (this.paths.length !== before) {
+            log.info(`[WPP v1.3.63] webhook removePath: ${path} (total ${this.paths.length})`);
+        }
+    }
     async start() {
         return new Promise((resolve, reject) => {
             this.server = createServer((req, res) => {

@@ -47,7 +47,10 @@ export function makeWppFriendCircle(ctx) {
         uploadVideo: (videoData, thumbData) => dispatch("/FriendCircle/UploadVideo", { videoData, thumbData }),
         uploadImage: (imageData) => dispatch("/FriendCircle/UploadImage", { imageData }),
         uploadImages: (imageDataList) => dispatch("/FriendCircle/UploadImages", { imageDataList }),
-        messagesRaw: (content, blackList = "", withUserList = "") => dispatch("/FriendCircle/MessagesRaw", { content, blackList, withUserList }),
+        messagesRaw: (content, blackList = "", withUserList = "") => {
+            assertFriendCirclePublishAllowed(ctx.accountId);
+            return dispatch("/FriendCircle/MessagesRaw", { content, blackList, withUserList });
+        },
         publishImages: async (title, imageBase64List) => {
             assertFriendCirclePublishAllowed(ctx.accountId);
             if (!imageBase64List.length || imageBase64List.length > 9) {
@@ -76,7 +79,13 @@ export function makeWppFriendCircle(ctx) {
             }
             return dispatch("/FriendCircle/Messages", { title, private: 0, video: item });
         },
-        publishVideoViaItem: async (title, videoItem) => dispatch("/FriendCircle/Messages", { title, private: 0, video: videoItem }),
-        setBackgroundImage: (imageData) => dispatch("/FriendCircle/SetBackgroundImage", { imageData }),
+        publishVideoViaItem: async (title, videoItem) => {
+            assertFriendCirclePublishAllowed(ctx.accountId);
+            return dispatch("/FriendCircle/Messages", { title, private: 0, video: videoItem });
+        },
+        setBackgroundImage: (imageData) => {
+            assertFriendCirclePublishAllowed(ctx.accountId);
+            return dispatch("/FriendCircle/SetBackgroundImage", { imageData });
+        },
     };
 }

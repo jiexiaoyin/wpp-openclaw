@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-const TEXT_CHUNK_LIMIT = 4000;
+const TEXT_CHUNK_LIMIT = 6000;
 function isSendOk(r) {
     if (r.Code !== 0 && r.Code !== 200)
         return false;
@@ -229,24 +229,102 @@ export async function revokeMsg(accountId, toWxid, msgId, newMsgId, createTime) 
     }
     return { ok: true };
 }
-function chunkMarkdown(text, limit) {
+export function chunkMarkdown(text, limit) {
     if (text.length <= limit)
         return [text];
     const out = [];
     let current = "";
+    let inCodeBlock = false;
+    const blocks = [];
+    let buf = "";
+    for (const line of text.split("\n")) {
+        if (/^\s*```/.test(line))
+            inCodeBlock = !inCodeBlock;
+        const isBlank = /^\s*$/.test(line);
+        if (isBlank && !inCodeBlock) {
+            blocks.push(buf);
+            buf = "";
+        }
+        else {
+            buf = buf ? `${buf}\n${line}` : line;
+        }
+    }
+    if (buf)
+        blocks.push(buf);
+    const paragraphs = blocks.map((b) => b.trim()).filter(Boolean);
+    for (const para of paragraphs) {
+        if (para.length <= limit) {
+            if (current.length + para.length + 2 > limit) {
+                if (current)
+                    out.push(current);
+                current = para;
+            }
+            else {
+                current = current ? `${current}\n\n${para}` : para;
+            }
+            continue;
+        }
+        if (current) {
+            out.push(current);
+            current = "";
+        }
+        out.push(...chunkLongParagraph(para, limit));
+    }
+    if (current)
+        out.push(current);
+    return out;
+}
+const CODE_BLOCK_HARD_CAP = 2;
+function chunkLongParagraph(text, limit) {
     const lines = text.split("\n");
+    const out = [];
+    let current = "";
+    let inCodeBlock = false;
     for (const line of lines) {
-        if (current.length + line.length + 1 > limit) {
-            if (current)
+        if (/^```/.test(line))
+            inCodeBlock = !inCodeBlock;
+        if (line.length > limit) {
+            if (current) {
                 out.push(current);
+                current = "";
+            }
+            out.push(...hardSplitLine(line, limit));
+            continue;
+        }
+        const separator = current ? "\n" : "";
+        const wouldExceed = current.length + separator.length + line.length > limit;
+        if (inCodeBlock && current.length + separator.length + line.length > limit * CODE_BLOCK_HARD_CAP) {
+            out.push(current);
+            current = line;
+            continue;
+        }
+        if (wouldExceed && inCodeBlock) {
+            current += `${separator}${line}`;
+            continue;
+        }
+        if (wouldExceed) {
+            out.push(current);
             current = line;
         }
         else {
-            current = current ? `${current}\n${line}` : line;
+            current = current ? `${current}${separator}${line}` : line;
         }
     }
     if (current)
         out.push(current);
+    return out;
+}
+function hardSplitLine(line, limit) {
+    const out = [];
+    let start = 0;
+    while (start < line.length) {
+        let end = Math.min(start + limit, line.length);
+        const ch = line.charCodeAt(end - 1);
+        if (ch >= 0xd800 && ch <= 0xdbff && end < line.length)
+            end -= 1;
+        out.push(line.slice(start, end));
+        start = end;
+    }
     return out;
 }
 export function normalizePayload(text) {

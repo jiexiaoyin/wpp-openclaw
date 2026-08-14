@@ -7,6 +7,7 @@ export class AccountContext {
     createdAt;
     wsClient;
     webhookServer;
+    webhookPaths = [];
     inboundFlushHook = null;
     attachInboundFlush(hook) {
         this.inboundFlushHook = hook;
@@ -76,9 +77,10 @@ export class AccountContext {
         this.wsClient = ws;
         this.info(`ws client attached`);
     }
-    attachWebhookServer(srv) {
+    attachWebhookServer(srv, paths = []) {
         this.webhookServer = srv;
-        this.info(`webhook server attached`, { port: this.config.webhookPort, path: this.config.webhookPath });
+        this.webhookPaths = paths;
+        this.info(`webhook server attached`, { port: this.config.webhookPort, paths });
     }
     setRetryTimer(timer) {
         this.retryTimers.add(timer);
@@ -127,10 +129,13 @@ export class AccountContext {
         }
         if (this.webhookServer) {
             try {
-                await this.webhookServer.stop();
+                for (const p of this.webhookPaths) {
+                    this.webhookServer.removePath(p);
+                }
+                this.webhookPaths = [];
             }
             catch (e) {
-                this.warn(`webhook stop error: ${formatErr(e)}`);
+                this.warn(`webhook removePath error: ${formatErr(e)}`);
             }
         }
         this.info(`account context stopped`);

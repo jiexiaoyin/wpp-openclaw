@@ -97,7 +97,8 @@ export async function callMcpTool(name, args = {}, accountId) {
             name,
             arguments: args,
         }, undefined, { timeout: MCP_TIMEOUT_MS });
-        info(`${LOG_TAG} [VENDOR-MCP] callTool ok: ${name} account=${key} args=${JSON.stringify(args).slice(0, 100)}`);
+        const argKeys = Object.keys((args ?? {})).join(",");
+        info(`${LOG_TAG} [VENDOR-MCP] callTool ok: ${name} account=${key} argKeys=${argKeys}`);
         return result;
     }
     catch (e) {
@@ -169,7 +170,8 @@ export async function resolveFileViaMcp(localId, filename, accountId) {
         warn(`${LOG_TAG} [VENDOR-MCP] resolveFileViaMcp: msg not found localId=${localId} filename=${filename}`);
         return null;
     }
-    info(`${LOG_TAG} [VENDOR-MCP] resolveFileViaMcp: found msg localId=${localId} payload=${JSON.stringify(target).slice(0, 200)}`);
+    const targetKeys = Object.keys((target ?? {})).join(",");
+    info(`${LOG_TAG} [VENDOR-MCP] resolveFileViaMcp: found msg localId=${localId} payloadKeys=${targetKeys}`);
     const rawContent = String(target.content ?? "");
     const cdnUrl = (typeof target.cdnUrl === "string" && target.cdnUrl) ||
         (typeof target.cdn_url === "string" && target.cdn_url) ||

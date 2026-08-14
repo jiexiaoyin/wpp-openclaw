@@ -10,6 +10,7 @@
   "webhookHost": "127.0.0.1",
   "webhookPort": 4398,
   "webhookPath": "/wechatpadpro/default/webhook",
+  "webhookPathToken": "replace-with-random-hex", // v1.3.63 P1-7: 随机 token 插 path 防伪造触发 AI
   "webhookPublicUrl": "",
   "webhookPublicUrlEnv": "WECHATPRO_WEBHOOK_PUBLIC_URL",
   "autoSetWebhook": true,

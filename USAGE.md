@@ -1,6 +1,6 @@
 # 使用指南 (USAGE.md)
 
-> **当前版本: v1.3.62** · 安装见 [GETTING_STARTED.md](./GETTING_STARTED.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
+> **当前版本: v1.3.63** · 安装见 [GETTING_STARTED.md](./GETTING_STARTED.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
 
 WeChatPadPro OpenClaw Plugin 在 OpenClaw 框架下的使用指南: 加载、Agent Tools、消息收发、配置、多账号、验证与监控。
 
@@ -175,7 +175,7 @@ ss -tlnp | grep 4398              # webhook 监听确认
 
 ### 6.3 日志与监控
 
-- 日志格式: `ISO时间 LEVEL [WPP v1.3.62] msg key=value`
+- 日志格式: `ISO时间 LEVEL [WPP v1.3.63] msg key=value`
 - DEBUG: `WPP_DEBUG=1`
 - Prometheus metrics: 14+ counters (received / processed / rejected_* / timeout 等)
 

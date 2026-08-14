@@ -14,7 +14,6 @@ import { payloadToAllInboundMessages } from "./parser.js";
 import { SeenTracker, buildDedupeKey } from "../webhook-receiver.js";
 import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1Cdn, enrichFileMessage, enrichFileMessageFromV1Binary, enrichVideoMessage, enrichVideoMessageFromV1, isV1SchemaVideo, enrichVoiceMessage, enrichVoiceMessageFromV1, isV1SchemaVoice, enrichFileMessageViaMcp, isV1SchemaImage, isV1SchemaFile } from "./media-enrich.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
-import { stringifyLargeInts } from "../util/bigint.js";
 const pendingEnrichs = new Map();
 const RELAY_THROTTLE_MS = 5 * 60 * 1000;
 const relayTriggerAt = new Map();
@@ -339,6 +338,12 @@ export function createWppInboundHandler(opts) {
                     const titleKey = (m.content ?? "").split("\n")[0]?.slice(0, 30) ?? "";
                     const throttleKey = `${m.accountId}:${m.peerId}:${titleKey}`;
                     const now = Date.now();
+                    if (relayTriggerAt.size > 1000) {
+                        for (const [k, ts] of relayTriggerAt) {
+                            if (now - ts > RELAY_THROTTLE_MS)
+                                relayTriggerAt.delete(k);
+                        }
+                    }
                     const lastAt = relayTriggerAt.get(throttleKey) ?? 0;
                     if (now - lastAt >= RELAY_THROTTLE_MS) {
                         relayTriggerAt.set(throttleKey, now);
@@ -431,11 +436,10 @@ export function createWppInboundHandler(opts) {
                 warn(`peerId fixup skipped (non-fatal): ${formatErr(e)}`);
             }
             if (msgs.length === 0) {
-                const jsonStr = stringifyLargeInts(JSON.stringify(payload));
                 const payloadData = payload?.Data;
                 const payloadMsgs = payloadData?.messages;
                 const msgCount = Array.isArray(payloadMsgs) ? payloadMsgs.length : undefined;
-                warn(`inbound parse dropped: account=${opts.accountId} payloadKeys=${Object.keys((payload ?? {})).join(",")} dataKeys=${Object.keys(payloadData ?? {}).join(",")} messagesLen=${msgCount ?? "n/a"} payload=${jsonStr?.slice(0, 2000)}`);
+                warn(`inbound parse dropped: account=${opts.accountId} payloadKeys=${Object.keys((payload ?? {})).join(",")} dataKeys=${Object.keys(payloadData ?? {}).join(",")} messagesLen=${msgCount ?? "n/a"}`);
                 return;
             }
             for (const m of msgs) {

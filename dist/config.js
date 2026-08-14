@@ -81,6 +81,7 @@ export function mergeGuidedConfig(raw, guided) {
     stringField("groupPolicy");
     stringField("agent");
     stringField("webhookPath");
+    stringField("webhookPathToken");
     stringField("nickname");
     stringField("selfWxid");
     const port = guided.webhookPort;

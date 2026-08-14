@@ -10,6 +10,12 @@ export function buildOssKey(accountId, type, filename) {
     const date = new Date().toISOString().slice(0, 10);
     return `wpp/${accountId || "default"}/${type}/${date}/${filename}`;
 }
+export function sanitizeFilenamePart(input, fallbackLen = 16) {
+    const s = typeof input === "string" ? input : "";
+    if (/^[a-f0-9]{8,64}$/i.test(s))
+        return s.toLowerCase();
+    return crypto.randomBytes(Math.ceil(fallbackLen / 2)).toString("hex").slice(0, fallbackLen);
+}
 export function loadOssConfig() {
     try {
         const raw = fs.readFileSync(OSS_CREDENTIALS_PATH, "utf8");
