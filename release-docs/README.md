@@ -36,12 +36,21 @@ npm ci
 cp accounts/default.json.example accounts/default.json
 npm run setup add default
 
-# 3. 部署
-bash deploy.sh               # 验证 (19 项全 PASS)
+# 3. 设环境变量 — WPP_VENDOR_HOST 必设, 否则图片/语音/文件无法下载!
+export WPP_VENDOR_HOST="https://your-vendor-domain"   # 你的服务端域名
+export WECHATPRO_TOKEN_KEY="..."                      # 服务端 API Token
+export WECHATPRO_AUTHCODE="..."                       # 服务端授权码
+export WECHATPRO_DB_PASSWORD="..."                    # MariaDB 密码
+
+# 4. 部署
+bash deploy.sh               # 验证 (18+ 项全 PASS)
 bash deploy-swap.sh --force  # 真实部署
 ```
 
 > **zip 小 = 正常**: 发布包只含编译产物, 不含 node_modules。`npm ci` 会根据 package.json 自动下载全部依赖。
+> **`WPP_VENDOR_HOST` 别漏**: 媒体下载走白名单, 不设则图片/语音/文件全部无法下载。
+
+> **配套服务端**: 本包内含微信服务端二进制 [`vendor/`](./vendor/README.md) (v8_m4.1.12.29_p8.0.75.53), 插件仅适配此版本。
 
 详细步骤见 [GETTING_STARTED.md](./GETTING_STARTED.md)。
 
@@ -138,10 +147,10 @@ wechatpadpro-openclaw/
 
 ## 文档
 
-- [GETTING_STARTED.md](./GETTING_STARTED.md) — 从零安装 + 配置
-- [DEPLOY.md](./DEPLOY.md) — 部署/回滚
-- [USAGE.md](./USAGE.md) — OpenClaw 框架使用
-- [FEATURES.md](./FEATURES.md) — 159 tools + 231 endpoints 清单
+- [GETTING_STARTED.md](./GETTING_STARTED.md) — 从零安装 + 配置 (快速开始)
+- [DEPLOY.md](./DEPLOY.md) — 部署 + 回滚 + 故障排查
+- [USAGE.md](./USAGE.md) — 使用说明 (工具 / 配置 / 多账号 / 监控)
+- [vendor/README.md](./vendor/README.md) — 配套服务端部署
 
 ## 许可证
 

@@ -50,6 +50,21 @@ const runtimeInboundHandlers = new Map<string, ReturnType<typeof createWppInboun
 let sharedWebhookServer: WechatpadproWebhookServer | null = null;
 let sharedWebhookServerPort: number | null = null;
 
+/** v1.3.63 P1-7: 派生 webhook path (webhookPathToken 存在时插入 token 段). 纯函数供测试. */
+export function deriveWebhookPaths(cfg: {
+  webhookPath: string;
+  webhookPathToken?: string;
+  webhookBusinessPath?: string;
+}): { webhookPath: string; businessPath: string } {
+  const webhookPath = cfg.webhookPathToken
+    ? cfg.webhookPath.replace(/\/wechatpadpro\//, `/wechatpadpro/${cfg.webhookPathToken}/`)
+    : cfg.webhookPath;
+  const businessPath = cfg.webhookPathToken
+    ? `${webhookPath}/business`
+    : (cfg.webhookBusinessPath ?? `${cfg.webhookPath}/business`);
+  return { webhookPath, businessPath };
+}
+
 function maskSecret(secret: string): string {
   if (!secret) return "(empty)";
   return secret.length <= 4 ? "****" : `${secret.slice(0, 4)}...${secret.slice(-2)}`;
@@ -399,14 +414,15 @@ export async function startAccountById(
     log.warn(`ws client skipped (no authcode): ${accountId}`);
   }
 
+  // v1.3.63 P1-7 webhook 加固 (2026-08-14 老板拍板): webhookPathToken 随机 token 插入 path
+  //   → /wechatpadpro/<token>/webhook. 攻击者猜不到 token → 404 (webhook-receiver 精确 path 匹配天然拒绝).
+  //   不影响 nginx catch-all ^~ /wechatpadpro/; vendor 注册 URL 由 autoSetWebhook 带 token 自动更新.
+  const { webhookPath, businessPath } = deriveWebhookPaths(cfg);
+
   if (!state.webhookServer) {
-    // 双 path: 普通 webhook (sync_message → /Msg/Sync 拉取) + 业务回调 (完整消息)
-    const webhookPath = cfg.webhookPath;
-    const businessPath = cfg.webhookBusinessPath ?? `${cfg.webhookPath}/business`;
     // v1.3.61 WEBHOOK-SHARED-PORT: 多账号共享单个 webhook server (单端口 + path 区分, 贴合 vendor 设计)
     //   vendor 按 authcode 区分账号, 回调 URL path 含 accountId → 一个端口足够。
     //   首个账号创建 server, 后续账号复用 + addPath (幂等)。port 用首个账号的 cfg.webhookPort。
-    const isFirstWebhookAccount = !sharedWebhookServer;
     const srv = sharedWebhookServer ?? new WechatpadproWebhookServer(
       cfg.webhookHost,
       cfg.webhookPort,
@@ -452,13 +468,15 @@ export async function startAccountById(
       log.info(`business callback: received payload (top keys=${Object.keys(payload ?? {}).join(",")})`);
       await inboundHandler.handle(payload);
     });
-    // v1.3.61: 共享 server 只 attach 给创建账号 (stopAll 只停一次, 防重复 stop)
-    if (isFirstWebhookAccount) state.attachWebhookServer(srv);
+    // v1.3.63 P1: 每个账号都 attach 自己的 paths (stop 时 removePath 只摘自己).
+    //   共享 server 单例由 sharedWebhookServer 管理, 真正 stop 在 shutdown(); 不再"只 attach 创建账号"
+    //   (旧逻辑: 非创建账号不 attach → stop 时 path 残留 zombie handler).
+    state.attachWebhookServer(srv, [webhookPath, businessPath]);
   }
 
   // 自动注册 webhook URL 给 vendor (每账号 authcode 不同, 手动 set 易漏; 3 次 backoff 覆盖临时 401/timeout)
   if (cfg.autoSetWebhook && cfg.webhookPublicUrl && cfg.authcode) {
-    const url = `${cfg.webhookPublicUrl.replace(/\/$/, "")}${cfg.webhookPath}`;
+    const url = `${cfg.webhookPublicUrl.replace(/\/$/, "")}${webhookPath}`;
     const maxAttempts = cfg.setWebhookRetries ?? 3;
     let lastErr: unknown;
     let ok = false;
@@ -536,7 +554,8 @@ export async function startAccountById(
 
   // 自动配 vendor 业务回调 + StartAutoSync (完整消息推送; 只配 /Webhook/Set 只会推空 Data 的 sync_message)
   if (cfg.autoSetWebhook && cfg.webhookPublicUrl && cfg.authcode) {
-    const businessPath = cfg.webhookBusinessPath ?? `${cfg.webhookPath}/business`;
+    // v1.3.63 P1-7: 用派生 businessPath (带 webhookPathToken), 不重新从 cfg 拼 (否则 token 段丢失 →
+    //   vendor 注册无 token URL → nginx 403)
     const syncMessageUrl = `${cfg.webhookPublicUrl.replace(/\/$/, "")}${businessPath}`;
     const logoutUrl = `${cfg.webhookPublicUrl.replace(/\/$/, "")}${businessPath}/logout`;
     try {
@@ -565,7 +584,7 @@ export async function startAccountById(
   // log 用 cfg.agent (运行时真正用的), 不用入参 agentId (避免 "default 为什么对应 main" 误解)
   log.info(
     `[WPP v${PLUGIN_VERSION} STARTUP] account=${accountId} ` +
-    `webhook=${cfg.webhookHost}:${cfg.webhookPort}${cfg.webhookPath} ` +
+    `webhook=${cfg.webhookHost}:${cfg.webhookPort}${webhookPath} ` +
     `autoSetWebhook=${cfg.autoSetWebhook !== false} ` +
     `mcpEnabled=${cfg.mcpEnabled !== false} ` +
     `groupContext=${cfg.groupContextEnabled === true ? "ON" : "OFF"} ` +
@@ -588,6 +607,17 @@ export async function startAllAccounts(agentId: string = "main"): Promise<WppAcc
 
 export async function shutdown(): Promise<void> {
   await getDefaultAccountRegistry().stopAll();
+  // v1.3.63 P1: 共享 webhook server 真正 stop + 置空 (否则下次 startAccount 复用已停 server 不 start)
+  if (sharedWebhookServer) {
+    try {
+      await sharedWebhookServer.stop();
+    } catch (e) {
+      log.warn(`shared webhook server stop error (non-fatal): ${formatErr(e)}`);
+    }
+    sharedWebhookServer = null;
+    sharedWebhookServerPort = null;
+    log.info("shared webhook server stopped + cleared");
+  }
   try {
     const { disconnectMcpClient } = await import("./vendor-mcp-client.js");
     await disconnectMcpClient();

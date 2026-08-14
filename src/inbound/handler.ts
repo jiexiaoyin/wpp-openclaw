@@ -25,7 +25,6 @@ import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1C
 import { getDefaultAccountRegistry } from "../account-state.js";
 import type { WppInboundMessage, WppWebhookPayload } from "../types.js";
 import type { WppAccountCtx } from "../send/factory.js";
-import { stringifyLargeInts } from "../util/bigint.js"; // v1.3.27 P2-2: 调试日志防 16+ 位整数丢精度
 
 // 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
 // 解法: enrich 时 trackEnrich 记录 promise, 触发 dispatch 前 waitForPendingEnrich 等待同 sender 的 enrich 完成。
@@ -454,6 +453,12 @@ export function createWppInboundHandler(
           const titleKey = (m.content ?? "").split("\n")[0]?.slice(0, 30) ?? "";
           const throttleKey = `${m.accountId}:${m.peerId}:${titleKey}`; // P2-1: 并入 accountId
           const now = Date.now();
+          // v1.3.63 P2: relayTriggerAt 写时清理过期 key (防无界增长; 照 SeenTracker 范式)
+          if (relayTriggerAt.size > 1000) {
+            for (const [k, ts] of relayTriggerAt) {
+              if (now - ts > RELAY_THROTTLE_MS) relayTriggerAt.delete(k);
+            }
+          }
           const lastAt = relayTriggerAt.get(throttleKey) ?? 0;
           if (now - lastAt >= RELAY_THROTTLE_MS) {
             relayTriggerAt.set(throttleKey, now);
@@ -553,12 +558,11 @@ export function createWppInboundHandler(
       }
 
       if (msgs.length === 0) {
-        // payload 解析失败: warn 打印摘要供排查
-        const jsonStr = stringifyLargeInts(JSON.stringify(payload));
+        // payload 解析失败: warn 打印摘要供排查 (v1.3.63 P3: 去掉 payload 内容, 只记 keys + 计数 — 内容可能含聊天文本)
         const payloadData = (payload as Record<string, unknown>)?.Data as Record<string, unknown> | undefined;
         const payloadMsgs = payloadData?.messages;
         const msgCount = Array.isArray(payloadMsgs) ? (payloadMsgs as unknown[]).length : undefined;
-        warn(`inbound parse dropped: account=${opts.accountId} payloadKeys=${Object.keys((payload ?? {}) as object).join(",")} dataKeys=${Object.keys(payloadData ?? {}).join(",")} messagesLen=${msgCount ?? "n/a"} payload=${jsonStr?.slice(0, 2000)}`);
+        warn(`inbound parse dropped: account=${opts.accountId} payloadKeys=${Object.keys((payload ?? {}) as object).join(",")} dataKeys=${Object.keys(payloadData ?? {}).join(",")} messagesLen=${msgCount ?? "n/a"}`);
         return;
       }
       for (const m of msgs) {

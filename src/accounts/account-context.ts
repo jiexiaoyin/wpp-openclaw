@@ -36,6 +36,8 @@ export class AccountContext {
   // 运行时挂载资源 (startAccount 之后由 index.ts attach)
   wsClient?: WppWsClient;
   webhookServer?: WppWebhookServer;
+  /** v1.3.63 P1 (2026-08-14 审阅): 本账号注册的 webhook path(s) — stop 时 removePath 用 (共享 server 不停) */
+  webhookPaths: string[] = [];
 
   // v1.1.27 SHUTDOWN-FLUSH (2026-08-08 P1-b): inbound debouncer flushAll 钩子
   //   之前: stop() 拿不到 handler 闭包内 debouncer 引用 → 停机丢失 buffered 消息
@@ -137,9 +139,10 @@ export class AccountContext {
     this.info(`ws client attached`);
   }
 
-  attachWebhookServer(srv: WppWebhookServer): void {
+  attachWebhookServer(srv: WppWebhookServer, paths: string[] = []): void {
     this.webhookServer = srv;
-    this.info(`webhook server attached`, { port: this.config.webhookPort, path: this.config.webhookPath });
+    this.webhookPaths = paths;
+    this.info(`webhook server attached`, { port: this.config.webhookPort, paths });
   }
 
   // 启动时 setWebhook 失败 → 后台每 5 分钟重试, 成功 clearInterval
@@ -200,11 +203,17 @@ export class AccountContext {
         this.warn(`ws stop error: ${formatErr(e)}`);
       }
     }
+    // v1.3.63 P1 (2026-08-14 审阅): webhook server 是模块级共享单例 (v1.3.61 共享端口),
+    //   单账号 stop 不能真正 stop server (会波及其它账号)。改为 removePath 只摘掉本账号的 path。
+    //   真正 stop server 由 index.ts shutdown() 统一处理 (置空 sharedWebhookServer + close)。
     if (this.webhookServer) {
       try {
-        await this.webhookServer.stop();
+        for (const p of this.webhookPaths) {
+          this.webhookServer.removePath(p);
+        }
+        this.webhookPaths = [];
       } catch (e) {
-        this.warn(`webhook stop error: ${formatErr(e)}`);
+        this.warn(`webhook removePath error: ${formatErr(e)}`);
       }
     }
     this.info(`account context stopped`);

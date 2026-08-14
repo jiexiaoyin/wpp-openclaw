@@ -7,7 +7,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { wppChannelPlugin, plugin } from "../src/index.js";
+import { wppChannelPlugin, plugin, deriveWebhookPaths } from "../src/index.js";
 import { getDefaultAccountRegistry, resetDefaultRegistry } from "../src/account-state.js";
 
 beforeEach(() => {
@@ -104,4 +104,30 @@ test("plugin.register(api) — 调 api.registerChannel({ plugin: wppChannelPlugi
   plugin.register(mockApi);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.plugin, wppChannelPlugin);
+});
+
+// ===== v1.3.63 P1-7 webhook token path 派生 =====
+
+test("v1.3.63 P1-7 — 无 token 时 webhookPath/businessPath 原样", () => {
+  const r = deriveWebhookPaths({ webhookPath: "/wechatpadpro/default/webhook" });
+  assert.equal(r.webhookPath, "/wechatpadpro/default/webhook");
+  assert.equal(r.businessPath, "/wechatpadpro/default/webhook/business");
+});
+
+test("v1.3.63 P1-7 — 配 token 时插入 path 段 (防伪造)", () => {
+  const r = deriveWebhookPaths({
+    webhookPath: "/wechatpadpro/default/webhook",
+    webhookPathToken: "035a9e17e8de373b7c115314",
+  });
+  assert.equal(r.webhookPath, "/wechatpadpro/035a9e17e8de373b7c115314/default/webhook");
+  assert.equal(r.businessPath, "/wechatpadpro/035a9e17e8de373b7c115314/default/webhook/business");
+});
+
+test("v1.3.63 P1-7 — 配 token 时忽略 webhookBusinessPath (统一 token 段)", () => {
+  const r = deriveWebhookPaths({
+    webhookPath: "/wechatpadpro/default/webhook",
+    webhookPathToken: "tok123",
+    webhookBusinessPath: "/wechatpadpro/default/webhook/business",
+  });
+  assert.ok(r.businessPath.startsWith("/wechatpadpro/tok123/"), "businessPath 必须带 token");
 });

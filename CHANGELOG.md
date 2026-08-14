@@ -4,6 +4,30 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.63]
+- 2026-08-14 (多维度审阅修复 — 6 P1 + 8 P2 全清, 876/876 全绿)
+- **P1-1 [正确性] ACK 拦截正则 0x08 退格字节修复**: dispatcher.ts ACK_TEMPLATE_RE 的 `)\b` 被转义成字面 0x08 → 正则恒 false → 14:50 P0-fix 拦截半边生产失效。改 `\b` + 导出常量供测试 import 真值 (根除手抄副本)
+- **P1-2 [正确性] chunker 巨型代码块硬 cap**: chunkLongParagraph 代码块内推迟切分无上限 → 2000 行代码块单 chunk 56KB 超 vendor 限。加 `limit*2` 硬 cap, 超则强制切 (不闭合围栏也封顶)
+- **P1-3 [正确性] outbound dedupe key 误吞**: content[:30] 前缀作 key → 同 peer 5 分钟内不同回复 (前 30 字同) 被误吞。改完整内容 sha1 hash key
+- **P1-4 [并发] _outboundDedup Map 无界泄漏**: 只写不删 → 加写时清扫 (size>1024 扫过期)
+- **P1-5 [崩溃] ensureAgentWorkspace bindId 残留**: 与 registerAccountInOpenclaw 对齐去掉 915-928 两处 bindId/maxId (曾致 gateway status=78 崩)
+- **P1-6 [运维] unregister agents.list 误删共享 agent**: 排除 wpp-wechat/main + 检查剩余 bindings 引用才删
+- **P2-1 [chunker] 代码块内空行拆断围栏**: 切段前扫围栏跳过块内空行
+- **P2-2 [chunker] hardSplitLine 切断 emoji 代理对**: codePointAt 对齐切分点
+- **P2-3 [relay] 单行接龙 title 里 "N. " 误判条目**: 从首个 `1. ` 处切起 (title 前缀弃置)
+- **P2-4 [并发] embedCache 无界**: 加 2000 容量上限, 写时删最旧
+- **P2-5/6/7 [测试] 假绿改真测**: chunker 测试加长到 >limit 触发真切分; dedupe 测试 import 生产 ACK_TEMPLATE_RE + dedupKeyFor 真值 (不再手抄/fake 重写)
+- (第二波 — 2026-08-14 完整修复, 老板"继续完整修复"拍板)
+- **P1 [架构] shared webhook 生命周期**: webhook-receiver 加 removePath; account-context stop 改 removePath 摘自己 path (不再 stop 共享 server, 防单账号移除波及其它账号); shutdown 统一停 + 置空 sharedWebhookServer (防重启复用已停 server 不 start → webhook 永久失效)
+- **P1 [安全] friendcircle guard 绕过修复**: messagesRaw/publishVideoViaItem/setBackgroundImage 补 assertFriendCirclePublishAllowed (原漏网); publishCircleRaw 从 agent-tools 移除 (AI 不该有原始 XML 发布能力)
+- **P2 [安全] readLocalMedia symlink 逃逸**: realpath 解析后再做 allowedRoots 包含校验 (原 path.resolve 纯词法, readFile 跟随 symlink 可读外部); workspace 根收窄到 workspace/media (原含 agent 转录/.env)
+- **P2 [安全] mysql**: getContacts/getChatrooms LIMIT clamp (1-1000); pool 加 queueLimit (防耗尽无限等待)
+- **P2 [并发] relayTriggerAt 清理**: 写时 size>1000 扫过期
+- **P3 [安全]**: media-enrich md5 文件名净化 (sanitizeFilenamePart 只允许 hex); vendor-mcp-client 日志脱敏 (args/payload 只记 keys); handler.ts payload 摘要去内容; ACK_TEMPLATE_RE 收窄为完整 `[...]` 块匹配 (防正文散落 delivered 误伤)
+- **webhook token** (老板拍板): webhookPathToken 账号字段插入 path → /wechatpadpro/<token>/webhook; deriveWebhookPaths 纯函数; nginx token 前缀放行 + 其余 403
+- **测试**: 889/889 全绿 (876 + 新增 readLocalMedia 5 / removePath / friendcircle guard 4 / P1-7 path 3)
+- **版本**: 1.3.62 → 1.3.63 (package.json + openclaw.plugin.json + core/constants.ts); 统一 v1.3.65 日志串为 v1.3.63
+
 ## [v1.3.62]
 - 2026-08-13 (OPENCLAW-GUIDED-SETUP — 让 OpenClaw 能驱动插件引导配置)
 - **插件加顶层 `configUiHints`** (openclaw.plugin.json + src/index.ts): tokenKey/authcode (sensitive) / apiBaseUrl / wsUrl / allowFrom / groupPolicy / groupAllowFrom / agent / webhookPort

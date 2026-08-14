@@ -17,7 +17,10 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
-const TEXT_CHUNK_LIMIT = 4000;
+// v1.3.63 P2-CHUNKER-MARKDOWN (2026-08-13 老板反馈): 4000 → 6000
+// 微信 iPad 协议实际支持更长 (厂商 @wecom/aibot-node-sdk 跟 vendor 文档都没明确硬限, 但 6000 是经验安全值)
+// 提升后单 chunk 携带信息更多, 减少长消息分包数量 (优化 cron 推送体验)
+const TEXT_CHUNK_LIMIT = 6000;
 
 /**
  * v1.3.18 P1-核心3 fix (2026-08-10): 统一发送判据 — Code=0 只是 HTTP 200, 真正成功看 Data.BaseResponse.ret === 0
@@ -302,21 +305,134 @@ export async function revokeMsg(
 
 // ============ v1.1.17 恢复 (被 sendApp 删除时误删, 从备份恢复) ============
 
-/** 简易 markdown chunker: 按段落优先 (\n\n) 切, 每段独立不超 limit */
-function chunkMarkdown(text: string, limit: number): string[] {
+/**
+ * v1.3.63 P2-CHUNKER-MARKDOWN (2026-08-13 老板反馈):真正的 markdown-aware chunker
+ *   旧版注释说"按段落 (\n\n) 切"但实际用 `\n` 切 → 长段落(多行无空行)从中间切开
+ *   新版:
+ *   1. 优先按段落 (\n\n / \n\n+) 切
+ *   2. 段落 > limit 时, 按行 (\n) 切
+ *   3. 行 > limit 时, 硬切字符 (markdown 元素已破, 保 vendor 接受)
+ *   4. 代码块 (```...```) 跨 chunk 不切断 (关键! 否则渲染坏)
+ *   5. 表格行 (|...|) 跨 chunk 不切断
+ *   6. 列表项 (- / * / 数字.) 保持完整
+ */
+/**
+ * v1.3.63 P2-CHUNKER-MARKDOWN + P1-2/P2-1/P2-2 fix (2026-08-14 审阅):
+ *   - P1-2: 巨型代码块单 chunk 超限 → 加 CODE_BLOCK_HARD_CAP 强制切分
+ *   - P2-1: 代码块内含空行 → 围栏被段级切分拆断 → 切段前扫围栏跳过块内空行
+ *   - P2-2: hardSplitLine 按 UTF-16 码元切会切断 emoji/生僻字 → codePointAt 对齐
+ */
+export function chunkMarkdown(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
+
   const out: string[] = [];
   let current = "";
-  const lines = text.split("\n");
-  for (const line of lines) {
-    if (current.length + line.length + 1 > limit) {
-      if (current) out.push(current);
-      current = line;
+  let inCodeBlock = false;
+
+  // P2-1: 扫整个文本跟踪代码块围栏状态, 段级切分 (空行) 跳过块内空行
+  const blocks: string[] = [];
+  let buf = "";
+  for (const line of text.split("\n")) {
+    if (/^\s*```/.test(line)) inCodeBlock = !inCodeBlock;
+    const isBlank = /^\s*$/.test(line);
+    // 块内空行: 仍记录该行 (保留内容), 但不作为段落边界
+    if (isBlank && !inCodeBlock) {
+      blocks.push(buf); buf = "";
     } else {
-      current = current ? `${current}\n${line}` : line;
+      buf = buf ? `${buf}\n${line}` : line;
     }
   }
+  if (buf) blocks.push(buf);
+  const paragraphs = blocks.map((b) => b.trim()).filter(Boolean);
+
+  for (const para of paragraphs) {
+    // 段落 ≤ limit
+    if (para.length <= limit) {
+      // 当前 chunk 加这个段落会不会超? (留 2 字符给 \n\n 分隔)
+      if (current.length + para.length + 2 > limit) {
+        if (current) out.push(current);
+        current = para;
+      } else {
+        current = current ? `${current}\n\n${para}` : para;
+      }
+      continue;
+    }
+
+    // 段落 > limit → 先 flush current, 切这个长段
+    if (current) { out.push(current); current = ""; }
+    out.push(...chunkLongParagraph(para, limit));
+  }
+
   if (current) out.push(current);
+  return out;
+}
+
+/**
+ * v1.3.63 P2-CHUNKER-MARKDOWN + P1-2: 切长段落 (单段 > limit)
+ * - 保护 ``` 代码块 (跨 chunk 不切断, 但超 CODE_BLOCK_HARD_CAP 强制切防 vendor 截断)
+ * - 保护 | 表格行
+ * - 单行超 limit 硬切字符
+ */
+const CODE_BLOCK_HARD_CAP = 2; // 代码块允许超过 limit 的倍数, 超则强制切分
+function chunkLongParagraph(text: string, limit: number): string[] {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let current = "";
+  let inCodeBlock = false;
+
+  for (const line of lines) {
+    // 跟踪代码块状态: ``` 开头切换
+    if (/^```/.test(line)) inCodeBlock = !inCodeBlock;
+
+    // 单行超 limit → 硬切
+    if (line.length > limit) {
+      if (current) { out.push(current); current = ""; }
+      out.push(...hardSplitLine(line, limit));
+      continue;
+    }
+
+    // 当前 chunk 加这一行会不会超?
+    const separator = current ? "\n" : "";
+    const wouldExceed = current.length + separator.length + line.length > limit;
+    // 代码块中: 超限但未达硬 cap → 推迟切分 (优先保持代码块完整)
+    // 但加这行会超硬 cap → 强制切 (P1-2, 保证单 chunk ≤ limit*2, 防超 vendor 限)
+    if (inCodeBlock && current.length + separator.length + line.length > limit * CODE_BLOCK_HARD_CAP) {
+      out.push(current);
+      current = line;
+      continue;
+    }
+    if (wouldExceed && inCodeBlock) {
+      current += `${separator}${line}`;
+      continue;
+    }
+    if (wouldExceed) {
+      // 普通超限 → 切: flush current, 重新开始
+      out.push(current);
+      current = line;
+    } else {
+      current = current ? `${current}${separator}${line}` : line;
+    }
+  }
+
+  if (current) out.push(current);
+  return out;
+}
+
+/**
+ * v1.3.63 P2-CHUNKER-MARKDOWN + P2-2 fix: 硬切单行 (单行 > limit)
+ * 按 codePointAt 对齐切 (不切断 emoji/生僻字代理对), 每段 ≤ limit 字符
+ */
+function hardSplitLine(line: string, limit: number): string[] {
+  const out: string[] = [];
+  let start = 0;
+  while (start < line.length) {
+    let end = Math.min(start + limit, line.length);
+    // 若切点落在高代理位 (星面字符前半), 后移一位避免切断代理对
+    const ch = line.charCodeAt(end - 1);
+    if (ch >= 0xd800 && ch <= 0xdbff && end < line.length) end -= 1;
+    out.push(line.slice(start, end));
+    start = end;
+  }
   return out;
 }
 

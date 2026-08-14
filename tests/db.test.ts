@@ -426,3 +426,42 @@ test("messages.ts — saveMessage/getMessageById 走 factory 委派", async () =
 test("resetAdapter — 干净重置", () => {
   assert.doesNotThrow(() => resetAdapter());
 });
+
+// ============ P3-1 (2026-08-13): mysql.ts 关键路径测试覆盖 ============
+
+import {
+  QueryTimeoutError,
+  closeMysqlForTest,
+  _internal,
+} from "../src/storage/db/mysql.js";
+
+test("P3-1 — QueryTimeoutError 构造 + 字段", () => {
+  const e = new QueryTimeoutError("SELECT 1");
+  assert.equal(e.name, "QueryTimeoutError");
+  assert.equal(e.code, "QUERY_TIMEOUT");
+  assert.equal(e.errno, 1969);
+  assert.equal(e.sql, "SELECT 1");
+  assert.ok(e instanceof Error);
+});
+
+test("P3-1 — QueryTimeoutError 含原 error 字段", () => {
+  const original = new Error("upstream");
+  const e = new QueryTimeoutError("UPDATE x SET y=1", original);
+  assert.equal(e.originalError, original);
+  assert.equal(e.sql, "UPDATE x SET y=1");
+});
+
+test("P3-1 — closeMysqlForTest 不抛 (try/catch 兜底)", async () => {
+  const fake = new FakeAdapter();
+  // FakeAdapter.close() 不会失败, 但测试保证路径覆盖
+  await closeMysqlForTest(fake); // 不抛 = 通过
+  assert.ok(true);
+});
+
+test("P3-1 — _internal 导出包含 ensureColumn/Index/SchemaSql/Migrations", () => {
+  // 验证测试通道能拿到内部 helper (供集成测试用)
+  assert.equal(typeof _internal.ensureColumn, "function");
+  assert.equal(typeof _internal.ensureIndex, "function");
+  assert.equal(typeof _internal.applySchemaSql, "function");
+  assert.equal(typeof _internal.applyMigrations, "function");
+});

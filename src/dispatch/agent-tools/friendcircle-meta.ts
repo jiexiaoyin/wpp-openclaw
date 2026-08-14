@@ -155,17 +155,8 @@ export const FRIEND_CIRCLE_META: ToolMeta = {
     }),
     (imageDataList: string[]) => getFriendCircleApi().uploadImages(imageDataList),
   ],
-  /** /FriendCircle/MessagesRaw — 发布朋友圈 (原始 XML 兼容) */
-  publishCircleRaw: [
-    "发布朋友圈 (原始 XML 兼容接口). content=文字内容, blackList/withUserList 可选.",
-    Type.Object({
-      content: Type.String({ description: "朋友圈文字" }),
-      blackList: Type.Optional(Type.String()),
-      withUserList: Type.Optional(Type.String()),
-    }),
-    (content: string, blackList?: string, withUserList?: string) =>
-      getFriendCircleApi().messagesRaw(content, blackList ?? "", withUserList ?? ""),
-  ],
+  // v1.3.63 P1 (2026-08-14 审阅): publishCircleRaw 已移除 — AI 不该有原始 XML 发布能力
+  //   (原绕过 guard 无 callerWxid 白名单; 发布走 publishCircle/publishImagesCircle/publishVideoCircle 复合工具带 guard)
   /** /FriendCircle/SetBackgroundImage — 设置朋友圈背景图 */
   setCircleBackgroundImage: [
     "设置朋友圈背景图. imageData=图片 base64.",

@@ -49,10 +49,13 @@ export async function enrichBatch(batch: WppInboundMessage[]): Promise<{
   saved: number;
   failed: number;
 }> {
+  // P3-2 (2026-08-13 外部审计): 历史跟踪入库 — 每条消息独立落库 (不同 msg_id, INSERT...ON DUPLICATE 幂等),
+  //   相互独立无数据依赖 → 顺序 await 改 Promise.all 并发 (enrichAndSaveMessage 内部吞错永不 reject,
+  //   一条失败不阻塞其余 + 计数语义与原串行一致)
+  const results = await Promise.all(batch.map((msg) => enrichAndSaveMessage(msg)));
   let saved = 0;
   let failed = 0;
-  for (const msg of batch) {
-    const r = await enrichAndSaveMessage(msg);
+  for (const r of results) {
     if (r.saved) saved++;
     else failed++;
   }

@@ -47,10 +47,10 @@ export async function resolveImageToBase64(input: string): Promise<string> {
  *   2. path.resolve 归一化 (消解 `..`, 解析符号链接)
  *   3. 精确校验 (归一化后必须真实在 allowedRoots 目录树下)
  */
-export async function readLocalMedia(p: string): Promise<Buffer> {
-  const allowedRoots = [
+export async function readLocalMedia(p: string, allowedRootsOverride?: string[]): Promise<Buffer> {
+  const allowedRoots = allowedRootsOverride ?? [
     "/root/.openclaw/media",
-    "/root/.openclaw/workspace",
+    "/root/.openclaw/workspace/media",
     "/root/.openclaw/shared-media",
   ];
   const normalized = path.normalize(p);
@@ -64,7 +64,25 @@ export async function readLocalMedia(p: string): Promise<Buffer> {
   })) {
     throw new Error("resolveImageToBase64: local path outside allowed media dirs");
   }
-  return readFile(abs);
+  // v1.3.63 P2 (2026-08-14 审阅): symlink 逃逸修复.
+  //   原注释称"解析符号链接"但 path.resolve 是纯词法归一化 — readFile 会跟随 symlink,
+  //   若 workspace 内有指向 /etc/passwd 的 symlink → 校验通过但读到外部文件.
+  //   修法: realpath 解析真实路径后再做一次 allowedRoots 包含校验 (symlink 指向外部则拒绝).
+  //   同时收窄 allowedRoots: workspace 根 → workspace/media 子目录 (原含 agent 转录/.env).
+  let real: string;
+  try {
+    real = await import("node:fs/promises").then((fsp) => fsp.realpath(abs));
+  } catch {
+    throw new Error("resolveImageToBase64: cannot resolve local path");
+  }
+  const insideAllowed = allowedRoots.some((root) => {
+    const rootWithSep = root.endsWith("/") ? root : root + "/";
+    return real === root || real.startsWith(rootWithSep);
+  });
+  if (!insideAllowed) {
+    throw new Error("resolveImageToBase64: local path resolves outside allowed media dirs");
+  }
+  return readFile(real);
 }
 
 /** 错误消息脱敏: 只保留 host, 去掉 URL query (可能含签名 CDN 参数) */

@@ -85,11 +85,18 @@ export function isCommandIntent(text: string): boolean {
 }
 
 // 候选向量缓存 (msgId → embedding), 消息不变则复用
+// v1.3.63 P2-4 (2026-08-14 审阅): 加容量上限防无界增长 (~1024 维 float64 每条 8-16KB,
+//   群活跃 2000 条/天 → 月 GB 级). Map 按插入序, 超上限删最旧.
 const embedCache = new Map<string, number[]>();
+const EMBED_CACHE_MAX = 2000;
 
-/** 缓存一条候选的向量 (测试可清) */
+/** 缓存一条候选的向量 (测试可清); 超上限删最旧条目 */
 export function cacheEmbedding(msgId: string, vec: number[]): void {
   embedCache.set(msgId, vec);
+  if (embedCache.size > EMBED_CACHE_MAX) {
+    const oldest = embedCache.keys().next().value;
+    if (oldest !== undefined) embedCache.delete(oldest);
+  }
 }
 
 /** 读缓存向量 */

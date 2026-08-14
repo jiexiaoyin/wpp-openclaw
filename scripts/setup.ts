@@ -296,6 +296,11 @@ async function addAccount(suggestedId?: string): Promise<number> {
     }
     // 已经在 writeAccountFile 写过了, 提示下一步
     console.log(`\n✓ 账号 '${id}' 已创建`);
+    // v1.3.63 (2026-08-13): selfWxid 留空警告 — 缺 selfWxid 无法识别自己发的消息 → AI 自我回复循环风险
+    if (!selfWxid) {
+      console.log(`\n⚠ selfWxid 为空 — 微信登录后记得填 accounts/${id}.json 的 selfWxid`);
+      console.log(`  (vendor Login 成功后的机器人 wxid; 缺它 AI 无法识别自己发的消息, 有自我回复循环风险)`);
+    }
     console.log(`\n下一步:`);
     console.log(`  1. 注入 env: export ${tokenKeyEnv}="<your_token_key>"`);
     console.log(`           export ${authcodeEnv}="<your_authcode>"`);
@@ -393,10 +398,10 @@ async function removeCmd(rawArg?: string): Promise<number> {
     console.log(`✓ accounts/${accountId}.json 已删除`);
 
     if (clean) {
-      // 1. openclaw.json 账号登记 + binding
+      // 1. openclaw.json 账号登记 + binding + agents.list (v1.3.63: 传 agentId 连 agents.list 一起清)
       try {
-        const res = await unregisterAccountFromOpenclaw(accountId);
-        console.log(res.removed ? `✓ openclaw.json 已清理账号 '${accountId}' 登记 + binding` : `ℹ openclaw.json 无该账号登记`);
+        const res = await unregisterAccountFromOpenclaw(accountId, agentId);
+        console.log(res.removed ? `✓ openclaw.json 已清理账号 '${accountId}' 登记 + binding${agentId ? ` + agents.list[${agentId}]` : ""}` : `ℹ openclaw.json 无该账号登记`);
       } catch (e) {
         console.warn(`⚠ openclaw.json 清理失败: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -495,7 +500,8 @@ async function modifyCmd(accountId?: string): Promise<number> {
     if (patch.agent && patch.agent !== cfg.agent) {
       try {
         // 更新 binding: 先删旧 (同 accountId), registerAccountInOpenclaw 幂等会补新的
-        await unregisterAccountFromOpenclaw(accountId);
+        // v1.3.63: 传旧 agentId 清掉 agents.list 里的旧条目 (避免换 agent 后残留)
+        await unregisterAccountFromOpenclaw(accountId, cfg.agent);
         await registerAccountInOpenclaw(accountId, patch.agent as string);
         console.log(`\n✓ openclaw.json binding 已更新 → agent '${patch.agent}'`);
         if (!(await checkAgentExistsInOpenclaw(patch.agent as string))) {

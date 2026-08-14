@@ -17,6 +17,8 @@ export interface ResolvedDbConfig {
     password: string;
     database: string;
     connectionLimit: number;
+    /** v1.3.63 P2: 池排队上限 (防耗尽时无限等待) */
+    queueLimit?: number;
   };
 }
 

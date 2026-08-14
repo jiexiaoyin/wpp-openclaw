@@ -106,7 +106,7 @@ export function mergeGuidedConfig(raw: WppAccountConfig, guided: Record<string, 
   };
   // 字符串字段
   stringField("tokenKey"); stringField("apiBaseUrl"); stringField("wsUrl");
-  stringField("groupPolicy"); stringField("agent"); stringField("webhookPath"); stringField("nickname"); stringField("selfWxid");
+  stringField("groupPolicy"); stringField("agent"); stringField("webhookPath"); stringField("webhookPathToken"); stringField("nickname"); stringField("selfWxid");
   // 数字字段
   const port = guided.webhookPort;
   if (typeof port === "number" && port > 0 && !out.webhookPort) out.webhookPort = port;

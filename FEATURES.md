@@ -1,8 +1,8 @@
 # Features (FEATURES.md)
 
-WeChatPadPro OpenClaw Plugin **v1.3.54** 完整功能清单: 179+ agent tools + 254 vendor endpoints + 6 channel config helpers + Prometheus metrics + 群接龙自动触发 + 语音 silk 自动转码。
+WeChatPadPro OpenClaw Plugin **v1.3.63** 完整功能清单: ~198 agent tools + 254 vendor endpoints (250 注册) + 6 channel config helpers + Prometheus metrics + 群接龙自动触发 + 语音 silk 自动转码。
 
-## 1. 159 Agent Tools (OpenClaw AI 可调用)
+## 1. ~198 Agent Tools (OpenClaw AI 可调用)
 
 按 vendor tag 分组, 13 dedicated meta 文件 + 1 misc-meta (合并 7 小 tag)。
 

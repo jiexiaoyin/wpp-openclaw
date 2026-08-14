@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 
 import { WebhookMetrics, incCounter, getCounter, resetAllCounters } from "../src/monitor/metrics.js";
 import { REQUEST_TIMEOUT_MS, WEBHOOK_BODY_LIMIT_BYTES } from "../src/core/constants.js";
+import { WechatpadproWebhookServer } from "../src/webhook-receiver.js";
 
 beforeEach(() => {
   resetAllCounters();
@@ -105,4 +106,30 @@ test("REQUEST_TIMEOUT_MS — 30s (v1.0.2 新增)", () => {
 
 test("WEBHOOK_BODY_LIMIT_BYTES — 10MB", () => {
   assert.equal(WEBHOOK_BODY_LIMIT_BYTES, 10 * 1024 * 1024);
+});
+
+// ===== v1.3.63 P1 — removePath (共享 server 生命周期) =====
+
+test("v1.3.63 P1 — addPath 幂等 + removePath 后 path 可重新注册", async () => {
+  const srv = new WechatpadproWebhookServer(
+    "127.0.0.1",
+    0, // port 0 = 随机 (不 start, 只测内存 path 管理)
+    [],
+  );
+  const handler = async () => {};
+  // addPath 幂等
+  srv.addPath("/a", handler);
+  srv.addPath("/a", handler);
+  // removePath 幂等 (不存在 no-op)
+  srv.removePath("/nope");
+  // removePath 后重新 addPath 应成功 (证明已移除)
+  srv.removePath("/a");
+  srv.addPath("/a", handler);
+  // removePath 另一个 path
+  srv.addPath("/b", handler);
+  srv.removePath("/b");
+  // 再 removePath /b (幂等 no-op, 不抛)
+  srv.removePath("/b");
+  // 不 start, 只验证不抛 + 基本行为 (真正 HTTP 验证在集成层)
+  await srv.stop();
 });

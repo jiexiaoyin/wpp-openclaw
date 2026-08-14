@@ -234,6 +234,9 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
         waitForConnections: true,
         enableKeepAlive: true,
         charset: "utf8mb4",
+        // v1.3.63 P2: queueLimit 防池耗尽时 getConnection 无限排队
+        //   (mysql2 PoolOptions 无 acquireTimeout; 池级排队上限由 queueLimit 兜底)
+        queueLimit: cfg.mysql.queueLimit ?? 50,
       });
       info(
         `mysqlAdapter pool init: ${cfg.mysql.host}:${cfg.mysql.port}/${cfg.mysql.database} (user=${cfg.mysql.user}, limit=${cfg.mysql.connectionLimit})`,
@@ -464,9 +467,11 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
 
     async getContacts(accountId, limit = 500): Promise<ContactRecord[]> {
       const p = getPool();
+      // v1.3.63 P2: LIMIT clamp (与 getMessages 一致 1-1000, 防超长参数注 SQL 拼接)
+      const safeLimit = Math.max(1, Math.min(Math.trunc(limit) || 500, 1000));
       const rows = await queryWithTimeout<RowDataPacket[]>(
         p,
-        `SELECT * FROM wpp_contacts WHERE account_id = ? LIMIT ${limit}`,
+        `SELECT * FROM wpp_contacts WHERE account_id = ? LIMIT ${safeLimit}`,
         [accountId],
       );
       return rows.map((r: RowDataPacket) => ({
@@ -506,9 +511,10 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
 
     async getChatrooms(accountId, limit = 500): Promise<ChatroomRecord[]> {
       const p = getPool();
+      const safeLimit = Math.max(1, Math.min(Math.trunc(limit) || 500, 1000)); // v1.3.63 P2 clamp
       const rows = await queryWithTimeout<RowDataPacket[]>(
         p,
-        `SELECT * FROM wpp_chatrooms WHERE account_id = ? LIMIT ${limit}`,
+        `SELECT * FROM wpp_chatrooms WHERE account_id = ? LIMIT ${safeLimit}`,
         [accountId],
       );
       return rows.map((r: RowDataPacket) => ({
@@ -711,8 +717,15 @@ function rowToMessage(r: RowDataPacket): MessageRecord {
   };
 }
 
-/** 测试用 — 暴露内部 ensureColumn/ensureIndex helpers */
-export const _internal = { ensureColumn, ensureIndex, applySchemaSql, applyMigrations };
+/** 测试用 — 暴露内部 ensureColumn/ensureIndex/row 映射 helpers (供无 MySQL 环境单测纯函数) */
+export const _internal = {
+  ensureColumn,
+  ensureIndex,
+  applySchemaSql,
+  applyMigrations,
+  rowToMessage,
+  rowToAccount,
+};
 
 /** 关 pool (test cleanup) */
 export async function closeMysqlForTest(adapter: DbAdapter): Promise<void> {

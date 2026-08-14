@@ -42,26 +42,29 @@ export interface ListEntry {
 
 export async function listAccountsDetailed(): Promise<ListEntry[]> {
   const ids = await listAccountIds();
-  const out: ListEntry[] = [];
-  for (const id of ids) {
-    try {
-      const cfg = await loadAccountConfig(id);
-      const envToken = cfg.tokenKeyEnv ? process.env[cfg.tokenKeyEnv] : null;
-      const envAuth = cfg.authcodeEnv ? process.env[cfg.authcodeEnv] : null;
-      const envHints: string[] = [];
-      if (!envToken && cfg.tokenKeyEnv) envHints.push(cfg.tokenKeyEnv);
-      if (!envAuth && cfg.authcodeEnv) envHints.push(cfg.authcodeEnv);
-      out.push({
-        id,
-        nickname: cfg.nickname || "(无)",
-        configured: !!(envToken && cfg.apiBaseUrl),
-        envHints,
-      });
-    } catch {
-      out.push({ id, nickname: "(加载失败)", configured: false, envHints: [] });
-    }
-  }
-  return out;
+  // P3-2 (2026-08-13 修复): 串行 for...of → Promise.all 并发 (loadAccountConfig 是 IO 操作, 可并发)
+  // 注意: 单个失败用 catch 兜底 (不阻塞其它账号), 顺序保持与 ids 一致
+  const results = await Promise.all(
+    ids.map(async (id): Promise<ListEntry> => {
+      try {
+        const cfg = await loadAccountConfig(id);
+        const envToken = cfg.tokenKeyEnv ? process.env[cfg.tokenKeyEnv] : null;
+        const envAuth = cfg.authcodeEnv ? process.env[cfg.authcodeEnv] : null;
+        const envHints: string[] = [];
+        if (!envToken && cfg.tokenKeyEnv) envHints.push(cfg.tokenKeyEnv);
+        if (!envAuth && cfg.authcodeEnv) envHints.push(cfg.authcodeEnv);
+        return {
+          id,
+          nickname: cfg.nickname || "(无)",
+          configured: !!(envToken && cfg.apiBaseUrl),
+          envHints,
+        };
+      } catch {
+        return { id, nickname: "(加载失败)", configured: false, envHints: [] };
+      }
+    })
+  );
+  return results;
 }
 
 // ============ validate ============
@@ -256,6 +259,8 @@ export interface AddAccountInput {
   // ============ v1.1.43 SETUP-FULL (2026-08-09 老板拍板): 9 字段补全 ============
   /** v1.1.15 BUSINESS-CB: 业务回调路径 (走 /Webhook/Business/Set + /Msg/StartAutoSync 完整消息) */
   webhookBusinessPath?: string;
+  /** v1.3.63 P1-7: webhook path token (随机 hex, 防伪造触发 AI) */
+  webhookPathToken?: string;
   /** v1.1.12 P0: 公网入口 base URL (拼 vendor push URL = webhookPublicUrl + webhookPath) */
   webhookPublicUrl?: string;
   /** v1.1.12 P0: webhookPublicUrl 环境变量名 (跟 tokenKey/authcode 一致 B 方案) */
@@ -329,6 +334,9 @@ export interface AddAccountInput {
   embedIntentTopN?: number;
   /** v1.3.2 EMBED-INTENT: embedding 相似度阈值 (默认 0.3) */
   embedIntentThreshold?: number;
+  // ============ v1.3.63 (2026-08-13 外部审计 follow-up): MCP 默认值修复 ============
+  /** MCP 增强开关. 默认 false (vendor realtime 未开通时防白耗 5s connect; 与 default.json 一致). 显式 true 才开. */
+  mcpEnabled?: boolean;
 }
 
 /** 校验输入 + 写 accounts/<id>.json. 抛错 if 失败. */
@@ -358,6 +366,7 @@ export async function writeAccountFile(input: AddAccountInput): Promise<{ filePa
     webhookSecret: "",
     ...(input.webhookSecretEnv ? { webhookSecretEnv: input.webhookSecretEnv } : {}),
     ...(input.webhookBusinessPath ? { webhookBusinessPath: input.webhookBusinessPath } : {}),
+    ...(input.webhookPathToken ? { webhookPathToken: input.webhookPathToken } : {}),
     ...(input.webhookPublicUrl ? { webhookPublicUrl: input.webhookPublicUrl } : {
       ...(input.webhookPublicUrlEnv ? { webhookPublicUrlEnv: input.webhookPublicUrlEnv } : {}),
     }),
@@ -376,6 +385,9 @@ export async function writeAccountFile(input: AddAccountInput): Promise<{ filePa
     ...(input.blacklistGroups && input.blacklistGroups.length > 0 ? { blacklistGroups: input.blacklistGroups } : {}),
     ...(input.chatroomDebug !== undefined ? { chatroomDebug: input.chatroomDebug } : {}),
     ...(input.dmPairingEnabled !== undefined ? { dmPairingEnabled: input.dmPairingEnabled } : {}),
+    // v1.3.63 (2026-08-13): mcpEnabled 默认 false — 之前不写该字段 → 插件默认 true (vendor realtime 未开通白耗),
+    //   与 default.json 一致。显式 input.mcpEnabled === true 才开。
+    mcpEnabled: input.mcpEnabled ?? false,
     ...(input.groupContextEnabled !== undefined ? { groupContextEnabled: input.groupContextEnabled } : {}),
     ...(input.groupContextWindow !== undefined ? { groupContextWindow: input.groupContextWindow } : {}),
     ...(input.groupContextMaxImages !== undefined ? { groupContextMaxImages: input.groupContextMaxImages } : {}),
@@ -489,9 +501,10 @@ export async function registerAccountInOpenclaw(
   );
   let bindingAdded = false;
   if (!existing) {
-    const maxId = Math.max(0, ...bindings.map((b) => Number(b?.bindId ?? 0)));
+    // 2026-08-13 FIX: 曾注入 bindId 字段 → OpenClaw binding schema 校验失败 (bindings.N: Invalid input)
+    //   gateway 启动失败 (status=78/CONFIG)。OpenClaw route binding 只认 type/agentId/comment/match。
+    //   (真实踩坑: 启用 xieyin 第二账号时 prod openclaw.json 被注入 bindId:1 → gateway 崩, 已手动移除)
     bindings.push({
-      bindId: maxId + 1,
       type: "route",
       agentId,
       comment: `WeChatPadPro account ${accountId} routes to ${agentId}`,
@@ -506,7 +519,10 @@ export async function registerAccountInOpenclaw(
 }
 
 /** 从 openclaw.json 删除账号登记 + binding (remove --clean 用) */
-export async function unregisterAccountFromOpenclaw(accountId: string): Promise<{ removed: boolean; openclawRoot: string }> {
+export async function unregisterAccountFromOpenclaw(
+  accountId: string,
+  agentId?: string,
+): Promise<{ removed: boolean; openclawRoot: string }> {
   const root = resolveOpenclawRoot();
   const cfg = await loadOpenclawJson();
   let removed = false;
@@ -533,6 +549,30 @@ export async function unregisterAccountFromOpenclaw(accountId: string): Promise<
   if (kept.length !== before) {
     cfg.bindings = kept;
     removed = true;
+  }
+
+  // 3. 删 agents.list 里的 agent 条目 (2026-08-13: remove --clean 曾遗漏, 需手动删)
+  //    ensureAgentWorkspace add 时注入 agents.list; unregister 若收到 agentId 则同步清掉
+  //    v1.3.63 P1-6 (2026-08-14 审阅): 两个保护 —
+  //      a) 共享默认 agent (wpp-wechat/main) 不删 (removeCmd step2 已保护目录, 这里对齐 agents.list)
+  //      b) 其它账号 binding 仍引用该 agentId → 不删 (避免路由断裂)
+  const SHARED_AGENTS = new Set(["wpp-wechat", "main"]);
+  if (agentId && !SHARED_AGENTS.has(agentId)) {
+    const keptBindings = (cfg.bindings ?? []) as Array<Record<string, unknown>>;
+    const stillReferenced = keptBindings.some((b) => b.agentId === agentId);
+    if (!stillReferenced) {
+      const agentsCfg = (cfg.agents ?? {}) as Record<string, unknown>;
+      const agentList = agentsCfg.list as Array<{ id?: string }> | undefined;
+      if (Array.isArray(agentList)) {
+        const listBefore = agentList.length;
+        const keptList = agentList.filter((a) => a?.id !== agentId);
+        if (keptList.length !== listBefore) {
+          agentsCfg.list = keptList;
+          cfg.agents = agentsCfg;
+          removed = true;
+        }
+      }
+    }
   }
 
   if (removed) await saveOpenclawJson(cfg);
@@ -883,9 +923,9 @@ export async function ensureAgentWorkspace(
           (b.match as Record<string, unknown>)?.accountId === accountId,
       );
       if (!hasBinding) {
-        const maxId = Math.max(0, ...bindings.map((b) => Number(b?.bindId ?? 0)));
+        // v1.3.63 P1-5 (2026-08-14 审阅): 不再注入 bindId — OpenClaw binding schema 只认
+        //   type/agentId/comment/match (与 registerAccountInOpenclaw 对齐; 曾注入 bindId → gateway status=78 崩)
         bindings.push({
-          bindId: maxId + 1,
           type: "route",
           agentId,
           comment: `WeChatPadPro account ${accountId} routes to ${agentId}`,
@@ -894,9 +934,7 @@ export async function ensureAgentWorkspace(
       }
     } else {
       // 无 accountId (旧调用): 保持旧行为但修 channel (agent 级 binding, 不绑具体账号)
-      const maxId = Math.max(0, ...bindings.map((b) => Number(b?.bindId ?? 0)));
       bindings.push({
-        bindId: maxId + 1,
         type: "route",
         agentId,
         match: { channel: "wechatpadpro" },

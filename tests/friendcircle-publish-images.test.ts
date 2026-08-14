@@ -64,3 +64,36 @@ test("agent-tools — 发布工具已移除 (publishImageCircle/publishVideoCirc
   assert.ok(!meta.publishVideoCircle, "publishVideoCircle 应已移除");
   assert.ok(!meta.publishFriendCircle, "publishFriendCircle 应已移除");
 });
+
+// ===== v1.3.63 P1 — 漏网发布端点 guard 补齐 =====
+
+test("v1.3.63 P1 — messagesRaw 默认禁用 (guard 补上)", () => {
+  const fc = makeFake();
+  // messagesRaw 是同步方法 (guard 同步 throw), 用 assert.throws
+  assert.throws(
+    () => fc.messagesRaw("测试内容"),
+    /未启用|friendCirclePublishEnabled/,
+  );
+});
+
+test("v1.3.63 P1 — publishVideoViaItem 默认禁用 (guard 补上)", async () => {
+  const fc = makeFake();
+  await assert.rejects(
+    () => fc.publishVideoViaItem("标题", {}),
+    /未启用|friendCirclePublishEnabled/,
+  );
+});
+
+test("v1.3.63 P1 — setBackgroundImage 默认禁用 (guard 补上)", () => {
+  const fc = makeFake();
+  assert.throws(
+    () => fc.setBackgroundImage("b64"),
+    /未启用|friendCirclePublishEnabled/,
+  );
+});
+
+test("v1.3.63 P1 — publishCircleRaw 已从 agent-tools 移除", async () => {
+  const { AGENT_TOOLS_META } = await import("../src/dispatch/agent-tools/index.js");
+  const meta = AGENT_TOOLS_META as Record<string, unknown>;
+  assert.ok(!meta.publishCircleRaw, "publishCircleRaw 应已移除 (AI 不该有原始发布能力)");
+});

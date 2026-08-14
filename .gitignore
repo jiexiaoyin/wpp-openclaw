@@ -9,6 +9,9 @@ coverage/
 *.bak
 # release-docs/ 是分享版文档源 (已脱敏, 需版本管理, 不 ignore)
 
+# env 绑定脚本 (硬编码本机路径/账号, 不入 git)
+sync-github.sh
+
 # OpenClaw 部署版(部署由 deploy.sh 管理)
 config.local.json
 accounts/*.local.json

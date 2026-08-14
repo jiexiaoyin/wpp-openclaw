@@ -1,8 +1,8 @@
 # WPP 插件 Endpoint 索引 (自动生成)
 
-- 来源: swagger `http://127.0.0.1:8062/swagger.json` (254 paths, 2026-08-10 更新)
-- 覆盖: **248/254 (97.6%)** — 0 假覆盖 (逐端点 grep 源码验证, 2026-08-10 核对)
-- 未覆盖 6: Admin×3 (需管理员 key) + Msg/SendApp (v1.1.17 有意移除) + Tools/DownloadFileBinary×2 (有 DownloadFile/Voice 等价)
+- 来源: swagger (254 paths, 2026-08-10 更新)
+- 覆盖: **250/254 (98.4%)** — WPP_VENDOR_ENDPOINTS 注册 (src/send/index.ts); SendApp manifest-only (发不走, 用 ShareLink)
+- 缺口 1: `/User/GetAllOnline` (get, 需管理员 key) — 未注册未排除; 下版补
 - 生成时间: 见文件 mtime (脚本 /tmp/gen-endpoint-index.py)
 - 用途: 快速查找 endpoint → 实现文件 (send/<tag>.ts) + AI 工具 (agent-tools/<tag>-meta.ts)
 

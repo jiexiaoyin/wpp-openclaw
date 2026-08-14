@@ -26,6 +26,17 @@ export function buildOssKey(accountId: string, type: string, filename: string): 
   return `wpp/${accountId || "default"}/${type}/${date}/${filename}`;
 }
 
+/**
+ * v1.3.63 P3 (2026-08-14 审阅): md5 文件名净化.
+ *   v0 schema md5 是 hex digest, 但 v1 schema 的 md5 是自由字符串 → 直接拼进 OSS key 可污染路径/上下文.
+ *   只允许 hex 字符串, 否则 fallback 随机 hex (不信任自由字符串).
+ */
+export function sanitizeFilenamePart(input: unknown, fallbackLen = 16): string {
+  const s = typeof input === "string" ? input : "";
+  if (/^[a-f0-9]{8,64}$/i.test(s)) return s.toLowerCase();
+  return crypto.randomBytes(Math.ceil(fallbackLen / 2)).toString("hex").slice(0, fallbackLen);
+}
+
 interface OssConfig {
   accessKeyId: string;
   accessKeySecret: string;

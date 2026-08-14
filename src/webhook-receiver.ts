@@ -42,6 +42,18 @@ export class WechatpadproWebhookServer implements WppWebhookServer {
     log.info(`[WPP v1.3.61] webhook addPath: ${path} (total ${this.paths.length})`);
   }
 
+  /**
+   * v1.3.63 P1 (2026-08-14 审阅): 移除账号时清理 path (防 zombie handler)。
+   * 幂等: path 不存在则 no-op。共享 server 多账号场景下, 单账号移除只 removePath 不 stop server。
+   */
+  removePath(path: string): void {
+    const before = this.paths.length;
+    this.paths = this.paths.filter((p) => p.path !== path);
+    if (this.paths.length !== before) {
+      log.info(`[WPP v1.3.63] webhook removePath: ${path} (total ${this.paths.length})`);
+    }
+  }
+
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((req, res) => {

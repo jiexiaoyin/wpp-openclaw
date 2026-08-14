@@ -9,6 +9,8 @@ import {
   isCommandIntent,
   selectTopNByEmbedding,
   clearEmbedCache,
+  cacheEmbedding,
+  getCachedEmbedding,
 } from "../src/dispatch/intent-embed.js";
 
 beforeEach(() => {
@@ -162,4 +164,22 @@ test("v1.3.3 — 媒体候选优先保留, embedding 只筛文本", async () => 
   } finally {
     globalThis.fetch = origFetch;
   }
+});
+
+// ===== v1.3.63 P2-4 — embedCache 容量上限 =====
+
+test("v1.3.63 P2-4 — cacheEmbedding 超上限删最旧条目", () => {
+  clearEmbedCache();
+  // 插入超过上限 (EMBED_CACHE_MAX=2000) 的条目, 最旧应被逐出
+  for (let i = 0; i < 2100; i++) {
+    cacheEmbedding(`msg-${i}`, [1, 2, 3]);
+  }
+  // 最新的应在
+  assert.ok(getCachedEmbedding("msg-2099"), "最新条目应保留");
+  // 最旧的应被逐出 (Map size 被钳制)
+  assert.equal(getCachedEmbedding("msg-0"), undefined, "最旧条目应被逐出");
+  // 容量应钳制在 ~2000 (允许边界误差)
+  const remain = Array.from({ length: 2100 }, (_, i) => getCachedEmbedding(`msg-${i}`)).filter(Boolean).length;
+  assert.ok(remain <= 2000, `缓存应钳制 ≤2000, 实际 ${remain}`);
+  clearEmbedCache();
 });

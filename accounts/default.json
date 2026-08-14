@@ -10,6 +10,7 @@
   "webhookHost": "127.0.0.1",
   "webhookPort": 4398,
   "webhookPath": "/wechatpadpro/default/webhook",
+  "webhookPathToken": "035a9e17e8de373b7c115314",
   "webhookPublicUrl": "",
   "webhookPublicUrlEnv": "WECHATPRO_WEBHOOK_PUBLIC_URL",
   "autoSetWebhook": true,

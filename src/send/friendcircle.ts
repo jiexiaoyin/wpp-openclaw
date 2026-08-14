@@ -138,8 +138,10 @@ export function makeWppFriendCircle(ctx: WppAccountCtx) {
      * 参数 (MessagearameterDoc): content=文字, blackList, withUserList.
      * 可能解决图片朋友圈显示 XML 代码的问题 (原始 XML 接口).
      */
-    messagesRaw: (content: string, blackList = "", withUserList = "") =>
-      dispatch("/FriendCircle/MessagesRaw", { content, blackList, withUserList }),
+    messagesRaw: (content: string, blackList = "", withUserList = "") => {
+      assertFriendCirclePublishAllowed(ctx.accountId); // v1.3.63 P1: 补 guard (原漏网)
+      return dispatch("/FriendCircle/MessagesRaw", { content, blackList, withUserList });
+    },
 
     /**
      * v1.3.28 PublishImages (2026-08-10 老板实测): 发布**图片**朋友圈 (1-9 张).
@@ -193,14 +195,18 @@ export function makeWppFriendCircle(ctx: WppAccountCtx) {
      * v1.3.30 (2026-08-10): 用已有 publishItem 直接发布视频朋友圈.
      * 供 uploadVideo 后复用 item (或测试不同上传格式), 免二次上传.
      */
-    publishVideoViaItem: async (title: string, videoItem: unknown) =>
-      dispatch("/FriendCircle/Messages", { title, private: 0, video: videoItem }),
+    publishVideoViaItem: async (title: string, videoItem: unknown) => {
+      assertFriendCirclePublishAllowed(ctx.accountId); // v1.3.63 P1: 补 guard (原漏网)
+      return dispatch("/FriendCircle/Messages", { title, private: 0, video: videoItem });
+    },
 
     /**
      * v1.3.25 SWAGGER-254: /FriendCircle/SetBackgroundImage — 设置朋友圈背景图.
      */
-    setBackgroundImage: (imageData: string) =>
-      dispatch("/FriendCircle/SetBackgroundImage", { imageData }),
+    setBackgroundImage: (imageData: string) => {
+      assertFriendCirclePublishAllowed(ctx.accountId); // v1.3.63 P1: 补 guard (原漏网)
+      return dispatch("/FriendCircle/SetBackgroundImage", { imageData });
+    },
   };
 }
 

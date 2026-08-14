@@ -352,6 +352,28 @@ test("parseRelayText — 空返回 {title:'', items:[]}", () => {
   assert.equal(r.items.length, 0);
 });
 
+test("v1.3.63 P2-3 — 单行接龙: title 里含 'N. ' 不误判为条目", () => {
+  // 真实 vendor push 格式: title + 规则 + 接龙者 拼成 1 行, title 里可能含数字点 (如 "3. 周年庆")
+  const raw = `<title>#接龙 3. 周年庆 1. 门店＋型号 2. 金源北路GT7蓝 倪彩霞</title>`;
+  const r = parseRelayText(raw);
+  // title 前缀 "3. 周年庆" 不得被当条目; 只有真实序号 1/2 进 items
+  const items = r.items;
+  assert.equal(items.length, 2, `应只切出 2 个真实条目, 实际 ${items.length}: ${JSON.stringify(items)}`);
+  assert.equal(items[0]?.index, 1);
+  assert.ok(items[0]?.text?.includes("门店"), `items[0].text 应含 '门店': ${items[0]?.text}`);
+  assert.equal(items[1]?.index, 2);
+  assert.ok(items[1]?.text?.includes("金源北路"), `items[1].text 应含 '金源北路': ${items[1]?.text}`);
+});
+
+test("v1.3.63 P2-3 — 单行接龙: 无 title 数字前缀, 正常切出所有条目", () => {
+  const raw = `<title>#接龙 🎯8月大卖 1. 门店＋型号 2. 金源北路GT7蓝 倪彩霞 3. 南京东路 周某</title>`;
+  const r = parseRelayText(raw);
+  assert.equal(r.items.length, 3);
+  assert.equal(r.items[0]?.index, 1);
+  assert.equal(r.items[1]?.index, 2);
+  assert.equal(r.items[2]?.index, 3);
+});
+
 // ===== v1.3.54 RELAY-TRIGGER — isRelayMessage 识别 (真实 vendor 接龙 type=49 app) =====
 
 test("v1.3.54 isRelayMessage — 真实接龙 type=49 app + #接龙 title → true", () => {

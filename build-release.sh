@@ -38,7 +38,9 @@ sed -i 's#/root/silk_decoder/silk/encoder#silk/encoder#g; s#/root/silk_decoder/s
   dist-release/src/dispatch/silk-encoder.js dist-release/src/storage/silk.js
 # v1.3.54 脱敏补强: index.js 运行时字符串里的真实群ID/老板wxid → 通用占位 (filehelper 命令示例 + targetResolver hint)
 sed -i 's#q139198824#YOUR_WXID#g; s#19908568237@chatroom#123456789@chatroom#g; s#53889526119@chatroom#123456789@chatroom#g; s#57737516566@chatroom#123456789@chatroom#g' dist-release/src/index.js
-echo "清洗完成: 接晓银→助手, wx.juhe.chat→(env 配置), silk 路径→silk/encoder, 群ID/wxid→通用占位"
+# v1.3.62 脱敏补强: index.js configUiHints placeholder 里的 vendor 域名 → 通用占位 (接收方按需填自己的 vendor host, 防泄露)
+sed -i 's#wx\.juhe\.chat#YOUR_VENDOR_HOST#g' dist-release/src/index.js
+echo "清洗完成: 接晓银→助手, wx.juhe.chat→(env 配置/safe-fetch 或 YOUR_VENDOR_HOST/index.js placeholder), silk 路径→silk/encoder, 群ID/wxid→通用占位"
 
 echo "=== [4.5/6] 校验无个性化值 ==="
 PERSONAL="wx\.juhe\.chat|接晓银|q139198824|wxid_dbdmq8riblxo12|wxid_eezdbu1ytws422|71bed0f5|19908568237|53889526119|57737516566|jsnjzhou|zhuqixia520520|knowhub|益融|淮安|盱眙|wechatpadpromax|silk_decoder|/root/silk_decoder"
@@ -99,7 +101,20 @@ cp db/schema.sql release/db/
 # 发布版文档 (对外开源版, 无 dev 内部引用) — 源在 release-docs/ (独立维护, 不被 rm -rf 删除)
 cp release-docs/GETTING_STARTED.md release/
 cp release-docs/README.md release/
+cp release-docs/DEPLOY.md release/
+cp release-docs/USAGE.md release/
 cp LICENSE release/
+# 配套服务端 (vendor) — 插件仅适配此版本 (v8_m4.1.12.29_p8.0.75.53)
+#   镜像 tar 从 /opt/1panel/docker/compose/ 复制; README 源在 release-docs/vendor/README.md
+mkdir -p release/vendor
+cp release-docs/vendor/README.md release/vendor/
+VENDOR_TAR="/opt/1panel/docker/compose/20260809_030557_linux64_v8_m4.1.12.29_p8.0.75.53.tar.gz"
+if [ -f "$VENDOR_TAR" ]; then
+  cp "$VENDOR_TAR" release/vendor/
+  echo "vendor 镜像已复制: $(du -h release/vendor/*.tar.gz | cut -f1)"
+else
+  echo "⚠ 未找到 vendor 镜像 $VENDOR_TAR, 跳过 (发布包不含服务端)"
+fi
 # package.json 清洗: scripts 只留 setup (发布版无 devDependencies, 其它 scripts 会失败); description 去内部部署引用
 node -e "
 const fs=require('fs');
@@ -117,7 +132,12 @@ echo "发布包体积: $(du -sh release | cut -f1)"
 
 echo "=== [8/6] 发布包最终脱敏校验 ==="
 FINAL_PERSONAL="wx\.juhe\.chat|接晓银|q139198824|wxid_dbdmq8riblxo12|wxid_eezdbu1ytws422|71bed0f5|19908568237|53889526119|57737516566|jsnjzhou|zhuqixia520520|knowhub|益融|淮安|盱眙|wechatpadpromax|silk_decoder|/root/silk_decoder|56Z8kt5ySirXyyGj|71bed0f5-626a"
-FINAL_HITS=$(grep -rlE "$FINAL_PERSONAL" release/ 2>/dev/null | grep -v node_modules | head -5)
+# 服务端部署文档描述 vendor 二进制名 (wechatpadpromax08, 运行命令必需) 是准确信息, 非个性化泄漏 — 排除
+#   (GETTING_STARTED/DEPLOY/vendor-README 均含服务端运行命令 ./wechatpadpromax08)
+FINAL_HITS=$(grep -rlE "$FINAL_PERSONAL" release/ 2>/dev/null \
+  | grep -v node_modules \
+  | grep -vE '^release/(GETTING_STARTED\.md|DEPLOY\.md|vendor/README\.md)$' \
+  | head -5)
 if [ -n "$FINAL_HITS" ]; then
   echo "⚠ release/ 仍含个性化值:"
   echo "$FINAL_HITS"

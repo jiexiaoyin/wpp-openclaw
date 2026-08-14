@@ -1,6 +1,7 @@
 // src/dispatch/dispatcher.ts - inbound → OpenClaw runtime dispatch
 // 仿 gewe v1.4.4 dispatcher 范式: recordInboundSession + dispatchReplyWithBufferedBlockDispatcher
 
+import { createHash } from "node:crypto";
 import { info, warn, debug, formatErr } from "../core/logger.js";
 // 文件消息 (v1 schema 无内容) → 固定回复纯函数, 供 dispatcher + 测试用
 export function buildFileAutoReply(
@@ -119,6 +120,18 @@ function buildSessionKeyForMsg(msg: WppInboundMessage): string {
     peerKind: msg.peerKind,
     peerId: msg.peerId,
   });
+}
+
+/**
+ * v2026-08-14 15:13 C-fix (老板 query 15:02 拍板 C+D): 拿 accountCtx.config.agent 真值。
+ * 只有真配置了 agent (accounts/<id>.json 的 agent 字段) 才返回, 没配置返回 undefined。
+ * 用于 cfg.agentId 注入, 防止把 fallback "main" 当有效 agentId 注入 cfg (会改变测试期望 + 干扰 framework).
+ */
+function resolveAccountAgentId(msg: WppInboundMessage): string | undefined {
+  const registry = getDefaultAccountRegistry();
+  const accountCtx = registry.get(msg.accountId);
+  if (!accountCtx) return undefined;
+  return accountCtx.config.agent;
 }
 
 /**
@@ -530,6 +543,43 @@ function buildCtxPayload(
  * AI 回复处理器: 调 registry sendText 发回对应 peer
  * runtime 内部 buffer + 限流 + 错峰 (避免被风控)
  */
+/**
+ * v2026-08-14 14:50 P0-fix (老板 query 14:46): 同 inbound 被 framework 同时派发给 2 个 agent 时,
+ *   AI 会看到自己刚发过同一接龙 → 自创英文 ack 模板"[Previous reply already sent...]"
+ *   → 用户群里刷屏 2 条消息, 一条假 ack 一条真回复。
+ * 修法 (通用, 不沾业务数据):
+ *   1. outbound dedupe — 同一 (accountId, toWxid, content[:30]) 5 分钟内只发一次
+ *      (跟 8-12 v1.3.14 QUOTE-FORCE-CONTEXT 思路同源: 防框架/AI 双调用)
+ *   2. AI 自创 ack 模板拦截 — content 命中 /\[(Previous|No further|Reply.*sent|delivered)\b/i
+ *      → 拦截不发 (返回 ok=true 不真发), 静默降级为 noop
+ *
+ * 命中拦截只 logger.warn (per SOP-6: silent drop 不记录 = 排查死, 一律 warn + ts + content 头)
+ */
+const _outboundDedup = new Map<string, number>(); // key → last sent ts (ms)
+export const OUTBOUND_DEDUP_WINDOW_MS = 5 * 60 * 1000;
+// v1.3.63 P1-1 fix (2026-08-14 审阅): 原 `)\b` 的 \b 被转义成字面 0x08 退格字节 → 正则恒 false,
+//   4 个真实 ack 模板全不匹配, 拦截半边生产失效。改为 word boundary `\b`。
+//   导出常量供测试 import 真值 (禁止手抄副本, per P1-1 教训)。
+// v1.3.63 P3 (2026-08-14 审阅): 收窄 — 只匹配完整 `[...]` 方括号块 (AI 自创 ack 模板形态),
+//   防正常回复正文里散落 "delivered"/"No further action" 被误伤静默 drop.
+export const ACK_TEMPLATE_RE = /\[[^\]]*(Previous reply already sent|No further action|Reply.*delivered|reply delivered successfully)[^\]]*\]/i;
+
+/** P1-4: 写时清扫 OUTBOUND_DEDUP_WINDOW_MS 之前的过期 key (照 webhook-receiver SeenTracker 范式) */
+export function sweepOutboundDedup(now: number): void {
+  if (_outboundDedup.size < 1024) return; // 小规模不扫, 避免每次发送都 O(n)
+  for (const [k, ts] of _outboundDedup) {
+    if (now - ts > OUTBOUND_DEDUP_WINDOW_MS) _outboundDedup.delete(k);
+  }
+}
+
+/** P1-3 fix: content[:30] 前缀作 key 会误吞同 peer 5 分钟内不同回复 (如"收到"/短中文模板).
+ *  改完整内容 hash (sha1 32 字节) — 不同回复永不冲突, 仅同内容才命中 dedupe (防双派发刷屏).
+ *  导出供测试验证 P1-3 行为. */
+export function dedupKeyFor(accountId: string, toWxid: string, text: string): string {
+  const h = createHash("sha1").update(text).digest("hex");
+  return `${accountId}|${toWxid}|${h}`;
+}
+
 async function sendAiReply(
   accountId: string,
   toWxid: string,
@@ -547,6 +597,20 @@ async function sendAiReply(
     innerType?: number;
   },
 ): Promise<{ ok: boolean; msgId?: string; error?: string }> {
+  // P0-fix 14:50: AI 自创 ack 模板拦截 (v1.3.63 P1-1: 正则已修 0x08 字节)
+  if (ACK_TEMPLATE_RE.test(text)) {
+    warn(`[WPP v1.3.63 ACK-TEMPLATE-DROP] suppressed AI self-generated ack template: textLen=${text.length} head="${text.slice(0, 60).replace(/\n/g, " ")}" account=${accountId} to=${toWxid}`);
+    return { ok: true, msgId: "ack-template-dropped" }; // 静默降级, 不真发
+  }
+  // P0-fix 14:50: outbound dedupe (5 分钟内同内容同 peer 不重发)
+  const now = Date.now();
+  const dedupKey = dedupKeyFor(accountId, toWxid, text);
+  sweepOutboundDedup(now); // P1-4: 写前清扫过期 key, 防 Map 无限增长
+  const lastAt = _outboundDedup.get(dedupKey);
+  if (lastAt !== undefined && (now - lastAt) < OUTBOUND_DEDUP_WINDOW_MS) {
+    warn(`[WPP v1.3.63 OUTBOUND-DEDUPE] suppressed duplicate within ${Math.round((now - lastAt) / 1000)}s: account=${accountId} to=${toWxid} len=${text.length}`);
+    return { ok: true, msgId: "dedup-suppressed" };
+  }
   const registry = getDefaultAccountRegistry();
   const ctx = registry.get(accountId);
   if (!ctx) {
@@ -569,12 +633,15 @@ async function sendAiReply(
         createtime: replyTo.createtime,
         innerType: replyTo.innerType,
       });
-      return qr.ok
-        ? { ok: true, msgId: (qr.data as { msgId?: string } | undefined)?.msgId }
-        : { ok: false, error: qr.msg };
+      if (qr.ok) {
+        _outboundDedup.set(dedupKey, now); // 成功发送后才记 dedup ts
+        return { ok: true, msgId: (qr.data as { msgId?: string } | undefined)?.msgId };
+      }
+      return { ok: false, error: qr.msg };
     }
     // 无被回复消息 → 普通文本 (兼容手动调用/工具场景)
     const r = await sendText(accountId, toWxid, text);
+    if (r.ok) _outboundDedup.set(dedupKey, now); // 成功发送后才记 dedup ts
     return r.ok ? { ok: true, msgId: r.msgId } : { ok: false, error: r.error };
   } catch (e) {
     return { ok: false, error: formatErr(e) };
@@ -713,11 +780,24 @@ async function dispatchOne(
   // Step 2: 调 AI 生成回复, deliver 回调负责把 AI reply 发到 vendor
   // v1.3.56 MULTI-ACCOUNT: 用 ALS 把当前账号注入上下文 — AI 回复生成期间调用的
   //   agent-tools (execute 拿不到 accountId) 通过 getCurrentAccountId() 取当前账号
+  // v2026-08-14 15:13 C-fix (老板 query 15:02 拍板 C+D): framework 内部 1 inbound → 2 dispatch 时,
+  //   第二条路径 (monitor/preview/heartbeat watcher) 不传 sessionKey → 用 default agent (main) 模型
+  //   → 群里刷屏 2 条 + AI 自创英文 ack 模板。
+  // 修法 (plugin 范围, 不改 framework): 在 cfg 显式注入 agentId 字段, 让 framework 的 model resolver
+  //   知道当前是 wpp-wechat session (从 accounts/default.json 的 agent 真值)。
+  // 副作用: framework 内部第二条路径 model resolver 也会用 cfg.agentId 解析 → 选 wpp-wechat 模型 → M2.7。
+  // 不沾业务数据: agentId 从 registry 真值拿 (已是 plugin 现有路径), 不硬编码 main/wpp-wechat。
+  //   只有真配置了 agent 才注入, 没配置的 (测试场景) 保持 cfg 原样不动。
+  const accountAgentId = resolveAccountAgentId(msg);
+  const cfgBase = ((ctx as { cfg?: unknown }).cfg ?? getOpenClawConfig() ?? {}) as Record<string, unknown>;
+  const cfgWithAgent = (accountAgentId && !cfgBase.agentId)
+    ? { ...cfgBase, agentId: accountAgentId }
+    : cfgBase;
   try {
     await accountContext.run(msg.accountId, async () => {
       await runtime.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
-      cfg: (ctx as { cfg?: unknown }).cfg ?? getOpenClawConfig() ?? {},
+      cfg: cfgWithAgent,
       replyOptions: {},
       dispatcherOptions: {
         deliver: async (payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string }, _info: unknown) => {

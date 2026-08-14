@@ -136,7 +136,9 @@ export async function callMcpTool(
       name,
       arguments: args,
     }, undefined, { timeout: MCP_TIMEOUT_MS });
-    info(`${LOG_TAG} [VENDOR-MCP] callTool ok: ${name} account=${key} args=${JSON.stringify(args).slice(0, 100)}`);
+    // v1.3.63 P3: args 只记 keys 不记值 (值可能含 CDN 签名 URL/消息内容)
+    const argKeys = Object.keys((args ?? {}) as Record<string, unknown>).join(",");
+    info(`${LOG_TAG} [VENDOR-MCP] callTool ok: ${name} account=${key} argKeys=${argKeys}`);
     return result;
   } catch (e) {
     warn(`${LOG_TAG} [VENDOR-MCP] callTool failed: ${name} account=${key} ${formatErr(e)}`, { tool: name });
@@ -225,7 +227,9 @@ export async function resolveFileViaMcp(
     warn(`${LOG_TAG} [VENDOR-MCP] resolveFileViaMcp: msg not found localId=${localId} filename=${filename}`);
     return null;
   }
-  info(`${LOG_TAG} [VENDOR-MCP] resolveFileViaMcp: found msg localId=${localId} payload=${JSON.stringify(target).slice(0, 200)}`);
+  // v1.3.63 P3: payload 只记 keys 不记内容 (内容可能含 CDN 签名 URL)
+  const targetKeys = Object.keys((target ?? {}) as Record<string, unknown>).join(",");
+  info(`${LOG_TAG} [VENDOR-MCP] resolveFileViaMcp: found msg localId=${localId} payloadKeys=${targetKeys}`);
 
   const rawContent = String(target.content ?? "");
   const cdnUrl =

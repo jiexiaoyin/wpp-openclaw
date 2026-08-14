@@ -16,6 +16,8 @@ export interface WppAccountConfig {
   webhookPath: string;
   /** 业务回调路径 (走 /Webhook/Business/Set + /Msg/StartAutoSync 完整消息) */
   webhookBusinessPath?: string;
+  /** v1.3.63 P1-7: webhook path token (随机 hex, 插入 path 防伪造触发 AI). 配了 → /wechatpadpro/<token>/webhook */
+  webhookPathToken?: string;
   webhookSecret: string;
   // optional env-based secret (避免明文落盘)
   webhookSecretEnv?: string;
@@ -175,6 +177,8 @@ export interface WppGlobalConfig {
         passwordEnv?: string;
         database: string;
         connectionLimit: number;
+        /** v1.3.63 P2: 池排队上限 (超限拒绝, 防耗尽时无限等待) */
+        queueLimit?: number;
       };
     };
   };
@@ -257,7 +261,7 @@ export interface WppAccountState {
   selfWxid: string;
   // G1 mutation methods (由 AccountContext 实现)
   attachWsClient(ws: WppWsClient): void;
-  attachWebhookServer(srv: WppWebhookServer): void;
+  attachWebhookServer(srv: WppWebhookServer, paths?: string[]): void;
   setVendorAuth(selfWxid: string, authcode: string): void;
   stop(): Promise<void>;
   // periodic setWebhook retry timer
@@ -316,6 +320,9 @@ export interface WppWsClient {
 export interface WppWebhookServer {
   start(): Promise<void>;
   stop(): Promise<void>;
+  addPath(path: string, onMessage: (payload: WppWebhookPayload) => void | Promise<void>): void;
+  /** v1.3.63 P1: 移除账号时清理 path */
+  removePath(path: string): void;
 }
 
 // vendor 推送的 webhook 消息 payload (from real swagger 抽样)

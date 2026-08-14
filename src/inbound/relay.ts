@@ -81,12 +81,54 @@ function parseRecordItem(block: string, idx: number): RelayItem {
   return { index: idx + 1, wxid, nickname, text };
 }
 
+/**
+ * v2026-08-14 10:45 fix (老板 query): 兼容 vendor push 单行无换行接龙.
+ * 实测: vendor 把整条接龙 title + 规则 + 接龙者 拼成 1 行字符串, 没有 \n.
+ * 例: "#接龙 🎯🎯🎯 ... ㊗益融8月大卖...🥳 1. 门店＋型号 2. 金源北路GT7蓝 倪彩霞"
+ * → 直接按 \d+\. 切, 拿到 ["1. 门店＋型号 ", "2. 金源北路GT7蓝 倪彩霞"]
+ *   (按老板 6-09 / 8-12 指正: 不假设首词=昵称, 整段给 AI 自己判断)
+ */
+/** P2-3: 剥掉首个 \d+\.\s 之前的接龙前缀 ("#接龙 xxx 3. 周年庆 ...") — 回退用 */
+function stripTitlePrefix(text: string): string {
+  const idx = text.search(/\d+\.\s/);
+  return idx > 0 ? text.slice(idx) : text;
+}
+
+function parsePlainListSingleLine(text: string): RelayItem[] {
+  // v1.3.63 P2-3 (2026-08-14 审阅): title 里可能含 "N. " (如 "#接龙 3. 周年庆 1. 门店＋型号 2. ...")
+  //   → 不剥前缀会把 "3. 周年庆" 误判成条目且序号乱。策略:
+  //     条目总是从 `1. ` 开始 → 从第一个 `1. ` 处切起 (title 里即使有 "3. 周年庆" 也在 1. 之前被弃)
+  //     无 `1. ` 时回退: 剥掉首个 \d+\.\s 之前的接龙前缀再切。
+  const oneIdx = text.search(/(?:^|\s)1\.\s/);
+  const body = oneIdx >= 0 ? text.slice(oneIdx).replace(/^\s+/, "") : stripTitlePrefix(text);
+  const chunks = body.split(/(?=\d+\.\s)/).filter((c) => /^\d+\.\s/.test(c.trim()));
+  return chunks
+    .map((chunk, i): RelayItem | null => {
+      const m = chunk.trim().match(/^(\d+)\.\s*(.*)$/);
+      if (!m) return null;
+      const [, idxStr, rest] = m;
+      return {
+        index: Number(idxStr ?? i + 1),
+        text: rest?.trim() || undefined,
+      };
+    })
+    .filter((x): x is RelayItem => x !== null);
+}
+
 function parsePlainList(text: string): RelayItem[] {
   // 统一处理: 先按 \n 分行, 非 "N." 开头的行合并到上一条 (条目内换行延续, 如 "2. 倪彩霞\ngt7")
   //   再按 `\d+\.` 切分成条目 (支持单行 "1. 2. 倪彩霞 gt7 3. ..." 和无换行混合)
+  //
+  // v2026-08-14 10:45 fix (老板 query, per 6-09 教训回归): vendor push 接龙内容**单行无换行**,
+  //   原代码 `text.split(/\n+/)` 只返回 1 个 line, 后续 for loop 因 line 不以 \d+. 开头被跳过,
+  //   merged 永远是空 → items=[]. 修法: line 单一时直接走 regex split, 不依赖 \n.
   const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   // 合并: 不以 \d+. 开头的行 → 追加到上一条 (条目内换行)
   const merged: string[] = [];
+  if (lines.length === 1) {
+    // 单行无换行 (vendor push 真实格式): 直接按 \d+\. 切, 不依赖 \n 分行
+    return parsePlainListSingleLine(lines[0]!);
+  }
   for (const line of lines) {
     if (/^\d+\.\s/.test(line)) {
       merged.push(line);

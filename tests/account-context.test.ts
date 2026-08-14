@@ -42,15 +42,20 @@ function makeFakeWs(): WppWsClient {
   };
 }
 
-function makeFakeWebhook(): WppWebhookServer & { stopped: boolean } {
+function makeFakeWebhook(): WppWebhookServer & { stopped: boolean; removedPaths: string[] } {
   const srv = {
     started: false,
     stopped: false,
+    removedPaths: [] as string[],
     async start() {
       srv.started = true;
     },
     async stop() {
       srv.stopped = true;
+    },
+    addPath() {},
+    removePath(p: string) {
+      srv.removedPaths.push(p);
     },
   };
   return srv;
@@ -164,17 +169,18 @@ test("AccountContext — stop() 无 ws/webhook 不抛", async () => {
   await assert.doesNotReject(() => ctx.stop());
 });
 
-test("AccountContext — stop() 调用 ws.stop + webhook.stop", async () => {
+test("AccountContext — stop() 调用 ws.stop + webhook removePath (共享 server 不停)", async () => {
   const ctx = new AccountContext({ accountId: "a", config: makeTestConfig() });
   const ws = makeFakeWs();
   const srv = makeFakeWebhook();
   ctx.attachWsClient(ws);
-  ctx.attachWebhookServer(srv);
+  ctx.attachWebhookServer(srv, ["/a", "/a/business"]);
   let wsStopped = false;
   ws.stop = async () => { wsStopped = true; };
   await ctx.stop();
   assert.equal(wsStopped, true);
-  assert.equal(srv.stopped, true);
+  assert.equal(srv.stopped, false, "共享 server 不应真正 stop (由 shutdown 统一处理)");
+  assert.deepEqual(srv.removedPaths, ["/a", "/a/business"], "应 removePath 摘掉本账号的 path");
 });
 
 test("AccountContext — stop() 单边失败不影响另一边", async () => {
@@ -182,12 +188,12 @@ test("AccountContext — stop() 单边失败不影响另一边", async () => {
   const ws = makeFakeWs();
   const srv = makeFakeWebhook();
   ctx.attachWsClient(ws);
-  ctx.attachWebhookServer(srv);
+  ctx.attachWebhookServer(srv, ["/a"]);
   let wsStopped = false;
   ws.stop = async () => { wsStopped = true; throw new Error("ws boom"); };
   await ctx.stop(); // 不应 throw
   assert.equal(wsStopped, true);
-  assert.equal(srv.stopped, true, "webhook 应该也被停了");
+  assert.deepEqual(srv.removedPaths, ["/a"], "webhook removePath 仍应执行 (ws 失败不影响)");
 });
 
 // ===== 6. 敏感字段脱敏 =====
