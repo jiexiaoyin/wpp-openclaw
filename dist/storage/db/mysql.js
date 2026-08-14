@@ -152,6 +152,7 @@ export function createMysqlAdapter(cfg) {
                 waitForConnections: true,
                 enableKeepAlive: true,
                 charset: "utf8mb4",
+                queueLimit: cfg.mysql.queueLimit ?? 50,
             });
             info(`mysqlAdapter pool init: ${cfg.mysql.host}:${cfg.mysql.port}/${cfg.mysql.database} (user=${cfg.mysql.user}, limit=${cfg.mysql.connectionLimit})`);
         }
@@ -318,7 +319,8 @@ export function createMysqlAdapter(cfg) {
         },
         async getContacts(accountId, limit = 500) {
             const p = getPool();
-            const rows = await queryWithTimeout(p, `SELECT * FROM wpp_contacts WHERE account_id = ? LIMIT ${limit}`, [accountId]);
+            const safeLimit = Math.max(1, Math.min(Math.trunc(limit) || 500, 1000));
+            const rows = await queryWithTimeout(p, `SELECT * FROM wpp_contacts WHERE account_id = ? LIMIT ${safeLimit}`, [accountId]);
             return rows.map((r) => ({
                 account_id: String(r.account_id),
                 wxid: String(r.wxid),
@@ -350,7 +352,8 @@ export function createMysqlAdapter(cfg) {
         },
         async getChatrooms(accountId, limit = 500) {
             const p = getPool();
-            const rows = await queryWithTimeout(p, `SELECT * FROM wpp_chatrooms WHERE account_id = ? LIMIT ${limit}`, [accountId]);
+            const safeLimit = Math.max(1, Math.min(Math.trunc(limit) || 500, 1000));
+            const rows = await queryWithTimeout(p, `SELECT * FROM wpp_chatrooms WHERE account_id = ? LIMIT ${safeLimit}`, [accountId]);
             return rows.map((r) => ({
                 account_id: String(r.account_id),
                 chatroom_id: String(r.chatroom_id),

@@ -29,10 +29,10 @@ export async function resolveImageToBase64(input) {
     }
     return input.trim();
 }
-export async function readLocalMedia(p) {
-    const allowedRoots = [
+export async function readLocalMedia(p, allowedRootsOverride) {
+    const allowedRoots = allowedRootsOverride ?? [
         "/root/.openclaw/media",
-        "/root/.openclaw/workspace",
+        "/root/.openclaw/workspace/media",
         "/root/.openclaw/shared-media",
     ];
     const normalized = path.normalize(p);
@@ -46,7 +46,21 @@ export async function readLocalMedia(p) {
     })) {
         throw new Error("resolveImageToBase64: local path outside allowed media dirs");
     }
-    return readFile(abs);
+    let real;
+    try {
+        real = await import("node:fs/promises").then((fsp) => fsp.realpath(abs));
+    }
+    catch {
+        throw new Error("resolveImageToBase64: cannot resolve local path");
+    }
+    const insideAllowed = allowedRoots.some((root) => {
+        const rootWithSep = root.endsWith("/") ? root : root + "/";
+        return real === root || real.startsWith(rootWithSep);
+    });
+    if (!insideAllowed) {
+        throw new Error("resolveImageToBase64: local path resolves outside allowed media dirs");
+    }
+    return readFile(real);
 }
 function sanitizeHost(url) {
     try {

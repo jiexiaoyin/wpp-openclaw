@@ -109,15 +109,6 @@ export const FRIEND_CIRCLE_META = {
         }),
         (imageDataList) => getFriendCircleApi().uploadImages(imageDataList),
     ],
-    publishCircleRaw: [
-        "发布朋友圈 (原始 XML 兼容接口). content=文字内容, blackList/withUserList 可选.",
-        Type.Object({
-            content: Type.String({ description: "朋友圈文字" }),
-            blackList: Type.Optional(Type.String()),
-            withUserList: Type.Optional(Type.String()),
-        }),
-        (content, blackList, withUserList) => getFriendCircleApi().messagesRaw(content, blackList ?? "", withUserList ?? ""),
-    ],
     setCircleBackgroundImage: [
         "设置朋友圈背景图. imageData=图片 base64.",
         Type.Object({ imageData: Type.String({ description: "背景图 base64" }) }),

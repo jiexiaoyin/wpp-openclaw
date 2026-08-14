@@ -199,6 +199,7 @@ export async function writeAccountFile(input) {
         webhookSecret: "",
         ...(input.webhookSecretEnv ? { webhookSecretEnv: input.webhookSecretEnv } : {}),
         ...(input.webhookBusinessPath ? { webhookBusinessPath: input.webhookBusinessPath } : {}),
+        ...(input.webhookPathToken ? { webhookPathToken: input.webhookPathToken } : {}),
         ...(input.webhookPublicUrl ? { webhookPublicUrl: input.webhookPublicUrl } : {
             ...(input.webhookPublicUrlEnv ? { webhookPublicUrlEnv: input.webhookPublicUrlEnv } : {}),
         }),
@@ -337,16 +338,21 @@ export async function unregisterAccountFromOpenclaw(accountId, agentId) {
         cfg.bindings = kept;
         removed = true;
     }
-    if (agentId) {
-        const agentsCfg = (cfg.agents ?? {});
-        const agentList = agentsCfg.list;
-        if (Array.isArray(agentList)) {
-            const listBefore = agentList.length;
-            const keptList = agentList.filter((a) => a?.id !== agentId);
-            if (keptList.length !== listBefore) {
-                agentsCfg.list = keptList;
-                cfg.agents = agentsCfg;
-                removed = true;
+    const SHARED_AGENTS = new Set(["wpp-wechat", "main"]);
+    if (agentId && !SHARED_AGENTS.has(agentId)) {
+        const keptBindings = (cfg.bindings ?? []);
+        const stillReferenced = keptBindings.some((b) => b.agentId === agentId);
+        if (!stillReferenced) {
+            const agentsCfg = (cfg.agents ?? {});
+            const agentList = agentsCfg.list;
+            if (Array.isArray(agentList)) {
+                const listBefore = agentList.length;
+                const keptList = agentList.filter((a) => a?.id !== agentId);
+                if (keptList.length !== listBefore) {
+                    agentsCfg.list = keptList;
+                    cfg.agents = agentsCfg;
+                    removed = true;
+                }
             }
         }
     }
@@ -566,9 +572,7 @@ export async function ensureAgentWorkspace(opts) {
             const hasBinding = bindings.some((b) => b.match?.channel === "wechatpadpro" &&
                 b.match?.accountId === accountId);
             if (!hasBinding) {
-                const maxId = Math.max(0, ...bindings.map((b) => Number(b?.bindId ?? 0)));
                 bindings.push({
-                    bindId: maxId + 1,
                     type: "route",
                     agentId,
                     comment: `WeChatPadPro account ${accountId} routes to ${agentId}`,
@@ -577,9 +581,7 @@ export async function ensureAgentWorkspace(opts) {
             }
         }
         else {
-            const maxId = Math.max(0, ...bindings.map((b) => Number(b?.bindId ?? 0)));
             bindings.push({
-                bindId: maxId + 1,
                 type: "route",
                 agentId,
                 match: { channel: "wechatpadpro" },

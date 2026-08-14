@@ -56,8 +56,14 @@ export function isCommandIntent(text) {
     return /删|撤回|发|转|帮|改|推送|群发|邀请|踢|移除|改名|建|拉|分享|转发|回复/i.test(String(text ?? ""));
 }
 const embedCache = new Map();
+const EMBED_CACHE_MAX = 2000;
 export function cacheEmbedding(msgId, vec) {
     embedCache.set(msgId, vec);
+    if (embedCache.size > EMBED_CACHE_MAX) {
+        const oldest = embedCache.keys().next().value;
+        if (oldest !== undefined)
+            embedCache.delete(oldest);
+    }
 }
 export function getCachedEmbedding(msgId) {
     return embedCache.get(msgId);

@@ -31,9 +31,33 @@ function parseRecordItem(block, idx) {
     const text = block.match(/<text>([\s\S]*?)<\/text>/)?.[1]?.trim();
     return { index: idx + 1, wxid, nickname, text };
 }
+function stripTitlePrefix(text) {
+    const idx = text.search(/\d+\.\s/);
+    return idx > 0 ? text.slice(idx) : text;
+}
+function parsePlainListSingleLine(text) {
+    const oneIdx = text.search(/(?:^|\s)1\.\s/);
+    const body = oneIdx >= 0 ? text.slice(oneIdx).replace(/^\s+/, "") : stripTitlePrefix(text);
+    const chunks = body.split(/(?=\d+\.\s)/).filter((c) => /^\d+\.\s/.test(c.trim()));
+    return chunks
+        .map((chunk, i) => {
+        const m = chunk.trim().match(/^(\d+)\.\s*(.*)$/);
+        if (!m)
+            return null;
+        const [, idxStr, rest] = m;
+        return {
+            index: Number(idxStr ?? i + 1),
+            text: rest?.trim() || undefined,
+        };
+    })
+        .filter((x) => x !== null);
+}
 function parsePlainList(text) {
     const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
     const merged = [];
+    if (lines.length === 1) {
+        return parsePlainListSingleLine(lines[0]);
+    }
     for (const line of lines) {
         if (/^\d+\.\s/.test(line)) {
             merged.push(line);
