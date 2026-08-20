@@ -42,7 +42,7 @@ export async function enrichImageMessage(ctx, xml) {
         }
     }
 }
-export async function enrichImageMessageFromV1(ctx, localId, toWxid, md5) {
+export async function enrichImageMessageFromV1(ctx, localId, toWxid, md5, dataLen) {
     if (!Number.isInteger(localId) || localId <= 0 || localId > 0xffffffff) {
         return { mediaUrl: null, mediaSize: null, error: `invalid localId: ${localId}` };
     }
@@ -54,7 +54,13 @@ export async function enrichImageMessageFromV1(ctx, localId, toWxid, md5) {
     try {
         const { postWppJson } = await import("../../api/client.js");
         const { ctxToCallOpts } = await import("../../send/factory.js");
-        const resp = await postWppJson(ctx.baseUrl, "/Tools/DownloadImg", { msgId: localId, toWxid, compressType: 0 }, { ...ctxToCallOpts(ctx), timeoutMs: 30000, maxRetries: 1 });
+        const resp = await postWppJson(ctx.baseUrl, "/Tools/DownloadImg", {
+            msg_id: localId,
+            to_wxid: toWxid,
+            data_len: dataLen ?? 0,
+            compress_type: 0,
+            ...(dataLen ? { section: { start_pos: 0, data_len: dataLen } } : {}),
+        }, { ...ctxToCallOpts(ctx), timeoutMs: 30000, maxRetries: 1 });
         const baseRet = resp.Data?.BaseResponse?.ret;
         if (resp.Code !== 0 || baseRet !== 0) {
             const errMsg = resp.Data?.BaseResponse?.errMsg?.string ?? `Code=${resp.Code}`;
@@ -159,6 +165,15 @@ export function isV1SchemaImage(raw) {
             localId: r.local_id,
             md5: typeof imageObj?.md5 === "string" ? imageObj.md5 : undefined,
             toWxid,
+            dataLen: typeof imageObj?.data_len === "number"
+                ? imageObj.data_len
+                : typeof imageObj?.total_len === "number"
+                    ? imageObj.total_len
+                    : typeof imageObj?.file_size === "number"
+                        ? imageObj.file_size
+                        : typeof r.data_len === "number"
+                            ? r.data_len
+                            : undefined,
             cdnDownloadCtx,
         };
     }
