@@ -21,12 +21,14 @@ docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
 
 ## 部署 (官方 docker-deploy 发布包)
 
-> 官方提供 `8075docker-deploy.zip` 一键部署包 (含 `docker-compose.release.yml` + `install.sh`)。**network_mode: host**, 端口即宿主机端口。
+> 本发布包 `vendor/` 目录附带官方一键部署包 **`8075docker-deploy.zip`** (含 `docker-compose.release.yml` + `install.sh` + `check-proxy.sh` + `config/app.conf`)。**network_mode: host**, 端口即宿主机端口。
 
 ```bash
-# 1. 解压发布包
+# 1. 解压 vendor/8075docker-deploy.zip
+unzip vendor/8075docker-deploy.zip
 cd docker-deploy
 # 2. 首次运行: install.sh 会引导填写 user_token_key (客户端密钥) + 自动生成 Redis 密码
+chmod +x install.sh check-proxy.sh
 ./install.sh
 ```
 
@@ -65,6 +67,7 @@ redislink = 127.0.0.1:16379             # 项目独立 Redis (仅宿主机回环
 - 每个 API 还需 `authcode` query 参数 (插件 `withAuthcodeQuery` 自动注入)。
 
 > 微信需先通过服务端扫码登录 (`/Login/GetQR` → `/Login/CheckQR`), 拿到 `authcode` 后填入插件账号配置。
+> 完整的人脸 face 认证 + iPad 扫码登录引导见 **[FACE-LOGIN.md](./FACE-LOGIN.md)** (含人脸 CA 证书安装、18080 代理白名单、GetQR/CheckQR 调用示例)。
 
 ## 升级服务端
 
