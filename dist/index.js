@@ -14,7 +14,7 @@ import { buildSessionKey } from "./session-key.js";
 import { sendText as dispatchSendText, sendImage as dispatchSendImage } from "./dispatch/outbound.js";
 import { AGENT_TOOLS } from "./dispatch/agent-tools/index.js";
 import { getCurrentAccountId } from "./dispatch/account-context.js";
-import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom } from "./config.js";
+import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag } from "./config.js";
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig } from "./core/runtime-config.js";
 const runtimeTriggerConfigs = new Map();
@@ -173,6 +173,29 @@ export const FILEHELPER_COMMANDS = [
             await sendToFileHelper(accountId, toWxid, r.ok
                 ? `✅ 已移除群聊白名单: ${target}\n当前群聊白名单 (${r.groupAllowFrom.length}): ${r.groupAllowFrom.join(", ") || "(空)"}`
                 : `❌ 移除失败: ${r.reason ?? "unknown"}`);
+        },
+    },
+    {
+        name: "/xiaowei",
+        desc: "小微智能体能力开关 (on/off/status)",
+        example: "/xiaowei on",
+        handler: async ({ accountId, toWxid, args }) => {
+            const arg = (args[0] ?? "").toLowerCase();
+            const cfg = await loadAccountConfigAsync(accountId);
+            const current = Boolean(cfg?.xiaoweiEnabled);
+            if (arg === "status") {
+                await sendToFileHelper(accountId, toWxid, `小微智能体: ${current ? "✅ 开启" : "❌ 关闭"}`);
+                return;
+            }
+            if (arg !== "on" && arg !== "off") {
+                await sendToFileHelper(accountId, toWxid, "用法: /xiaowei on|off|status\n示例: /xiaowei on (开启小微智能体)");
+                return;
+            }
+            const target = arg === "on";
+            const r = await setAccountFlag(accountId, "xiaoweiEnabled", target);
+            await sendToFileHelper(accountId, toWxid, r.ok
+                ? `✅ 小微智能体已${target ? "开启" : "关闭"} (account=${accountId})`
+                : `❌ 设置失败: ${r.reason ?? "unknown"}`);
         },
     },
 ];
