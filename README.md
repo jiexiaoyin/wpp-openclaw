@@ -50,7 +50,7 @@ bash deploy-swap.sh --force  # 真实部署
 > **zip 小 = 正常**: 发布包只含编译产物, 不含 node_modules。`npm ci` 会根据 package.json 自动下载全部依赖。
 > **`WPP_VENDOR_HOST` 别漏**: 媒体下载走白名单, 不设则图片/语音/文件全部无法下载。
 
-> **配套服务端**: 本包**不含服务端二进制**。服务端通过官方 Docker 镜像获取: `docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1`, 用官方 docker-deploy 包部署 (host 网络 + 独立 Redis)。详见 [`vendor/README.md`](./vendor/README.md)。插件仅适配此版本 (20260818)。
+> **配套服务端**: 本包**不含服务端二进制**。服务端通过官方 Docker 镜像获取: `docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1`, 用官方 docker-deploy 包部署 (host 网络 + 独立 Redis)。`vendor/` 目录附带部署包 `8075docker-deploy.zip` + 完整文档: [`vendor/README.md`](./vendor/README.md) (部署) + [`vendor/FACE-LOGIN.md`](./vendor/FACE-LOGIN.md) (人脸认证 + iPad 扫码登录)。插件仅适配此版本 (20260818)。
 
 详细步骤见 [GETTING_STARTED.md](./GETTING_STARTED.md)。
 
