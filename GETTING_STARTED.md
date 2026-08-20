@@ -76,6 +76,16 @@ curl http://127.0.0.1:18062          # HTTP API
 curl http://127.0.0.1:18062/swagger/  # 313 个 API 文档
 ```
 
+### 2.0.1 人脸认证 + iPad 扫码登录 (首次必做)
+
+服务端部署后，微信账号需先**人脸 face 认证** + **iPad 协议扫码登录**才能被插件使用。步骤:
+1. **安装人脸 CA 证书** (每台手机第一次): 服务器 `data/wechatpad/` 生成, 传到手机安装+信任
+2. **开放 18080 白名单**: 只允许实际验证手机的公网来源 IP
+3. **GetQR 获取二维码** → 手机微信扫一扫 (触发人脸验证) → **CheckQR 轮询确认**
+4. 登录成功拿到 **authcode** (X-Access-Token), 填入插件账号配置
+
+> 完整引导 (含 GetQR/CheckQR 调用示例 + 常见问题) 见 **[vendor/FACE-LOGIN.md](./vendor/FACE-LOGIN.md)**。
+
 > 插件需能访问服务端: 同机用 `http://127.0.0.1:18062`, 跨机用 nginx 反代 + `WPP_VENDOR_HOST`。
 
 **前提**: 你的 OpenClaw gateway 已运行 (v2026.7.1+ 兼容的 channel 插件契约), 本插件随包的 `deploy.sh` 会自动注册到你的 OpenClaw。
