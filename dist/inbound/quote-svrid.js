@@ -26,11 +26,11 @@ export async function captureQuoteSvrid(msgContent, accountId) {
             quoted_content_hash: quotedContent ? simpleHash(quotedContent.slice(0, 200)) : null,
             captured_at: Math.floor(Date.now() / 1000),
         });
-        info(`[WPP v1.2.0] quote svrid captured: svrid=${svrid} md5=${md5 ?? "(text)"} (account=${accountId})`);
+        info(`[WPP v1.3.74] quote svrid captured: svrid=${svrid} md5=${md5 ?? "(text)"} (account=${accountId})`);
         return { svrid, md5: md5 ?? undefined, captured: true };
     }
     catch (e) {
-        warn(`[WPP v1.2.0] quote svrid capture failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+        warn(`[WPP v1.3.74] quote svrid capture failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
         return { svrid, md5: md5 ?? undefined, captured: false };
     }
 }
@@ -47,7 +47,7 @@ export async function resolveQuoteSvrid(msgId, newMsgId, content, accountId) {
     if (md5) {
         const svrid = await getSvridByMd5(md5, accountId);
         if (svrid) {
-            info(`[WPP v1.2.0] svrid resolved via md5: ${svrid} (md5=${md5})`);
+            info(`[WPP v1.3.74] svrid resolved via md5: ${svrid} (md5=${md5})`);
             return svrid;
         }
     }
