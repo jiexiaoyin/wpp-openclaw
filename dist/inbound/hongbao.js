@@ -12,6 +12,13 @@ export function isRedPacketMessage(msg) {
         if (/hongbao|redpacket/i.test(t))
             return true;
     }
+    const app = msg.raw.app;
+    if (app && typeof app.category === "string") {
+        if (/payment_notice|transfer|pay/i.test(app.category))
+            return true;
+        if (typeof app.description === "string" && /转账|收款|transfer/i.test(app.description))
+            return true;
+    }
     return false;
 }
 export function extractRedPacketInfo(msg) {

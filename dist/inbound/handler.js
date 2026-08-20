@@ -329,6 +329,10 @@ export function createWppInboundHandler(opts) {
             const triggerResults = persistResults;
             const dispatched = [];
             for (const [m, t] of triggerResults) {
+                if (isRedPacketMessage(m))
+                    continue;
+                if (m.msgType === 10000)
+                    continue;
                 if (m.peerId === "filehelper" && /^\s*\//.test(m.content))
                     continue;
                 if (opts.enableDispatch !== false && isRelayMessage(m)) {
