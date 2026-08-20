@@ -8,6 +8,37 @@
 
 ---
 
+## 0. 凭证准备 (先拿 tokenKey, 再拿 authcode)
+
+登录前需要**两类凭证**，获取顺序不可颠倒:
+
+| 凭证 | 是什么 | 在哪拿 | 用途 |
+|---|---|---|---|
+| **tokenKey** (客户端密钥) | 平台授权凭证 | [adminmax.knowhub.cloud/user/access-tokens](https://adminmax.knowhub.cloud/user/access-tokens) 创建 | **部署 vendor 的前提** — 填 `config/app.conf` 的 `user_token_key` |
+| **authcode** (X-Access-Token) | 设备登录凭证 | 部署后服务端生成 (扫码登录完成) | **扫码登录/人脸认证/所有 API 调用** |
+
+> ⚠️ **顺序**: 没有 tokenKey 无法部署 vendor (install.sh 校验 `user_token_key` 非空)；没有 authcode 无法扫码登录。**先拿 tokenKey → 部署 → 再拿 authcode → 登录**。
+
+### 第 0.1 步: 获取 tokenKey (客户端密钥)
+
+1. 打开 [访问控制](https://adminmax.knowhub.cloud/user/access-tokens) 并登录
+2. 在 `access-tokens` 页面创建**客户端密钥**。密钥仅完整显示一次，请立即保存
+3. 把密钥填到 `docker-deploy/config/app.conf`:
+
+```ini
+user_token_key = "你的客户端密钥"
+```
+
+4. 运行 `./install.sh` 部署 vendor (脚本也会引导完成这步)
+
+> 一个客户端密钥只对应一套部署。新增服务器/迁移时单独创建新密钥，不要多套共用。
+
+### 第 0.2 步: 获取 authcode (X-Access-Token)
+
+authcode 在**扫码登录完成后**由服务端生成。本文档第 3-4 节完成登录后即可拿到。
+
+---
+
 ## 1. 登录链路总览
 
 ```

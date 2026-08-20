@@ -63,13 +63,17 @@ export WPP_SILK_DECODER_PATH="/path/to/silk/decoder"
 
 > 本发布包**不含服务端二进制**。服务端通过官方 Docker 镜像获取 + 官方 docker-deploy 一键部署。详细见 [vendor/README.md](./vendor/README.md)。
 
+**前置: 拿 tokenKey (客户端密钥)** — 部署 vendor 必须先有:
+1. 打开 [adminmax.knowhub.cloud/user/access-tokens](https://adminmax.knowhub.cloud/user/access-tokens) 创建客户端密钥 (只显示一次, 保存好)
+2. 填到 `docker-deploy/config/app.conf` 的 `user_token_key` (install.sh 也会引导)
+
 ```bash
 # 1. 拉取镜像 (v2026.08.18.1, build 20260818)
 docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
 
 # 2. 用官方 docker-deploy 发布包部署 (host 网络 + 独立 Redis)
 #    解压 8075docker-deploy.zip → cd docker-deploy → ./install.sh
-#    install.sh 引导填 user_token_key + 自动生成 Redis 密码
+#    install.sh 引导填 user_token_key (客户端密钥, 见上方前置) + 自动生成 Redis 密码
 
 # 3. 验证 (端口是宿主机端口)
 curl http://127.0.0.1:18062          # HTTP API
@@ -78,11 +82,11 @@ curl http://127.0.0.1:18062/swagger/  # 313 个 API 文档
 
 ### 2.0.1 人脸认证 + iPad 扫码登录 (首次必做)
 
-服务端部署后，微信账号需先**人脸 face 认证** + **iPad 协议扫码登录**才能被插件使用。步骤:
+服务端部署后，微信账号需先**人脸 face 认证** + **iPad 协议扫码登录**才能被插件使用。登录需要 **authcode (X-Access-Token)**, 它由服务端在扫码登录完成后生成。步骤:
 1. **安装人脸 CA 证书** (每台手机第一次): 服务器 `data/wechatpad/` 生成, 传到手机安装+信任
 2. **开放 18080 白名单**: 只允许实际验证手机的公网来源 IP
 3. **GetQR 获取二维码** → 手机微信扫一扫 (触发人脸验证) → **CheckQR 轮询确认**
-4. 登录成功拿到 **authcode** (X-Access-Token), 填入插件账号配置
+4. 登录成功服务端生成 **authcode** (X-Access-Token), 填入插件账号配置
 
 > 完整引导 (含 GetQR/CheckQR 调用示例 + 常见问题) 见 **[vendor/FACE-LOGIN.md](./vendor/FACE-LOGIN.md)**。
 
