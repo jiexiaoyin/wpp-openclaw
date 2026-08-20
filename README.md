@@ -10,36 +10,63 @@ WeChatPadPro 微信 Pad 协议 → OpenClaw gateway → AI 自动回复。支持
 
 ---
 
+## ✨ 功能亮点
+
+| 能力 | 说明 |
+|---|---|
+| 📨 **消息收发** | 文本 / 图片 / 语音 / 视频 / 文件, 全类型支持 |
+| 🤖 **AI 自动回复** | 私聊 / 群聊 @ 机器人 → OpenClaw agent 生成回复 (可接任意 LLM) |
+| 💬 **引用回复** | AI 引用用户消息回复 (type=57 引用卡片, 上下文清晰) |
+| 🖼 **图片 AI 识别** | AI 多模态看图 (微信图片自动下载 → OSS → 视觉模型) |
+| 🎙 **语音收发** | 发语音自动转 silk; 收语音 STT 转文字; 转码失败自动降级发文件 |
+| 📋 **群接龙自动触发** | 群里发 `#接龙 xxx` → AI 自动应景回复 (无需 @, 节流防刷屏) |
+| 👥 **多账号** | AccountRegistry 多账号隔离, 一个微信一个 agent |
+| 📮 **群发消息** | 群发文本到多个群 (`SendGroupMassMsgText`) |
+| 📄 **公众号文章** | 拉取文章列表 / 转 Markdown / 阅读解析 |
+| 📹 **视频号** | 视频号内容详情 / 评论 / 解析分享链接 |
+| 💰 **红包/支付** | 抢红包完整参数 / 无加密兼容打开 |
+| 🔐 **安全门禁** | 私聊白名单 (fail-closed) + 群策略 + 凭证 env 隔离 |
+| 📊 **监控** | Prometheus metrics (消息/错误/性能) |
+
+> **200+ AI 工具 · 313 vendor 端点 · 6 配置助手** — 完整能力见 [功能清单](#功能清单)。
+
+---
+
 ## ⚡ 快速部署 (先服务端, 再插件)
 
 > **先部署服务端 (vendor), 再装插件** — 插件依赖服务端提供 HTTP API + WebSocket。本包**不含服务端二进制**, 服务端通过官方 Docker 镜像获取。
+> **凭证顺序**: 先在 [adminmax.knowhub.cloud](https://adminmax.knowhub.cloud/user/access-tokens) 拿 **tokenKey** → 部署 vendor → 登录后拿 **authcode** → 配插件。
 
-### 第 1 步: 部署服务端 (vendor, 官方 Docker)
+### 第 1 步: 拿 tokenKey (客户端密钥) + 部署服务端 (vendor)
 
 ```bash
-# 1. 拉取官方镜像 (build 20260818, 唯一适配版本)
+# 1. 拿 tokenKey: 打开 https://adminmax.knowhub.cloud/user/access-tokens 创建客户端密钥 (只显示一次, 保存好)
+
+# 2. 拉取官方镜像 (build 20260818, 唯一适配版本)
 docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
 
-# 2. 解压官方一键部署包 (本包 vendor/ 目录附带)
+# 3. 解压官方一键部署包 (本包 vendor/ 目录附带), 填 tokenKey
 unzip vendor/8075docker-deploy.zip
 cd docker-deploy
+#    编辑 config/app.conf: user_token_key = "你的客户端密钥"
 
-# 3. 首次运行: install.sh 引导填 user_token_key (客户端密钥) + 自动生成 Redis 密码
+# 4. 部署: install.sh 引导填 user_token_key (可手动已填) + 自动生成 Redis 密码
 chmod +x install.sh check-proxy.sh
 ./install.sh
 
-# 4. 验证服务就绪
+# 5. 验证服务就绪
 curl http://127.0.0.1:18062          # HTTP API
 curl http://127.0.0.1:18062/swagger/  # 313 个 API 文档
 ```
 
 部署详情见 [`vendor/README.md`](./vendor/README.md) (host 网络 + 独立 Redis + 端口)。
 
-### 第 2 步: 人脸认证 + iPad 扫码登录
+### 第 2 步: 拿 authcode + 人脸认证 + iPad 扫码登录
 
-首次登录微信需**人脸 face 认证** (装 CA 证书 + 18080 代理白名单) + **iPad 协议扫码**。完整引导 (含 GetQR/CheckQR 调用示例) 见 **[`vendor/FACE-LOGIN.md`](./vendor/FACE-LOGIN.md)**。
-
-登录后拿到 **authcode** (X-Access-Token), 用于第 3 步插件配置。
+登录需要 **authcode (X-Access-Token)** — 它由服务端在扫码登录完成后生成。流程:
+1. 先用第 1 步的 tokenKey 让服务端跑起来
+2. 按 **[`vendor/FACE-LOGIN.md`](./vendor/FACE-LOGIN.md)** 完成: 装人脸 CA 证书 + 18080 白名单 → **GetQR 获取二维码** → 手机扫码 (触发人脸认证) → **CheckQR 确认** → 服务端生成 **authcode**
+3. 保存 authcode, 用于第 3 步插件配置
 
 ### 第 3 步: 安装插件 (本包)
 
@@ -54,7 +81,7 @@ npm run setup add default
 
 # 3. 设环境变量 — WPP_VENDOR_HOST 必设, 否则图片/语音/文件无法下载!
 export WPP_VENDOR_HOST="https://your-vendor-domain"   # 你的服务端域名
-export WECHATPRO_TOKEN_KEY="..."                      # = user_token_key
+export WECHATPRO_TOKEN_KEY="..."                      # 第 1 步的 tokenKey (= user_token_key)
 export WECHATPRO_AUTHCODE="..."                       # 第 2 步登录拿到的 authcode
 export WECHATPRO_DB_PASSWORD="..."                    # MariaDB 密码
 
@@ -67,19 +94,6 @@ bash deploy-swap.sh --force  # 真实部署
 > **`WPP_VENDOR_HOST` 别漏**: 媒体下载走白名单, 不设则图片/语音/文件全部无法下载。
 
 ---
-
-## 功能亮点
-
-| 能力 | 说明 |
-|---|---|
-| 📨 消息收发 | 文本 / 图片 / 语音 / 视频 / 文件 |
-| 🤖 AI 回复 | 私聊或群聊 @ 机器人 → OpenClaw agent 生成回复 |
-| 💬 引用回复 | AI 引用用户消息回复 (type=57 引用卡片) |
-| 🖼 图片识别 | AI 多模态看图 (多 schema 兼容) |
-| 🎙 语音收发 | 发语音: 自动转 silk (vendor 只收 silk); 转码失败自动降级发文件; 收语音: STT 转文字 |
-| 📋 群接龙 | 群里发 `#接龙 xxx` → AI **自动**应景回复 (无需 @, 5 分钟节流防刷屏) |
-| 👥 多账号 | AccountRegistry 多账号隔离, 一个微信一个 agent |
-| 🔐 安全门禁 | 私聊白名单 (fail-closed) + 群策略 + 凭证 env 隔离 |
 
 > 完整安装步骤见 [GETTING_STARTED.md](./GETTING_STARTED.md)。
 
@@ -108,12 +122,43 @@ bash deploy-swap.sh --force  # 真实部署
 
 ## 功能清单
 
-- **200+ agent tools** — AI 可调用发消息/查联系人/管群/朋友圈等
-- **313 vendor endpoints** — 覆盖 WeChatPadPro 服务端全部 API (含新增: 群发/发文件/公众号文章/视频号/红包/小程序 OAuth 等)
-- **6 channel config helpers** — OpenClaw UI/诊断集成
-- **Prometheus metrics** — 消息/错误/性能监控
-- **语音 silk 自动转码** (v1.3.52): vendor `/Msg/SendVoice` 只收 silk → mp3 自动转码, 失败降级发文件 (v1.3.53)
-- **群接龙自动触发** (v1.3.54): 识别 `#接龙` 消息 → 自动触发 AI 智能应景回复
+### 📨 消息能力
+- **收发全类型**: 文本 / 图片 / 语音 / 视频 / 文件 / 小程序 / 名片 / 位置 / 表情 / 链接卡片
+- **发送方式**: 文本 (`SendTxt`)、CDN 图片/视频/文件、base64 上传 (`UploadImg`/`SendFile`)、silk 语音
+- **群发**: 群发文本到多个群 (`SendGroupMassMsgText`)
+- **结构化卡片**: 链接/小程序/音乐/文件卡片 (`SendAppMessage`)
+- **引用回复**: type=57 引用卡片 (上下文清晰)
+- **撤回**: 消息撤回 (`Revoke`)
+
+### 🤖 AI 与自动化
+- **AI 自动回复**: 私聊 / 群聊 @ 机器人 → OpenClaw agent 生成回复
+- **群接龙自动触发**: `#接龙` 消息 → AI 自动应景回复 (节流防刷屏)
+- **图片 AI 识别**: 多模态看图
+- **语音 STT**: 收语音转文字; 发语音自动转 silk
+- **200+ agent tools**: AI 可调用发消息/查联系人/管群/朋友圈/公众号/视频号等
+
+### 👥 账号与群
+- **多账号**: AccountRegistry 多账号隔离, 一个微信一个 agent
+- **群管理**: 建群/拉人/踢人/公告/改名/转让群主/设置群头像
+- **好友管理**: 加好友/验证/备注/黑名单/标签/通讯录
+- **朋友圈**: 发布文字/图片/视频/链接, 收藏圈, 可见范围设置
+
+### 📄 内容与搜索
+- **公众号**: 文章列表 / 转 Markdown / 阅读解析 (`ArticleList/Markdown/Read`)
+- **视频号**: 内容详情 / 评论 / 解析分享链接 (`Channels/Detail/Comments/ResolveShare`)
+- **搜索**: 综合/文章/百科/图书/视频号/小程序/朋友圈/新闻等全垂直
+- **AI 搜索对话**: 会话 + 追问 (`Search/AI/Conversation/FollowUp`)
+
+### 💰 支付与红包
+- **红包**: 创建/打开/抢红包 (`CreateRedPacket`/`OpenHongBaoWithParams`)
+- **收款码**: 生成自定义收款二维码
+
+### 🔧 系统与安全
+- **安全门禁**: 私聊白名单 (fail-closed) + 群策略 (open/allowlist/disabled) + 凭证 env 隔离
+- **313 vendor endpoints**: 覆盖 WeChatPadPro 服务端全部 API
+- **6 channel config helpers**: OpenClaw UI/诊断集成
+- **Prometheus metrics**: 消息/错误/性能监控
+- **WS 智能退避**: WebSocket 断线自动重连 + 监控告警
 
 ## 配置
 

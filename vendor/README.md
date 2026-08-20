@@ -23,11 +23,22 @@ docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
 
 > 本发布包 `vendor/` 目录附带官方一键部署包 **`8075docker-deploy.zip`** (含 `docker-compose.release.yml` + `install.sh` + `check-proxy.sh` + `config/app.conf`)。**network_mode: host**, 端口即宿主机端口。
 
+### 前置: 获取 tokenKey (客户端密钥)
+
+部署 vendor **必须**先有 tokenKey (客户端密钥):
+
+1. 打开 [访问控制](https://adminmax.knowhub.cloud/user/access-tokens) 并登录
+2. 在 `access-tokens` 页面创建客户端密钥 (仅显示一次, 立即保存)
+3. 填入 `config/app.conf` 的 `user_token_key` (install.sh 也会引导完成)
+
+> 一个客户端密钥只对应一套部署, 新增服务器/迁移时单独创建, 不要多套共用。
+
 ```bash
 # 1. 解压 vendor/8075docker-deploy.zip
 unzip vendor/8075docker-deploy.zip
 cd docker-deploy
-# 2. 首次运行: install.sh 会引导填写 user_token_key (客户端密钥) + 自动生成 Redis 密码
+# 2. 填 user_token_key (见上方"前置"), 或让 install.sh 引导
+# 3. 首次运行: install.sh 会引导填 user_token_key (客户端密钥) + 自动生成 Redis 密码
 chmod +x install.sh check-proxy.sh
 ./install.sh
 ```
