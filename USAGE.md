@@ -152,9 +152,31 @@ npm run setup remove wechatB --clean   # 删账号 + agent + binding (防残留)
 
 ---
 
-## 6. 验证与监控
+## 6. 文件助手命令
 
-### 6.1 首次使用 (发消息测试)
+> 在**文件传输助手**里向机器人发送命令 (不打扰其它会话)。用 `/help` 查看全部命令。
+
+| 命令 | 说明 | 示例 |
+|---|---|---|
+| `/help` | 显示全部可用命令 | `/help` |
+| `/genpair` | **生成新配对码** — 给白名单外用户, 对方私聊机器人发 `/pair <码>` 自助加入 | `/genpair` |
+| `/pairs` | **查看当前配对码** + 有效期 (过期可重新生成) | `/pairs` |
+| `/adduser <wxid>` | **授权私聊白名单** — 添加允许私聊的用户 | `/adduser wxid_abc123` |
+| `/deluser <wxid>` | **移除私聊白名单** — 撤销私聊权限 | `/deluser wxid_abc123` |
+| `/addgroup <群ID>` | **授权群聊白名单** — 允许机器人响应某群 | `/addgroup 19908568237@chatroom` |
+| `/delgroup <群ID>` | **移除群聊白名单** — 停止响应某群 | `/delgroup 19908568237@chatroom` |
+| `/xiaowei on\|off\|status` | **小微智能体开关** — 开启/关闭/查看小微 AI 智能体能力 (默认关闭) | `/xiaowei on` |
+
+> 💡 **说明**:
+> - 命令只在**文件传输助手**生效, 普通聊天不会误触发
+> - 白名单命令 (`/adduser` 等) 是**管理操作**, 只建议管理员使用
+> - `/xiaowei` 控制**小微智能体**能力 (预开发), 默认关闭, 开启后用 AI 对话
+
+---
+
+## 7. 验证与监控
+
+### 7.1 首次使用 (发消息测试)
 
 | 测试 | 发什么 | 期望 |
 |---|---|---|
@@ -165,7 +187,7 @@ npm run setup remove wechatB --clean   # 删账号 + agent + binding (防残留)
 | 语音 | 发语音 | AI 看到转写文字 |
 | 群接龙 | 群里发 `#接龙 xxx` | AI 自动应景回复 |
 
-### 6.2 验证命令
+### 7.2 验证命令
 
 ```bash
 npm run setup validate default    # 账号配置检查 (11 项)
@@ -173,7 +195,7 @@ journalctl --user -u openclaw-gateway -f   # 实时看 AI 回复链路
 ss -tlnp | grep 4398              # webhook 监听确认
 ```
 
-### 6.3 日志与监控
+### 7.3 日志与监控
 
 - 日志格式: `ISO时间 LEVEL [WPP v1.3.63] msg key=value`
 - DEBUG: `WPP_DEBUG=1`
@@ -181,7 +203,7 @@ ss -tlnp | grep 4398              # webhook 监听确认
 
 ---
 
-## 7. 常见场景
+## 8. 常见场景
 
 **场景 1: 门店客服机器人**
 - 服务端 + 插件部署 → `allowFrom` 只加店员 wxid → 客户加门店微信, 店员不在时 AI 自动回
@@ -197,6 +219,6 @@ ss -tlnp | grep 4398              # webhook 监听确认
 
 ---
 
-## 8. 许可证
+## 9. 许可证
 
 [MIT](./LICENSE) — 自由使用/修改/商用, 保留版权声明即可。

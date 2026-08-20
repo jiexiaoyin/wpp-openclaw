@@ -163,6 +163,7 @@ bash deploy-swap.sh --force  # 真实部署
 - **6 channel config helpers**: OpenClaw UI/诊断集成
 - **Prometheus metrics**: 消息/错误/性能监控
 - **WS 智能退避**: WebSocket 断线自动重连 + 监控告警
+- **文件助手命令**: 文件传输助手内管理 — `/genpair` 配对码 `/adduser` 私聊白名单 `/addgroup` 群白名单 `/xiaowei` 小微开关等 (见 [USAGE.md 第 6 章](./USAGE.md#6-文件助手命令))
 
 ## 配置
 
