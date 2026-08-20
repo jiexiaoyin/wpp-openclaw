@@ -13,7 +13,8 @@ const WAV_SAMPLE_RATE = 24_000;
 const WAV_CHANNELS = 1;
 const WAV_BITS_PER_SAMPLE = 16;
 
-function buildWavBuffer(pcmBuffer: Buffer): Buffer {
+/** 纯函数: PCM → WAV (44 字节 RIFF/WAVE 头 + PCM 数据). 导出供测试 (v1.3.74 P2-2) */
+export function buildWavBuffer(pcmBuffer: Buffer): Buffer {
   const pcmLen = pcmBuffer.length;
   const totalSize = 44 + pcmLen;
   const wav = Buffer.allocUnsafe(totalSize);

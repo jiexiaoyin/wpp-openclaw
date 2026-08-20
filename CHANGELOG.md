@@ -4,6 +4,16 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.74]
+- 2026-08-20 (审阅核实修复 + 性能/测试/僵尸优化)
+- **P2-5 api-coverage 固定 swagger 快照**: tests/fixtures/vendor-swagger-paths.json (313 paths), vendor 不可达不再 t.skip 假绿, 用本地快照真校验
+- **P3-6 旧日志标签清理**: 39 处纯版本标签 [WPP v1.2.0] → [WPP v1.3.74]; 功能标记 (V1-SCHEMA-ENRICH 等) 保留
+- **P3-7 xiaowei-meta 注释更新**: 与 v1.3.71 起实现一致 (工具已进 AGENT_TOOLS_META, 执行前检查 xiaoweiEnabled)
+- **性能诊断**: 回复延迟 = 双通道去重 ~1.5s + debounce 1.5s + AI 生成 (多次模型调用) 5-18s; debounce 可调优
+- **僵尸进程防护**: wpp-test-zombie-watcher.mjs + node-zombie-sweep.sh 扩展 (扫 tsx 测试僵尸, cron 9:15)
+- **测试**: 895/895 全绿 (计数 916↔895 波动为 tsx runner 特性)
+- **版本**: 1.3.73 → 1.3.74
+
 ## [v1.3.73]
 - 2026-08-20 (转账静默 — 老板测收转账发现)
 - **转账消息 (msg_type=49, app.category=payment_notice) 触发 AI 回复修复**: isRedPacketMessage 扩展识别 payment_notice/transfer + description 含"转账/收款" → 转账也静默入库不触发 AI (同红包)
