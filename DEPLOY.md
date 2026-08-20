@@ -17,7 +17,7 @@ WeChatPadPro OpenClaw Plugin v1.3.63 部署到 OpenClaw gateway 的详细指南�
 | Node.js | ≥ 20.x |
 | OpenClaw gateway | v2026.7.1+ (已运行) |
 | MariaDB | 存储消息数据库 |
-| Redis | 服务端 (vendor) 依赖, 默认 `127.0.0.1:6379` db=8 |
+| Redis | 服务端 (vendor) 依赖, 官方 docker-deploy 内置独立 Redis `127.0.0.1:16379` |
 
 ### 1.2 必填环境变量 (凭证单一来源 env var, 不进 JSON/DB)
 
@@ -47,22 +47,19 @@ WeChatPadPro OpenClaw Plugin v1.3.63 部署到 OpenClaw gateway 的详细指南�
 完整步骤见 [vendor/README.md](./vendor/README.md), 要点:
 
 ```bash
-# 1. 解压
-mkdir -p vendor && tar xzf vendor/20260809_030557_linux64_v8_m4.1.12.29_p8.0.75.53.tar.gz -C vendor
+# 1. 拉取官方镜像 (build 20260818)
+docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
 
-# 2. 配置 conf/app.conf
-#    user_token_key = "<你的 TokenKey>"   # 个人中心生成
-#    redislink = "127.0.0.1:6379"          # 你的 Redis
+# 2. 用官方 docker-deploy 一键部署 (解压 8075docker-deploy.zip → ./install.sh)
+#    install.sh 引导填 user_token_key + 自动生成 Redis 密码
+#    config/app.conf: redislink = "127.0.0.1:16379" (独立 Redis)
 
-# 3. 运行
-cd vendor && ./wechatpadpromax08
-
-# 4. 验证
-curl http://127.0.0.1:8062          # HTTP API 就绪
-#    swagger: http://127.0.0.1:8062/swagger/
+# 3. 验证 (host 网络, 端口即宿主机)
+curl http://127.0.0.1:18062          # HTTP API 就绪
+#    swagger: http://127.0.0.1:18062/swagger/
 ```
 
-**公网接入**: 插件需要访问服务端, 建议 nginx 反代 8062/8089 到域名 (如 `https://wx.example.com`), 插件 `WPP_VENDOR_HOST=https://wx.example.com` (媒体下载白名单, 必设)。
+**公网接入**: 插件需要访问服务端, 建议 nginx 反代 18062/18089 到域名 (如 `https://wx.example.com`), 插件 `WPP_VENDOR_HOST=https://wx.example.com` (媒体下载白名单, 必设)。
 
 ---
 
