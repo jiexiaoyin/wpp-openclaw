@@ -1,75 +1,78 @@
 # WeChatPadPro 服务端 (vendor)
 
-本目录包含本插件对接的 **WeChatPadProMAX** 微信 Pad 服务端二进制包。
+本插件对接 **WeChatPadProMAX** (WeChatPadProBusiness) 微信 Pad 服务端。v1.3.68 起**发布包不再捆绑服务端二进制**，服务端通过**官方 Docker 镜像**获取。
 
 ## 版本对应
 
 | 组件 | 版本 |
 |---|---|
-| 服务端 (vendor) | **v8_m4.1.12.29_p8.0.75.53** (build 20260809) |
-| 插件 | v1.3.62+ (本发布包) |
+| 服务端 (vendor) | **v8_m4.1.12.29_p8.0.75.53** (build **20260818**, Docker 镜像 `v2026.08.18.1`) |
+| 插件 | v1.3.68+ (本发布包) |
 
-> **插件仅适配此版本** — 请勿混用其它版本的服务端, 否则接口可能不兼容。
+> **插件仅适配此版本服务端** — 新插件 (v1.3.68+) 的 37 个新增 API (群发/公众号/视频号/小微智能体等) 只在 **20260818 新 vendor** 可用。旧版服务端 (20260809) 已弃用, 请勿使用。
 
-## 文件说明
-
-```
-vendor/
-├── 20260809_030557_linux64_v8_m4.1.12.29_p8.0.75.53.tar.gz   # 服务端二进制 + 配置 + swagger
-└── README.md                                                  # 本文件
-```
-
-- 解压后: Go 静态二进制 (vendor 主程序) + `conf/app.conf` + `swagger/` + `metadata.json`
-- 端口: HTTP API **8062** + WebSocket **8089** (与插件 `apiBaseUrl`/`wsUrl` 对应)
-- 依赖: **Redis** (默认 `127.0.0.1:6379`, db=8)
-
-## 校验 (可选)
+## 获取镜像
 
 ```bash
-md5sum 20260809_030557_linux64_v8_m4.1.12.29_p8.0.75.53.tar.gz
-# 期望: b5057a8c895dfa24...
+docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
 ```
 
-## 部署
+镜像包含: 服务端主程序 + `swagger/` (313 个 API 文档) + 人脸验证代理 (pad-face-verify)。
 
-> 服务端在微信协议侧, 需要能连微信 (MMTLS)。建议跑在独立容器/机器。
+## 部署 (官方 docker-deploy 发布包)
+
+> 官方提供 `8075docker-deploy.zip` 一键部署包 (含 `docker-compose.release.yml` + `install.sh`)。**network_mode: host**, 端口即宿主机端口。
 
 ```bash
-# 1. 解压
-mkdir -p vendor && tar xzf 20260809_030557_linux64_v8_m4.1.12.29_p8.0.75.53.tar.gz -C vendor
-
-# 2. 配置 (编辑 conf/app.conf)
-#    - user_token_key = "<你的 TokenKey>"   # 个人中心生成, 每位使用者用自己的
-#    - redislink = "127.0.0.1:6379"          # 你的 Redis
-#    - websocketport = 8089                  # 保持默认
-
-# 3. 运行 (解压出的 Go 二进制名 = wechatpadpromax08, 保持原名)
-cd vendor && ./wechatpadpromax08
-
-# 4. 验证
-#    - HTTP:   curl http://127.0.0.1:8062  → 应返回服务信息
-#    - Swagger: http://127.0.0.1:8062/swagger/  (254 个 API 文档)
-#    - WebSocket: 客户端连 ws://127.0.0.1:8089/ws/sync
+# 1. 解压发布包
+cd docker-deploy
+# 2. 首次运行: install.sh 会引导填写 user_token_key (客户端密钥) + 自动生成 Redis 密码
+./install.sh
 ```
 
-### 公网接入 (插件需要访问)
+### 关键配置 (config/app.conf)
 
-服务端必须在插件**可访问**的地址, 两种方式:
+```ini
+user_token_key = "<你的客户端密钥>"     # adminmax.knowhub.cloud 后台生成, 每位使用者用自己的
+httpaddr = "0.0.0.0"
+httpport = 18062                        # HTTP API
+websocketport = 18089                   # WebSocket
+pad_face_verifier_port = 18080          # 手机人脸验证代理
+redislink = 127.0.0.1:16379             # 项目独立 Redis (仅宿主机回环)
+```
 
-1. **同机部署**: 插件 `apiBaseUrl=http://127.0.0.1:8062`, `wsUrl=ws://127.0.0.1:8089/ws/sync`
-2. **反代**: nginx 反代 8062/8089 到域名 (如 `https://wx.example.com`), 插件 `WPP_VENDOR_HOST=https://wx.example.com` (媒体下载白名单, 必设)
+### 端口
+
+| 用途 | 端口 |
+|---|---|
+| HTTP API | **18062** |
+| WebSocket | **18089** |
+| Pad 人脸验证代理 | **18080** (仅白名单来源 IP) |
+| Redis | **16379** (127.0.0.1 回环) |
 
 ## 与插件对接
 
 | 插件配置 | 值 |
 |---|---|
-| `apiBaseUrl` | `http://<vendor>:8062` |
-| `wsUrl` | `ws://<vendor>:8089/ws/sync` |
-| `WPP_VENDOR_HOST` | `<vendor 域名, 公网>`, 同机可 `http://127.0.0.1:8062` |
+| `apiBaseUrl` | `http://<vendor>:18062` (公网反代: `https://wx.example.com`) |
+| `wsUrl` | `ws://<vendor>:18089/ws/sync` (公网: `wss://wx.example.com/ws/sync`) |
+| `WPP_VENDOR_HOST` | `<vendor 域名, 公网>`, 同机可 `http://127.0.0.1:18062` |
 | tokenKey | 同 `user_token_key` |
 
-> 微信需先通过服务端扫码登录 (swagger `/Login/GetQR` → `/Login/CheckQR`), 拿到 `authcode` 后填入插件账号配置。
+### 鉴权方式 (新 vendor)
+
+- **authcode** 走请求头 **`X-Access-Token`** (不是 query); 设备登录后由服务端生成, 有效期至账号授权到期。
+- 每个 API 还需 `authcode` query 参数 (插件 `withAuthcodeQuery` 自动注入)。
+
+> 微信需先通过服务端扫码登录 (`/Login/GetQR` → `/Login/CheckQR`), 拿到 `authcode` 后填入插件账号配置。
+
+## 升级服务端
+
+```bash
+docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1   # 拉新镜像
+cd docker-deploy && ./install.sh                              # 重建容器 (保留 config/ + data/)
+```
 
 ## 许可证
 
-服务端二进制版权归服务提供方所有, 本发布仅供部署参考。请遵守当地法律法规及微信平台条款。
+服务端镜像版权归服务提供方所有。请遵守当地法律法规及微信平台条款。

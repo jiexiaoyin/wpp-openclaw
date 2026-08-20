@@ -50,7 +50,7 @@ bash deploy-swap.sh --force  # 真实部署
 > **zip 小 = 正常**: 发布包只含编译产物, 不含 node_modules。`npm ci` 会根据 package.json 自动下载全部依赖。
 > **`WPP_VENDOR_HOST` 别漏**: 媒体下载走白名单, 不设则图片/语音/文件全部无法下载。
 
-> **配套服务端**: 本包内含微信服务端二进制 [`vendor/`](./vendor/README.md) (v8_m4.1.12.29_p8.0.75.53), 插件仅适配此版本。
+> **配套服务端**: 本包**不含服务端二进制**。服务端通过官方 Docker 镜像获取: `docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1`, 用官方 docker-deploy 包部署 (host 网络 + 独立 Redis)。详见 [`vendor/README.md`](./vendor/README.md)。插件仅适配此版本 (20260818)。
 
 详细步骤见 [GETTING_STARTED.md](./GETTING_STARTED.md)。
 
@@ -79,8 +79,8 @@ bash deploy-swap.sh --force  # 真实部署
 
 ## 功能清单
 
-- **179+ agent tools** — AI 可调用发消息/查联系人/管群/朋友圈等
-- **254 vendor endpoints** — 覆盖 WeChatPadPro 服务端全部 API
+- **200+ agent tools** — AI 可调用发消息/查联系人/管群/朋友圈等
+- **313 vendor endpoints** — 覆盖 WeChatPadPro 服务端全部 API (含新增: 群发/发文件/公众号文章/视频号/红包/小程序 OAuth 等)
 - **6 channel config helpers** — OpenClaw UI/诊断集成
 - **Prometheus metrics** — 消息/错误/性能监控
 - **语音 silk 自动转码** (v1.3.52): vendor `/Msg/SendVoice` 只收 silk → mp3 自动转码, 失败降级发文件 (v1.3.53)
@@ -95,8 +95,8 @@ bash deploy-swap.sh --force  # 真实部署
   "enabled": true,
   "tokenKeyEnv": "WECHATPRO_TOKEN_KEY",
   "authcodeEnv": "WECHATPRO_AUTHCODE",
-  "apiBaseUrl": "http://127.0.0.1:8062",
-  "wsUrl": "ws://127.0.0.1:8062/ws/sync",
+  "apiBaseUrl": "http://127.0.0.1:18062",
+  "wsUrl": "ws://127.0.0.1:18089/ws/sync",
   "webhookHost": "127.0.0.1",
   "webhookPort": 4398,
   "allowFrom": [],
