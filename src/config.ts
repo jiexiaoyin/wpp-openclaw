@@ -549,3 +549,37 @@ export async function removeGroupAllowFrom(
   log.info(`removeGroupAllowFrom: account=${accountId} groupAllowFrom=${groupAllowFrom.length} (-${chatroomId})`);
   return { ok: true, groupAllowFrom, filePath };
 }
+
+/**
+ * v1.3.71 FEATURE-FLAGS: 通用布尔开关写回 (friendCirclePublishEnabled / xiaoweiEnabled).
+ * 同 appendAllowFrom 范式: 读配置 → 改字段 → 原子写回 → invalidateConfigCache → 热重载.
+ */
+export async function setAccountFlag(
+  accountId: string,
+  field: "friendCirclePublishEnabled" | "xiaoweiEnabled",
+  value: boolean,
+): Promise<{ ok: boolean; current: boolean; filePath: string; reason?: string }> {
+  const dir = join(await findPluginRoot(), "accounts");
+  const filePath = join(dir, `${accountId}.json`);
+  let raw: Record<string, unknown>;
+  try {
+    const text = await readFile(filePath, "utf8");
+    raw = JSON.parse(text) as Record<string, unknown>;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    log.warn(`setAccountFlag: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    return { ok: false, current: false, filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+  }
+  raw[field] = value;
+  try {
+    const tmpPath = `${filePath}.tmp`;
+    await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+    await rename(tmpPath, filePath);
+  } catch (e) {
+    log.warn(`setAccountFlag: write ${accountId}.json failed: ${(e as Error).message}`);
+    return { ok: false, current: false, filePath, reason: "write-failed" };
+  }
+  invalidateConfigCache(accountId);
+  log.info(`setAccountFlag: account=${accountId} ${field}=${value}`);
+  return { ok: true, current: value, filePath };
+}

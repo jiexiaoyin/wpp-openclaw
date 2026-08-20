@@ -9,7 +9,7 @@
 //   - call<T> 通用端点调用保留 (ws-client/index 用)
 //   - resolveImageToBase64/readLocalMedia 移到 src/api/resolve-media.ts, 此处 re-export 兼容旧测试
 
-import { postWppJson, getWppJson, stringifyLargeInts } from "./api/client.js";
+import { postWppJson, stringifyLargeInts } from "./api/client.js";
 import { logObj as log } from "./core/logger.js";
 import { safeFetchWithCap } from "./util/safe-fetch.js";
 import { makeWppMsg } from "./send/msg.js";
@@ -75,14 +75,6 @@ export class WechatpadproApiClient implements WppApiClient {
   /** 通用 POST 调用 (authcode/query 由 postWppJson 自动注入) */
   async call<T = unknown>(endpoint: string, body: Record<string, unknown> = {}): Promise<WppApiResponse<T>> {
     return postWppJson<T>(this.cfg.apiBaseUrl, endpoint, body, {
-      tokenKey: this.cfg.tokenKey,
-      authcode: this.cfg.authcode,
-    });
-  }
-
-  /** 通用 GET 调用 (authcode/query 由 getWppJson 自动注入) */
-  private async get<T = unknown>(endpoint: string): Promise<WppApiResponse<T>> {
-    return getWppJson<T>(this.cfg.apiBaseUrl, endpoint, {
       tokenKey: this.cfg.tokenKey,
       authcode: this.cfg.authcode,
     });
@@ -212,10 +204,11 @@ export class WechatpadproApiClient implements WppApiClient {
     return makeFriendFor(this.cfg, this.accountId).getContractList();
   }
 
-  // ============ User (保留原实现: GET /User/GetContractProfile) ============
+  // ============ User ============
   // /User/GetProfile 404 → /User/GetContractProfile 200; swagger authcode 在 query
+  // v1.3.64 适配: 新 vendor (v2026.08.18.1) GET 废弃 → POST (POST 实测 Code=0), GET 返回 404
   async getProfile(): Promise<WppApiResponse> {
-    return this.get("/User/GetContractProfile");
+    return this.call("/User/GetContractProfile", {});
   }
 
   // ============ Webhook (委托 send/webhook.ts) ============

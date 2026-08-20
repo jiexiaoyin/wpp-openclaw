@@ -12,8 +12,9 @@ import { WPP_VENDOR_ENDPOINTS } from "../src/send/index.js";
 // v1.3.53 SWAGGER-AUTO-FETCH (2026-08-12 P2-1): /tmp 缓存重启即丢 → 文件缺失时自动从 vendor 拉取
 //   拉不到 (vendor 未启动) 才 t.skip (环境性跳过, 不再硬 fail)
 // v1.3.25 SWAGGER-254: 指向最新 swagger (254 paths, vendor 新增 18 接口)
+// v1.3.67 (2026-08-20): 新 vendor 容器 → 18062; 旧容器已退役 (8062 已停)
 const SWAGGER_PATH = "/tmp/swagger-latest.json";
-const VENDOR_SWAGGER_URL = "http://127.0.0.1:8062/swagger.json";
+const VENDOR_SWAGGER_URL = "http://127.0.0.1:18062/swagger.json";
 
 interface SwaggerDoc {
   paths: Record<string, unknown>;
@@ -72,9 +73,11 @@ test("api-coverage — WPP_VENDOR_ENDPOINTS 与 vendor swagger 对账 (P0-1 防�
   const vendorPaths = await loadVendorPaths(t);
   if (!vendorPaths) return;
   const wppUnique = flattenWppEndpoints(WPP_VENDOR_ENDPOINTS);
+  // v1.3.67 (2026-08-20): 新 vendor 已移除但后端实测仍兼容 200 的隐藏端点 (白名单豁免, 勿删)
+  const LEGACY_COMPAT_ENDPOINTS = new Set(["/Search/Service/{name}", "/Search/Services"]);
   const ghosts: string[] = [];
   for (const ep of wppUnique) {
-    if (!vendorPaths.has(ep)) {
+    if (!vendorPaths.has(ep) && !LEGACY_COMPAT_ENDPOINTS.has(ep)) {
       ghosts.push(ep);
     }
   }
@@ -95,13 +98,13 @@ test("api-coverage — 每个 tag 分组至少 1 个 endpoint", () => {
   }
 });
 
-test("api-coverage — vendor swagger 254 paths (v1.3.25 更新, 防 contract 静默变更)", async (t) => {
+test("api-coverage — vendor swagger 313 paths (v1.3.67 新 vendor, 防 contract 静默变更)", async (t) => {
   const vendorPaths = await loadVendorPaths(t);
   if (!vendorPaths) return;
   assert.equal(
     vendorPaths.size,
-    254,
-    `vendor swagger 期望 254 paths (实际 ${vendorPaths.size}, 变化需审计确认)`,
+    313,
+    `vendor swagger 期望 313 paths (实际 ${vendorPaths.size}, 变化需审计确认)`,
   );
 });
 

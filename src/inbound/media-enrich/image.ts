@@ -74,6 +74,7 @@ export async function enrichImageMessageFromV1(
   localId: number,
   toWxid: string,
   md5?: string,
+  dataLen?: number,
 ): Promise<ImageEnrichResult> {
   if (!Number.isInteger(localId) || localId <= 0 || localId > 0xffffffff) {
     return { mediaUrl: null, mediaSize: null, error: `invalid localId: ${localId}` };
@@ -93,7 +94,14 @@ export async function enrichImageMessageFromV1(
     }>(
       ctx.baseUrl,
       "/Tools/DownloadImg",
-      { msgId: localId, toWxid, compressType: 0 },
+      // v1.3.70: 新 vendor DownloadImg 必填 snake_case (msg_id/to_wxid/data_len) + section; 旧字段 msgId/toWxid 报 INVALID_ARGUMENT
+      {
+        msg_id: localId,
+        to_wxid: toWxid,
+        data_len: dataLen ?? 0,
+        compress_type: 0,
+        ...(dataLen ? { section: { start_pos: 0, data_len: dataLen } } : {}),
+      },
       { ...ctxToCallOpts(ctx), timeoutMs: 30000, maxRetries: 1 },
     );
     const baseRet = resp.Data?.BaseResponse?.ret;
@@ -197,6 +205,7 @@ export function isV1SchemaImage(raw: unknown): {
   localId?: number;
   md5?: string;
   toWxid?: string;
+  dataLen?: number;
   cdnDownloadCtx?: V1ImageCdnCtx;
 } {
   if (!raw || typeof raw !== "object") return { isV1: false };
@@ -235,6 +244,17 @@ export function isV1SchemaImage(raw: unknown): {
       localId: r.local_id as number,
       md5: typeof imageObj?.md5 === "string" ? imageObj.md5 : undefined,
       toWxid,
+      // v1.3.70: 提取图片字节数 (新 vendor DownloadImg 必填 data_len) — image 对象或顶层 data_len/total_len
+      dataLen:
+        typeof imageObj?.data_len === "number"
+          ? imageObj.data_len
+          : typeof imageObj?.total_len === "number"
+          ? imageObj.total_len
+          : typeof imageObj?.file_size === "number"
+          ? imageObj.file_size
+          : typeof r.data_len === "number"
+          ? r.data_len
+          : undefined,
       cdnDownloadCtx,
     };
   }

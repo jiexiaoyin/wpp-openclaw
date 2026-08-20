@@ -26,6 +26,10 @@ export function makeWppLabel(ctx: WppAccountCtx) {
     /** /Label/UpdateName */
     updateName: (labelId: string, labelName: string) =>
       dispatch("/Label/UpdateName", { labelId, labelName }),
+
+    /** /Label/GetWXFriendListByLabel — 按标签拉好友 (v1.3.67 新 API; labelId 必须 number) */
+    getWXFriendListByLabel: (labelId: number | string) =>
+      dispatch("/Label/GetWXFriendListByLabel", { labelId: Number(labelId) }),
   };
 }
 

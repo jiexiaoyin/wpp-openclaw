@@ -108,6 +108,42 @@ export function makeWppSearch(ctx: WppAccountCtx) {
     /** /Search/Service/{name} — 高级搜索能力调用入口 */
     service: (name: string, query = "", params: Record<string, unknown> = {}) =>
       dispatch(`/Search/Service/${name}`, { query, ...params }),
+
+    // ===== v1.3.67 新 vendor: 视频号 Channels 深度 API =====
+
+    /** /Search/Channels/Detail — 视频号内容详情 (v1.3.67; content_token 来自 Channels 搜索结果) */
+    channelsDetail: (contentToken: string) =>
+      dispatch("/Search/Channels/Detail", { content_token: contentToken }),
+
+    /** /Search/Channels/Comments — 视频号评论列表 (v1.3.67; comment_token 来自搜索结果, cursor 翻页, root_comment_id 看一级评论回复) */
+    channelsComments: (commentToken: string, cursor = "", rootCommentId = "") =>
+      dispatch("/Search/Channels/Comments", {
+        comment_token: commentToken,
+        ...(cursor ? { cursor } : {}),
+        ...(rootCommentId ? { root_comment_id: rootCommentId } : {}),
+      }),
+
+    /** /Search/Channels/Media — 视频号媒体流 (v1.3.67 GET; media_token + download=1 下载/0 预览) */
+    channelsMedia: (mediaToken: string, download = 0) =>
+      getWppJson(ctx.baseUrl, `/Search/Channels/Media?media_token=${encodeURIComponent(mediaToken)}&download=${download}`, opts),
+
+    /** /Search/Channels/ResolveShare — 解析视频号分享链接 (v1.3.67; url=weixin.qq.com/sph/... 分享链接) */
+    channelsResolveShare: (url: string) =>
+      dispatch("/Search/Channels/ResolveShare", { url }),
+
+    // ===== v1.3.67 新 vendor: AI 搜索对话 =====
+
+    /** /Search/AI/Conversation — 获取 AI 搜索会话 (v1.3.67 GET; session_id) */
+    aiConversation: (sessionId: string) =>
+      getWppJson(ctx.baseUrl, `/Search/AI/Conversation?session_id=${encodeURIComponent(sessionId)}`, opts),
+
+    /** /Search/AI/FollowUp — AI 搜索追问 (v1.3.67; 用首问 session_id 继续) */
+    aiFollowUp: (sessionId: string, query: string, clientMessageId = "") =>
+      dispatch("/Search/AI/FollowUp", {
+        session_id: sessionId,
+        query,
+        ...(clientMessageId ? { client_message_id: clientMessageId } : {}),
+      }),
   };
 }
 

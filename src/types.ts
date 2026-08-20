@@ -47,6 +47,8 @@ export interface WppAccountConfig {
   friendCirclePublishEnabled?: boolean;
   /** v1.3.41: 朋友圈发布白名单 (缺省用 adminUsers; 未配则全禁) */
   friendCirclePublishAllowFrom?: string[];
+  /** v1.3.71: 小微智能体能力开关 (默认 false 关闭; /xiaowei on|off 命令控制) */
+  xiaoweiEnabled?: boolean;
   /**
    * 命令白名单配置
    *   未设置 = 不启用命令机制 (所有 /xxx 被 AI 当普通消息处理, 保持现有行为)

@@ -58,6 +58,9 @@ export function makeWppFriend(ctx: WppAccountCtx) {
     /** /Friend/Upload — 上传通讯录 (v1.2.1 swagger-alignment: UploadParamDoc {currentPhoneNo, opcode, phoneNo}) */
     upload: (phoneNo: string, opcode: string = "2", currentPhoneNo: string = "") =>
       dispatch("/Friend/Upload", { phoneNo, opcode, currentPhoneNo }),
+
+    /** /Friend/GetGHList — 通讯录完整拉取 (v1.3.67 新 API; 分页+批量补齐名称/备注/头像) */
+    getGHList: () => dispatch("/Friend/GetGHList", {}),
   };
 }
 

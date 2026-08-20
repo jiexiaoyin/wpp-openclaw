@@ -163,6 +163,7 @@ export function createWppInboundHandler(
                     v1Info.localId,
                     v1Info.toWxid,
                     v1Info.md5,
+                    v1Info.dataLen, // v1.3.70: 新 vendor DownloadImg 必填 data_len
                   );
                   if (imgR.mediaUrl) {
                     m.content = `${m.content}\n[图片] ${imgR.mediaUrl} (注: vendor v1 schema 推送, 仅下载首 64KB, 大图部分可能截断)`;
@@ -440,6 +441,10 @@ export function createWppInboundHandler(
       const triggerResults = persistResults; // Step 2 已算 (same ctxForTrigger + shouldTrigger)
       const dispatched: WppInboundMessage[] = [];
       for (const [m, t] of triggerResults) {
+        // v1.3.72 红包消息不触发 AI (老板 2026-08-20): 收到红包静默入库, 不瞎回复 (415 行的 continue 只跳过 relay 循环, 这里必须再拦一次)
+        if (isRedPacketMessage(m)) continue;
+        // v1.3.72 系统通知 (msg_type=10000, 含红包领取/转账/安全提醒) 不触发 AI (老板 2026-08-20): 系统消息无需 AI 回复
+        if (m.msgType === 10000) continue;
         // v1.3.39 FILEHELPER: filehelper 命令不 dispatch (只走命令回调, 不进 AI)
         if (m.peerId === "filehelper" && /^\s*\//.test(m.content)) continue;
         // v1.3.54 RELAY-TRIGGER (老板 8-12 拍板): 接龙消息强制触发 AI (即使没人 @)

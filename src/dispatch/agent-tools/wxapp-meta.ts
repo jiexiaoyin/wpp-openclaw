@@ -79,4 +79,22 @@ export const WXAPP_META: ToolMeta = {
     Type.Object({ appId: Type.String() }),
     (appId: string) => getWxappApi().getPullPay(appId),
   ],
+  /** /Wxapp/DeleteOauthApp — 移除小程序授权 (v1.3.67 新 API) */
+  deleteOauthApp: [
+    "移除小程序授权. appid=小程序 appid.",
+    Type.Object({ appid: Type.String() }),
+    (appid: string) => getWxappApi().deleteOauthApp(appid),
+  ],
+  /** /Wxapp/GetOauthList — 小程序授权列表 (v1.3.67 新 API) */
+  getOauthList: [
+    "获取小程序授权管理列表.",
+    Type.Object({}),
+    () => getWxappApi().getOauthList(),
+  ],
+  /** /Wxapp/JSLoginCustomized — 小程序定制登录 (v1.3.67 新 API) */
+  jsLoginCustomized: [
+    "小程序定制登录. appid=小程序 appid.",
+    Type.Object({ appid: Type.String() }),
+    (appid: string) => getWxappApi().jsLoginCustomized(appid),
+  ],
 };

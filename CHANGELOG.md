@@ -4,6 +4,70 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.73]
+- 2026-08-20 (转账静默 — 老板测收转账发现)
+- **转账消息 (msg_type=49, app.category=payment_notice) 触发 AI 回复修复**: isRedPacketMessage 扩展识别 payment_notice/transfer + description 含"转账/收款" → 转账也静默入库不触发 AI (同红包)
+- **测试**: 916/916 全绿 (v1.1.7-special-msg 加转账识别断言)
+- **版本**: 1.3.72 → 1.3.73
+
+## [v1.3.72]
+- 2026-08-20 (红包/系统通知静默 — 老板实测"收红包/领红包都触发 AI")
+- **红包消息不触发 AI 修复**: handler.ts dispatch 循环开头拦 isRedPacketMessage (原 continue 只在 relay 循环, dispatch 仍触发)
+- **系统通知 (msg_type=10000, 含红包领取/转账/安全提醒) 静默**: dispatch 循环拦 10000
+- **测试**: 915/915 全绿 (inbound.test 加 2 测试)
+- **版本**: 1.3.71 → 1.3.72
+
+## [v1.3.71]
+- 2026-08-20 (小微命令开关 — 老板拍板)
+- **/xiaowei on|off|status 命令**: FILEHELPER_COMMANDS 注册表 (自动进 /help); config.ts setAccountFlag 通用开关写回; types.ts 加 xiaoweiEnabled
+- **xiaowei 工具执行前检查 xiaoweiEnabled**: 默认关闭抛"未启用"; 朋友圈用白名单机制不加开关 (老板拍板)
+- **测试**: 912/912 全绿
+- **版本**: 1.3.70 → 1.3.71
+
+## [v1.3.70]
+- 2026-08-20 (图片 enrich 修复 — 老板实测发图)
+- **/Tools/DownloadImg 新 vendor 参数适配**: snake_case (msg_id/to_wxid/data_len) + section 必填; isV1SchemaImage 提取 image.data_len; 旧字段 msgId/toWxid → INVALID_ARGUMENT
+- **测试**: 911/911 全绿
+- **版本**: 1.3.69 → 1.3.70
+
+## [v1.3.69]
+- 2026-08-20 (小微预开发 — 老板拍板预开发不启用)
+- **XiaoWei 20 端点全覆盖**: src/send/xiaowei.ts (Chat会话/SSE Events/History记忆/Invites邀请/RedDots红点/Cards卡片/Permission/A2A/Suggestions) + xiaowei-meta.ts (默认不 import = 禁用) + WPP_VENDOR_ENDPOINTS.xiaoWei
+- **测试**: 912/912 全绿
+- **版本**: 1.3.68 → 1.3.69
+
+## [v1.3.68]
+- 2026-08-20 (发布包架构变更 — 老板拍板)
+- **发布包移除旧 vendor tar** (20260809, 12M→1020K): 新 vendor 通过 docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1 + 官方 docker-deploy
+- **文档重构**: vendor/README (Docker 部署) + FACE-LOGIN.md (人脸认证+iPad扫码) + 8075docker-deploy.zip 进发布包; README/GETTING_STARTED/DEPLOY/USAGE 全部改新端口/313 端点/authcode 走 X-Access-Token
+- **版本**: 1.3.67 → 1.3.68
+
+## [v1.3.67]
+- 2026-08-20 (新 vendor 新增 API 接入 — 老板全选优先级)
+- **37 新 API 适配**: P0 9 (群发/发文件/收藏圈/通讯录/好友权限) + P1 7 (公众号3/视频号4) + P2 10 (视频播放4/结构化卡片/红包2/小程序OAuth3) + P2B 11 (Login6/Search-AI2/ActiveTasks/Label/SayHello-Modelv3)
+- **QWContact 路径修复**: /QWContact/QWContact/QWAddContact 路径去重 + 参数对齐 username/v1
+- **测试 swagger 指向新容器 18062** (旧 8062 退役)
+- **版本**: 1.3.66 → 1.3.67
+
+## [v1.3.66]
+- 2026-08-20 (SayHello 对齐 + 版本常量同步)
+- **/SayHello/Modelv1+Modelv2 传参对齐**: 旧错传 scene/v1 与 v1/v2 → 新 swagger url/verifyContent 与 toUserName/content/scene
+- **PLUGIN_VERSION 硬编码同步**: core/constants.ts (gateway-compat 测试断言 + 日志版本)
+- **测试**: 889/889 全绿
+- **版本**: 1.3.65 → 1.3.66
+
+## [v1.3.65]
+- 2026-08-20 (Favor favId 类型修复 — 新 vendor 严格)
+- **/Favor/Del+GetFavItem favId string→number**: 新旧 swagger 均 integer, 新 vendor 报 cannot unmarshal string into int32
+- **测试**: 889/889 全绿
+- **版本**: 1.3.64 → 1.3.65
+
+## [v1.3.64]
+- 2026-08-20 (新 vendor 兼容适配)
+- **/User/GetContractProfile GET→POST**: 新 vendor GET 404, POST Code=0; 删除废弃 get() 方法
+- **测试**: 889/889 全绿
+- **版本**: 1.3.63 → 1.3.64
+
 ## [v1.3.63]
 - 2026-08-14 (多维度审阅修复 — 6 P1 + 8 P2 全清, 876/876 全绿)
 - **P1-1 [正确性] ACK 拦截正则 0x08 退格字节修复**: dispatcher.ts ACK_TEMPLATE_RE 的 `)\b` 被转义成字面 0x08 → 正则恒 false → 14:50 P0-fix 拦截半边生产失效。改 `\b` + 导出常量供测试 import 真值 (根除手抄副本)

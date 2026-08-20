@@ -140,4 +140,35 @@ export const FINDER_META: ToolMeta = {
     (finderUsername: string, objectId: string, rootCommentId?: string) =>
       getFinderApi().getCommentDetail(finderUsername, objectId, rootCommentId ?? ""),
   ],
+  /** /Finder/PlayVideo — 视频号播放控制 (v1.3.67 新 API) */
+  playVideo: [
+    "播放视频号视频. objectId=视频内容Id, finderUsername=作者, playUrl=播放地址 (选传); loop=true 循环播放.",
+    Type.Object({
+      objectId: Type.Optional(Type.String()),
+      finderUsername: Type.Optional(Type.String()),
+      playUrl: Type.Optional(Type.String()),
+      loop: Type.Optional(Type.Boolean()),
+      playSeconds: Type.Optional(Type.Number({ description: "播放秒数, 0=不限" })),
+    }),
+    (opts: { objectId?: string; finderUsername?: string; playUrl?: string; loop?: boolean; playSeconds?: number }) =>
+      getFinderApi().playVideo(opts),
+  ],
+  /** /Finder/PlayVideoStop — 停止视频播放 (v1.3.67 新 API) */
+  playVideoStop: [
+    "停止视频号播放任务. taskId=playVideo 返回的任务 ID.",
+    Type.Object({ taskId: Type.String() }),
+    (taskId: string) => getFinderApi().playVideoStop(taskId),
+  ],
+  /** /Finder/PlayVideoStatus — 视频播放状态 (v1.3.67 新 API GET) */
+  playVideoStatus: [
+    "查询视频号播放任务状态. taskId=任务 ID.",
+    Type.Object({ taskId: Type.String() }),
+    (taskId: string) => getFinderApi().playVideoStatus(taskId),
+  ],
+  /** /Finder/PlayVideoTasks — 播放任务列表 (v1.3.67 新 API GET) */
+  playVideoTasks: [
+    "列出视频号播放任务 (运行中 + 24h 内已结束).",
+    Type.Object({}),
+    () => getFinderApi().playVideoTasks(),
+  ],
 };

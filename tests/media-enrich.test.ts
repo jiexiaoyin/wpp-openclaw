@@ -44,11 +44,14 @@ test("isV1SchemaImage — 私聊 v1 schema (raw.kind=image, local_id, 无 Conten
     recipient_id: "q139198824",
     sender_id: "wxid_dbdmq8riblxo12",
     type: 3,
+    // v1.3.70: 新 vendor DownloadImg 必填 data_len — 真实消息 image.data_len 有值 (实测 114757/174567)
+    image: { data_len: 13300, md5: "b9becc2a1592e6423ae112a4f23ca51a" },
   };
   const r = isV1SchemaImage(raw);
   assert.equal(r.isV1, true, "应识别为 v1 schema");
   assert.equal(r.localId, 1680277034, "localId 应等于 raw.local_id");
   assert.equal(r.toWxid, "q139198824", "私聊 toWxid 用 recipient_id (bot 自己)");
+  assert.equal(r.dataLen, 13300, "dataLen 应从 image.data_len 提取 (新 vendor DownloadImg 必填)");
 });
 
 test("isV1SchemaImage — 群聊 v1 schema 用 conversation_id (群 ID)", () => {

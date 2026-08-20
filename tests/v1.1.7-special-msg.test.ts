@@ -40,6 +40,17 @@ test("v1.1.7 — isRedPacketMessage: 普通消息返 false", () => {
   assert.equal(isRedPacketMessage(msg), false);
 });
 
+test("v1.3.72 — isRedPacketMessage: 转账支付通知 (app.category=payment_notice) 也静默", () => {
+  const msg: WppInboundMessage = {
+    accountId: "default", msgId: "m", newMsgId: "n", fromWxid: "x",
+    chatroomId: undefined, toWxid: undefined, msgType: 49,
+    content: "微信转账", ts: 0,
+    raw: { app: { category: "payment_notice", description: "收到转账10.00元", title: "微信转账" } },
+    peerKind: "direct", peerId: "x", trigger: "direct",
+  };
+  assert.equal(isRedPacketMessage(msg), true, "payment_notice 转账应识别为静默消息");
+});
+
 test("v1.1.7 — isRedPacketMessage: redpacket 关键字 (英文)", () => {
   const msg: WppInboundMessage = {
     accountId: "default", msgId: "m", newMsgId: "n", fromWxid: "x",

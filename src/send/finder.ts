@@ -3,7 +3,7 @@
 //   之前: objectId/sessionId/topicId 等通用名 → vendor Go 匹配不上
 //   fix: Username/Id/FinderUsername/Text 等 vendor 字段名
 
-import { postWppJson } from "../api/client.js";
+import { postWppJson, getWppJson } from "../api/client.js";
 import { ctxToCallOpts, type WppAccountCtx } from "./factory.js";
 
 export function makeWppFinder(ctx: WppAccountCtx) {
@@ -85,6 +85,34 @@ export function makeWppFinder(ctx: WppAccountCtx) {
 
     /** /Finder/UserPrepare — 用户中心 */
     userPrepare: () => dispatch("/Finder/UserPrepare", {}),
+
+    // ===== v1.3.67 新 vendor: 视频号播放控制 =====
+
+    /** /Finder/PlayVideo — 播放视频号视频 (v1.3.67 新 API; object_id/finder_username/play_url 选传 + 高级参数) */
+    playVideo: (opts: {
+      objectId?: string; finderUsername?: string; playUrl?: string;
+      loop?: boolean; loopCount?: number; playSeconds?: number; async?: boolean;
+    }) => dispatch("/Finder/PlayVideo", {
+      ...(opts.objectId ? { object_id: opts.objectId } : {}),
+      ...(opts.finderUsername ? { finder_username: opts.finderUsername } : {}),
+      ...(opts.playUrl ? { play_url: opts.playUrl } : {}),
+      loop: opts.loop ?? false,
+      loop_count: opts.loopCount ?? 0,
+      play_seconds: opts.playSeconds ?? 0,
+      async: opts.async ?? true,
+    }),
+
+    /** /Finder/PlayVideoStop — 停止视频播放任务 (v1.3.67 新 API; task_id=PlayVideo 返回) */
+    playVideoStop: (taskId: string) =>
+      dispatch("/Finder/PlayVideoStop", { task_id: taskId }),
+
+    /** /Finder/PlayVideoStatus — 视频播放状态 (v1.3.67 新 API GET; task_id) */
+    playVideoStatus: (taskId: string) =>
+      getWppJson(ctx.baseUrl, `/Finder/PlayVideoStatus?task_id=${encodeURIComponent(taskId)}`, opts),
+
+    /** /Finder/PlayVideoTasks — 视频播放任务列表 (v1.3.67 新 API GET) */
+    playVideoTasks: () =>
+      getWppJson(ctx.baseUrl, "/Finder/PlayVideoTasks", opts),
   };
 }
 

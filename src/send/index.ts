@@ -22,6 +22,7 @@ import { makeWppSayHello } from "./sayhello.js";
 import { makeWppTranslate } from "./translate.js";
 import { makeWppCustomized } from "./customized.js";
 import { makeWppWebhook } from "./webhook.js";
+import { makeWppXiaoWei } from "./xiaowei.js"; // v1.3.69 预开发: 小微智能体 (默认不启用)
 
 // 同时作为 re-export 入口 (供 misc-meta 用)
 export {
@@ -45,6 +46,7 @@ export {
   makeWppTranslate,
   makeWppCustomized,
   makeWppWebhook,
+  makeWppXiaoWei,
 };
 
 /**
@@ -76,6 +78,7 @@ export function makeWppSend(ctx: WppAccountCtx) {
     translate: makeWppTranslate(ctx),
     customized: makeWppCustomized(ctx),
     webhook: makeWppWebhook(ctx),
+    xiaoWei: makeWppXiaoWei(ctx), // v1.3.69 预开发: 小微智能体 (默认不启用)
   };
 }
 
@@ -122,6 +125,13 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Login/Newinit",
     "/Login/TwiceAutoAuth",
     "/Login/YPayVerificationcode",
+    // v1.3.67 新 vendor: 登录增强
+    "/Login/GetLoginStatus",
+    "/Login/SubmitLoginVerificationCode",
+    "/Login/GetQRPadCloud",
+    "/Login/GetQRPadPPMT",
+    "/Login/62dataQRCodeVerify",
+    "/Login/CheckCanSetAlias",
   ],
   msg: [
     "/Msg/Quote",
@@ -143,6 +153,10 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Msg/StartAutoSync",
     "/Msg/Sync",
     "/Msg/UploadImg",
+    // v1.3.67 新 vendor API
+    "/Msg/SendGroupMassMsgText",
+    "/Msg/SendFile",
+    "/Msg/SendAppMessage",
   ],
   group: [
     "/Group/AddChatRoomMember",
@@ -182,6 +196,8 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Friend/SendRequest",
     "/Friend/SetRemarks",
     "/Friend/Upload",
+    // v1.3.67 新 vendor API
+    "/Friend/GetGHList",
   ],
   user: [
     "/User/BindQQ",
@@ -201,6 +217,9 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/User/UpdateProfile",
     "/User/UploadHeadImage",
     "/User/VerifyPasswd",
+    // v1.3.67 新 vendor API
+    "/User/FriendVerification",
+    "/User/AddMeMethods",
   ],
   finder: [
     "/Finder/Comment",
@@ -218,6 +237,11 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Finder/Search",
     "/Finder/TargetUserPage",
     "/Finder/UserPrepare",
+    // v1.3.67 新 vendor: 视频播放控制
+    "/Finder/PlayVideo",
+    "/Finder/PlayVideoStop",
+    "/Finder/PlayVideoStatus",
+    "/Finder/PlayVideoTasks",
   ],
   friendCircle: [
     "/FriendCircle/Comment",
@@ -238,6 +262,13 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/FriendCircle/UploadImage",
     "/FriendCircle/UploadImages",
     "/FriendCircle/UploadVideo",
+    // v1.3.67 新 vendor API
+    "/FriendCircle/GetCollectCircle",
+    "/FriendCircle/SendFavItemCircle",
+    "/FriendCircle/SendOneIdCircle",
+    "/FriendCircle/SetFriendCircleDays",
+    // v1.3.67 新 vendor
+    "/FriendCircle/ActiveTasks",
   ],
   search: [
     "/Search/AI",
@@ -264,6 +295,14 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Search/Query",
     "/Search/Service/{name}",
     "/Search/Services",
+    // v1.3.67 新 vendor: 视频号深度 API
+    "/Search/Channels/Detail",
+    "/Search/Channels/Comments",
+    "/Search/Channels/Media",
+    "/Search/Channels/ResolveShare",
+    // v1.3.67 新 vendor: AI 搜索对话
+    "/Search/AI/Conversation",
+    "/Search/AI/FollowUp",
   ],
   wxapp: [
     "/Wxapp/AddAvatar",
@@ -286,6 +325,10 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Wxapp/Wxapp/GetpullPay",
     "/Wxapp/Wxapp/JSGetSessionidQRcode",
     "/Wxapp/Wxapp/QrcodeAuthLogin",
+    // v1.3.67 新 vendor: 小程序 OAuth
+    "/Wxapp/DeleteOauthApp",
+    "/Wxapp/GetOauthList",
+    "/Wxapp/JSLoginCustomized",
   ],
   officialAccounts: [
     "/OfficialAccounts/AuthMpLogin",
@@ -300,6 +343,10 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/OfficialAccounts/QRConnectAuthorize",
     "/OfficialAccounts/QRConnectAuthorizeConfirm",
     "/OfficialAccounts/Quit",
+    // v1.3.67 新 vendor: 公众号文章
+    "/OfficialAccounts/ArticleList",
+    "/OfficialAccounts/ArticleMarkdown",
+    "/OfficialAccounts/ArticleRead",
   ],
   tools: [
     "/Tools/CdnDownloadImage",
@@ -335,6 +382,9 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/TenPay/GeneratePayQCode",
     "/TenPay/GetRedPacketListApi",
     "/TenPay/WXCreateRedPacketApi",
+    // v1.3.67 新 vendor: 红包增强
+    "/TenPay/OpenHongBaoWithParams",
+    "/TenPay/ReceivewxhbWithoutEncryption",
   ],
   favorites: ["/Favor/Del", "/Favor/GetFavInfo", "/Favor/GetFavItem", "/Favor/Sync"],
   label: [
@@ -343,6 +393,8 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Label/GetList",
     "/Label/UpdateList",
     "/Label/UpdateName",
+    // v1.3.67 新 vendor
+    "/Label/GetWXFriendListByLabel",
   ],
   voice: [
     "/Voice/MessageTranscribe",
@@ -351,10 +403,11 @@ export const WPP_VENDOR_ENDPOINTS = {
   ],
   qwContact: [
     "/QWContact/QWApplyAddContact",
-    "/QWContact/QWContact/QWAddContact",
+    // v1.3.67: 路径去重 (旧 /QWContact/QWContact/QWAddContact 已废弃)
+    "/QWContact/QWAddContact",
     "/QWContact/SearchQWContact",
   ],
-  sayHello: ["/SayHello/Modelv1", "/SayHello/Modelv2"],
+  sayHello: ["/SayHello/Modelv1", "/SayHello/Modelv2", "/SayHello/Modelv3"],
   translate: ["/Translate/Send", "/Translate/Text"],
   customized: ["/Customized/WXCTDUniftyAuthBatch"],
   webhook: [
@@ -364,5 +417,28 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Webhook/Remove",
     "/Webhook/Set",
     "/Webhook/Test",
+  ],
+  // v1.3.69 预开发: 小微智能体 (默认不启用, 仅注册端点; agent-tools 不暴露)
+  xiaoWei: [
+    "/XiaoWei/Cards/ScreenshotSecurityCheck",
+    "/XiaoWei/Cards/Users",
+    "/XiaoWei/Chat/Sessions",
+    "/XiaoWei/Chat/Sessions/{session_id}",
+    "/XiaoWei/Chat/Sessions/{session_id}/Cancel",
+    "/XiaoWei/Chat/Sessions/{session_id}/Events",
+    "/XiaoWei/Chat/Sessions/{session_id}/Messages",
+    "/XiaoWei/Chat/Sessions/{session_id}/Regenerate",
+    "/XiaoWei/Chat/Sessions/{session_id}/SwitchRoom",
+    "/XiaoWei/Conversations/A2A/List",
+    "/XiaoWei/Conversations/Suggestions",
+    "/XiaoWei/History/Delete",
+    "/XiaoWei/History/Fill",
+    "/XiaoWei/History/List",
+    "/XiaoWei/Invites",
+    "/XiaoWei/Invites/Candidates",
+    "/XiaoWei/Invites/Info",
+    "/XiaoWei/Permission",
+    "/XiaoWei/RedDots/Query",
+    "/XiaoWei/RedDots/Read",
   ],
 } as const;

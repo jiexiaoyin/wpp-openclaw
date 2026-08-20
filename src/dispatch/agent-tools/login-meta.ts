@@ -86,4 +86,51 @@ export const LOGIN_META: ToolMeta = {
     // 历史不一致, 不优化
     (userInfo: string) => getLoginApi().loginNewinit({ userInfo }),
   ],
+  // ===== v1.3.67 新 vendor: 登录增强 =====
+  /** /Login/GetLoginStatus — 聚合登录状态 (v1.3.67 GET) */
+  loginGetStatus: [
+    "获取聚合登录状态 (缓存/运行/心跳/长连接). autoLogin=true 尝试会话恢复.",
+    Type.Object({
+      autoLogin: Type.Optional(Type.Boolean({ description: "尝试会话恢复, 默认 true" })),
+    }),
+    (autoLogin?: boolean) => getLoginApi().loginGetStatus(autoLogin ?? true),
+  ],
+  /** /Login/SubmitLoginVerificationCode — 提交登录短信验证码 (v1.3.67) */
+  loginSubmitVerificationCode: [
+    "提交扫码登录的短信验证码 (code=验证码). 需先获取登录二维码.",
+    Type.Object({ code: Type.String() }),
+    (code: string) => getLoginApi().loginSubmitVerificationCode(code),
+  ],
+  /** /Login/GetQRPadCloud — 获取二维码新版兼容 (v1.3.67) */
+  loginGetQRPadCloud: [
+    "获取登录二维码 (新版兼容模式). DeviceName=设备名.",
+    Type.Object({
+      deviceName: Type.Optional(Type.String()),
+      oversea: Type.Optional(Type.Boolean()),
+    }),
+    (opts: { deviceName?: string; oversea?: boolean }) =>
+      getLoginApi().loginGetQRPadCloud(opts.deviceName ?? "我的 iPad", opts.oversea ?? false),
+  ],
+  /** /Login/GetQRPadPPMT — 获取二维码 Pad PPMT (v1.3.67) */
+  loginGetQRPadPPMT: [
+    "获取登录二维码 (Pad PPMT 兼容模式). DeviceName=设备名.",
+    Type.Object({
+      deviceName: Type.Optional(Type.String()),
+      oversea: Type.Optional(Type.Boolean()),
+    }),
+    (opts: { deviceName?: string; oversea?: boolean }) =>
+      getLoginApi().loginGetQRPadPPMT(opts.deviceName ?? "我的 iPad", opts.oversea ?? false),
+  ],
+  /** /Login/62dataQRCodeVerify — 62 数据二维码验证 (v1.3.67) */
+  login62dataQRCodeVerify: [
+    "62 数据二维码验证会话. Url=验证链接.",
+    Type.Object({ url: Type.String() }),
+    (url: string) => getLoginApi().login62dataQRCodeVerify(url),
+  ],
+  /** /Login/CheckCanSetAlias — 检测能否设置微信号 (v1.3.67 GET) */
+  loginCheckCanSetAlias: [
+    "检测当前登录环境是否可以设置微信号 (GET).",
+    Type.Object({}),
+    () => getLoginApi().loginCheckCanSetAlias(),
+  ],
 };

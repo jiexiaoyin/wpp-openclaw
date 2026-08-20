@@ -421,6 +421,27 @@ export function makeWppMsg(ctx: WppAccountCtx) {
     startAutoSync: (targetUrl: string) =>
       dispatch("/Msg/StartAutoSync", { TargetURL: targetUrl }),
 
+    /**
+     * /Msg/SendGroupMassMsgText — 群发文本 (v1.3.67 新 vendor API)
+     * ToIds=群 wxid 数组, Content=文本
+     */
+    sendGroupMassMsgText: (toIds: string[], content: string) =>
+      dispatch("/Msg/SendGroupMassMsgText", { ToIds: toIds, Content: content }),
+
+    /**
+     * /Msg/SendFile — 发送文件 (v1.3.67 新 vendor API; 自动上传+发送)
+     * ToWxid=目标, FileName=文件名, Base64=文件内容
+     */
+    sendFileV2: (toWxid: string, fileName: string, base64: string) =>
+      dispatch("/Msg/SendFile", { ToWxid: toWxid, FileName: fileName, Base64: base64 }),
+
+    /**
+     * /Msg/SendAppMessage — 发送结构化应用卡片 (v1.3.67 新 API)
+     * items=[{kind:'link'|'mini_program'|'music'|'file', ...}] 单次最多 20 项
+     */
+    sendAppMessage: (items: unknown[]) =>
+      dispatch("/Msg/SendAppMessage", { items }),
+
     /** /Msg/Sync — 同步消息 (swagger: Msg.SyncParamDoc {Scene=0, Synckey=""}) */
     sync: () => dispatch("/Msg/Sync", { Scene: 0, Synckey: "" }),
 

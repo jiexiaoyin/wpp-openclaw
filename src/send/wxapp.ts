@@ -75,6 +75,19 @@ export function makeWppWxapp(ctx: WppAccountCtx) {
     /** /Wxapp/Wxapp/QrcodeAuthLogin */
     qrcodeAuthLogin: (qrcodeUrl: string) =>
       dispatch("/Wxapp/Wxapp/QrcodeAuthLogin", { qrcodeUrl }),
+
+    // ===== v1.3.67 新 vendor: 小程序 OAuth =====
+
+    /** /Wxapp/DeleteOauthApp — 移除小程序授权 (v1.3.67 新 API; appid) */
+    deleteOauthApp: (appid: string) =>
+      dispatch("/Wxapp/DeleteOauthApp", { appid }),
+
+    /** /Wxapp/GetOauthList — 小程序授权列表 (v1.3.67 新 API; 无 body) */
+    getOauthList: () => dispatch("/Wxapp/GetOauthList", {}),
+
+    /** /Wxapp/JSLoginCustomized — 小程序定制登录 (v1.3.67 新 API; appid) */
+    jsLoginCustomized: (appid: string) =>
+      dispatch("/Wxapp/JSLoginCustomized", { appid }),
   };
 }
 

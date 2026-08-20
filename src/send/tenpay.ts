@@ -120,6 +120,14 @@ export function makeWppTenPay(ctx: WppAccountCtx) {
         username,
         wxid,
       }),
+
+    /** /TenPay/OpenHongBaoWithParams — 抢红包完整参数 (v1.3.67 新 API; SendId/SendUserName/TimingIdentifier/Xml) */
+    openHongBaoWithParams: (sendId: string, sendUserName: string, timingIdentifier: string, xml: string) =>
+      dispatch("/TenPay/OpenHongBaoWithParams", { SendId: sendId, SendUserName: sendUserName, TimingIdentifier: timingIdentifier, Xml: xml }),
+
+    /** /TenPay/ReceivewxhbWithoutEncryption — 打开红包无加密兼容 (v1.3.67 新 API; Xml=红包消息内容) */
+    receiveWxhbWithoutEncryption: (xml: string) =>
+      dispatch("/TenPay/ReceivewxhbWithoutEncryption", { Xml: xml }),
   };
 }
 

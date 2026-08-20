@@ -91,14 +91,16 @@ test("getWppJson — 网络错误", async () => {
 
 // ===== WPP_VENDOR_ENDPOINTS 完整性 =====
 
-test("WPP_VENDOR_ENDPOINTS — 总数 = 250 (v1.3.25 SWAGGER-254 补 19 个)", () => {
+test("WPP_VENDOR_ENDPOINTS — 总数 = 307 (v1.3.69 加小微 20)", () => {
   let total = 0;
   for (const list of Object.values(WPP_VENDOR_ENDPOINTS)) {
     total += (list as readonly string[]).length;
   }
   // v1.1.17 (2026-08-08 老板拍板): 移除 Admin 4 端点 (GenAuthKey/DelayAuthKey/DeleteAuthKey) + User/GetAllOnline
   // v1.3.25 (2026-08-10 老板拍板): 补 19 个缺失 (FriendCircle6+Search5+TenPay5+Tools2+SendApp)
-  assert.equal(total, 250, `expected 250 (v1.3.25), got ${total}`);
+  // v1.3.67 (2026-08-20): 新 vendor P0 补 9 + P1 补 7 + P2 补 10 + P2B 补 11 (login6+search2+fc1+label1+sayhello1)
+  // v1.3.69 (2026-08-20): 小微预开发 +20 (xiaowei)
+  assert.equal(total, 307, `expected 307 (v1.3.69), got ${total}`);
 });
 
 test("WPP_VENDOR_ENDPOINTS — 21 tag 覆盖", () => {
@@ -254,7 +256,12 @@ test("send modules 函数总数 = 255 (v1.3.25 SWAGGER-254 补 19 个)", () => {
   // v1.3.25 SWAGGER-254 补 19: friendcircle5+search5+tenpay5+tools2 = 17 (DownloadVideo 已在 v1.3.24) → 255
   // v1.3.28 publishImages = 256
   // v1.3.29 publishVideo + publishVideoViaItem = 258
-  assert.equal(funcCount, 258, `expected 258 functions (v1.3.30), got ${funcCount}`);
+  // v1.3.67 新 vendor P0 +9 (msg: sendGroupMassMsgText/sendFileV2; friendcircle: getCollectCircle/sendFavItemCircle/sendOneIdCircle/setFriendCircleDays; friend: getGHList; user: friendVerification/addMeMethods) = 267
+  // v1.3.67 新 vendor P1 +7 (officialaccounts: articleList/articleMarkdown/articleRead; search: channelsDetail/channelsComments/channelsMedia/channelsResolveShare) = 274
+  // v1.3.67 新 vendor P2 +10 (finder: playVideo/playVideoStop/playVideoStatus/playVideoTasks; msg: sendAppMessage; tenpay: openHongBaoWithParams/receiveWxhbWithoutEncryption; wxapp: deleteOauthApp/getOauthList/jsLoginCustomized) = 284
+  // v1.3.67 新 vendor P2B +11 (login6: loginGetStatus/loginSubmitVerificationCode/loginGetQRPadCloud/loginGetQRPadPPMT/login62dataQRCodeVerify/loginCheckCanSetAlias; search2: aiConversation/aiFollowUp; fc1: activeTasks; label1: getWXFriendListByLabel; sayhello1: modelv3) = 295
+  // v1.3.69 小微预开发 +20 (xiaowei: createSession/getSession/sendMessage/cancel/regenerate/switchRoom/events/historyList/historyFill/historyDelete/invite/inviteCandidates/inviteInfo/redDotsQuery/redDotsRead/cardUsers/cardScreenshotCheck/permission/a2aList/suggestions) = 315
+  assert.equal(funcCount, 315, `expected 315 functions (v1.3.69), got ${funcCount}`);
 });
 
 // ===== v1.1.27 SENDIMG-FIX: resolveImageToBase64 三态测试 =====

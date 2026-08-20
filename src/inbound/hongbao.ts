@@ -25,6 +25,13 @@ export function isRedPacketMessage(msg: WppInboundMessage): boolean {
     const t = (msg.raw as Record<string, unknown>).type as string;
     if (/hongbao|redpacket/i.test(t)) return true;
   }
+  // v1.3.72 转账/支付通知 (v1 schema: app.category === "payment_notice", 如 "收到转账10.00元") 也静默 (老板 2026-08-20)
+  //   转账与红包同属支付类 app 消息, 推送简化无 transFerId/transactionId, 不触发 AI 回复
+  const app = (msg.raw as Record<string, unknown>).app as Record<string, unknown> | undefined;
+  if (app && typeof app.category === "string") {
+    if (/payment_notice|transfer|pay/i.test(app.category)) return true;
+    if (typeof app.description === "string" && /转账|收款|transfer/i.test(app.description)) return true;
+  }
   return false;
 }
 

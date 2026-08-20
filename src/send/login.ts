@@ -176,6 +176,32 @@ export function makeWppLogin(ctx: WppAccountCtx) {
     /** /Login/YPayVerificationcode — 提交验证 */
     loginYPayVerificationcode: async (body: Record<string, unknown>): Resp =>
       postWppJson(ctx.baseUrl, "/Login/YPayVerificationcode", body, opts),
+
+    // ===== v1.3.67 新 vendor: 登录增强 =====
+
+    /** /Login/GetLoginStatus — 聚合登录状态 (v1.3.67 GET; autoLogin 尝试会话恢复) */
+    loginGetStatus: async (autoLogin = true): Resp =>
+      getWppJson(ctx.baseUrl, `/Login/GetLoginStatus?autoLogin=${autoLogin}`, opts),
+
+    /** /Login/SubmitLoginVerificationCode — 提交短信验证码 (v1.3.67; 需 X-Access-Token) */
+    loginSubmitVerificationCode: async (code: string): Resp =>
+      postWppJson(ctx.baseUrl, "/Login/SubmitLoginVerificationCode", { code }, opts),
+
+    /** /Login/GetQRPadCloud — 获取二维码新版兼容 (v1.3.67) */
+    loginGetQRPadCloud: async (deviceName = "我的 iPad", oversea = false): Resp =>
+      postWppJson(ctx.baseUrl, "/Login/GetQRPadCloud", { DeviceName: deviceName, oversea }, opts),
+
+    /** /Login/GetQRPadPPMT — 获取二维码 Pad PPMT 兼容 (v1.3.67) */
+    loginGetQRPadPPMT: async (deviceName = "我的 iPad", oversea = false): Resp =>
+      postWppJson(ctx.baseUrl, "/Login/GetQRPadPPMT", { DeviceName: deviceName, oversea }, opts),
+
+    /** /Login/62dataQRCodeVerify — 62 数据二维码验证 (v1.3.67; Url=验证链接) */
+    login62dataQRCodeVerify: async (url: string): Resp =>
+      postWppJson(ctx.baseUrl, "/Login/62dataQRCodeVerify", { Url: url }, opts),
+
+    /** /Login/CheckCanSetAlias — 检测能否设置微信号 (v1.3.67 GET) */
+    loginCheckCanSetAlias: async (): Resp =>
+      getWppJson(ctx.baseUrl, "/Login/CheckCanSetAlias", opts),
   };
 }
 

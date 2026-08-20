@@ -99,9 +99,9 @@ export const TOOLS_META: ToolMeta = {
     Type.Object({}),
     () => getToolsApi().getBandCardList(),
   ],
-  /** /Tools/setproxy */
+  /** /Tools/setproxy — 修改微信步数 (走 setproxy; 新端点 SetStep 有 vendor bug panic, 勿用) */
   setStepCount: [
-    "修改微信运动步数.",
+    "修改微信运动步数 (当天步数, 最高 98000).",
     Type.Object({ steps: Type.Number() }),
     (steps: number) => getToolsApi().setStep(steps),
   ],

@@ -112,4 +112,28 @@ export const OFFICIAL_ACCOUNTS_META: ToolMeta = {
     Type.Object({ url: Type.String() }),
     (url: string) => getOfficialAccountsApi().qrConnectAuthorizeConfirm(url),
   ],
+  /** /OfficialAccounts/ArticleList — 公众号文章列表 (v1.3.67 新 API) */
+  articleList: [
+    "获取公众号文章列表. accountId=公众号 __biz 标识 或 historyUrl=历史页链接 (二选一), limit=数量.",
+    Type.Object({
+      accountId: Type.Optional(Type.String()),
+      historyUrl: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Number()),
+      offset: Type.Optional(Type.Number()),
+    }),
+    (opts: { accountId?: string; historyUrl?: string; limit?: number; offset?: number }) =>
+      getOfficialAccountsApi().articleList(opts.accountId ?? "", opts.historyUrl ?? "", opts.limit ?? 20, opts.offset ?? 0),
+  ],
+  /** /OfficialAccounts/ArticleMarkdown — 公众号文章转 Markdown (v1.3.67 新 API) */
+  articleMarkdown: [
+    "把公众号文章 URL 转成 Markdown (返回标题/公众号/正文/图片).",
+    Type.Object({ url: Type.String() }),
+    (url: string) => getOfficialAccountsApi().articleMarkdown(url),
+  ],
+  /** /OfficialAccounts/ArticleRead — 公众号文章阅读解析 (v1.3.67 新 API) */
+  articleRead: [
+    "解析公众号文章链接 (短链转正文 Markdown + 图片).",
+    Type.Object({ url: Type.String() }),
+    (url: string) => getOfficialAccountsApi().articleRead(url),
+  ],
 };

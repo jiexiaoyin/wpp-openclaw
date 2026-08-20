@@ -78,6 +78,15 @@ export function makeWppUser(ctx: WppAccountCtx) {
     /** /User/VerifyPasswd — 验证密码 */
     verifyPasswd: (password: string) =>
       dispatch("/User/VerifyPasswd", { password }),
+
+    /** /User/FriendVerification — 加我为朋友时需要验证 (v1.3.67 新 API; enabled=true 需验证) */
+    friendVerification: (enabled: boolean) =>
+      dispatch("/User/FriendVerification", { enabled }),
+
+    /** /User/AddMeMethods — 添加我的方式 (v1.3.67 新 API; 各字段 true=允许该方式添加) */
+    addMeMethods: (opts: {
+      phone?: boolean; wechat_id?: boolean; group_chat?: boolean; qr_code?: boolean; contact_card?: boolean;
+    }) => dispatch("/User/AddMeMethods", opts),
   };
 }
 

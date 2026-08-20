@@ -32,7 +32,7 @@ import { buildSessionKey } from "./session-key.js";
 import { sendText as dispatchSendText, sendImage as dispatchSendImage } from "./dispatch/outbound.js";
 import { AGENT_TOOLS } from "./dispatch/agent-tools/index.js";
 import { getCurrentAccountId } from "./dispatch/account-context.js";
-import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom } from "./config.js";
+import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag } from "./config.js";
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig, type ResolvedGlobalConfig } from "./core/runtime-config.js";
 import type { WppTriggerConfig, WppAccountTriggerCtx } from "./inbound/triggers.js";
@@ -226,11 +226,11 @@ export const FILEHELPER_COMMANDS: FileHelperCommand[] = [
   {
     name: "/addgroup",
     desc: "授权群聊白名单",
-    example: "/addgroup 19908568237@chatroom",
+    example: "/addgroup xxxxxxxx@chatroom",
     handler: async ({ accountId, toWxid, args }) => {
       const target = args[0]?.trim();
       if (!target) {
-        await sendToFileHelper(accountId, toWxid, "用法: /addgroup <群ID>\n示例: /addgroup 19908568237@chatroom");
+        await sendToFileHelper(accountId, toWxid, "用法: /addgroup <群ID>\n示例: /addgroup xxxxxxxx@chatroom");
         return;
       }
       const r = await appendGroupAllowFrom(accountId, target);
@@ -242,17 +242,42 @@ export const FILEHELPER_COMMANDS: FileHelperCommand[] = [
   {
     name: "/delgroup",
     desc: "移除群聊白名单",
-    example: "/delgroup 19908568237@chatroom",
+    example: "/delgroup xxxxxxxx@chatroom",
     handler: async ({ accountId, toWxid, args }) => {
       const target = args[0]?.trim();
       if (!target) {
-        await sendToFileHelper(accountId, toWxid, "用法: /delgroup <群ID>\n示例: /delgroup 19908568237@chatroom");
+        await sendToFileHelper(accountId, toWxid, "用法: /delgroup <群ID>\n示例: /delgroup xxxxxxxx@chatroom");
         return;
       }
       const r = await removeGroupAllowFrom(accountId, target);
       await sendToFileHelper(accountId, toWxid, r.ok
         ? `✅ 已移除群聊白名单: ${target}\n当前群聊白名单 (${r.groupAllowFrom.length}): ${r.groupAllowFrom.join(", ") || "(空)"}`
         : `❌ 移除失败: ${r.reason ?? "unknown"}`);
+    },
+  },
+  {
+    // v1.3.71 FEATURE-FLAGS: 小微智能体能力开关 (预开发, 默认关闭, 用命令动态开/关)
+    //   朋友圈发布用白名单机制 (friendCirclePublishAllowFrom) 已够, 不加开关 (老板 2026-08-20)
+    name: "/xiaowei",
+    desc: "小微智能体能力开关 (on/off/status)",
+    example: "/xiaowei on",
+    handler: async ({ accountId, toWxid, args }) => {
+      const arg = (args[0] ?? "").toLowerCase();
+      const cfg = await loadAccountConfigAsync(accountId);
+      const current = Boolean(cfg?.xiaoweiEnabled);
+      if (arg === "status") {
+        await sendToFileHelper(accountId, toWxid, `小微智能体: ${current ? "✅ 开启" : "❌ 关闭"}`);
+        return;
+      }
+      if (arg !== "on" && arg !== "off") {
+        await sendToFileHelper(accountId, toWxid, "用法: /xiaowei on|off|status\n示例: /xiaowei on (开启小微智能体)");
+        return;
+      }
+      const target = arg === "on";
+      const r = await setAccountFlag(accountId, "xiaoweiEnabled", target);
+      await sendToFileHelper(accountId, toWxid, r.ok
+        ? `✅ 小微智能体已${target ? "开启" : "关闭"} (account=${accountId})`
+        : `❌ 设置失败: ${r.reason ?? "unknown"}`);
     },
   },
 ];
@@ -850,14 +875,14 @@ export const wppChannelPlugin = {
   // ============================================================
   // v1.3.45 MESSAGING-TARGET-RESOLVER (2026-08-12 接总立 P1,
   //   修复 cron/AI 调 message 工具 + attachments type=image → framework 报
-  //   "Unknown target 53889526119@chatroom for WeChatPadPro")
+  //   "Unknown target xxxxxxxx@chatroom for WeChatPadPro")
   //
   // 根因 SSOT (framework target-normalization-Cp3RZ0Yv.js):
   //   1. framework resolveNormalizedTargetInput 调 plugin.messaging?.normalizeTarget
   //      → WPP 没定义 → fallback 到 normalizeOptionalString (trim)
   //   2. framework looksLikeTargetId 默认规则: 只识别 channel:/group:/user: 前缀,
   //      @开头 但仅 @thread 格式 (e.g. 123@thread), +86xxx 数字 ID
-  //      → "53889526119@chatroom" 不命中任何一条 (chatroom 后缀不在框架默认白名单)
+  //      → "xxxxxxxx@chatroom" 不命中任何一条 (chatroom 后缀不在框架默认白名单)
   //      → looksLikeTargetId 返 false → framework 不调 plugin resolver
   //      → framework 直接抛 unknownTargetError("Unknown target X for WeChatPadPro")
   //
@@ -870,13 +895,13 @@ export const wppChannelPlugin = {
   // 修复: 仿 GeWe v1.4.4 范式 (gewe-multi-agent/src/index.ts:channelPlugin.messaging),
   //   在 wppChannelPlugin 加 messaging 字段:
   //     - targetResolver.resolveTarget: 接收任何微信 ID/wxid/groupID, 直接 to: input
-  //     - targetResolver.looksLikeId: 识别 @chatroom 后缀 / wxid_xxx / q139198824 / 数字+@chatroom
+  //     - targetResolver.looksLikeId: 识别 @chatroom 后缀 / wxid_xxx / 数字+@chatroom
   //
   // 不动现有 outbound (v1.3.43 + v1.3.44 保持)
   // 不动现有 gateway/config/meta/capabilities (历史路径)
   messaging: {
     targetResolver: {
-      hint: "WeChat wxid (e.g. q139198824 / wxid_xxx / 53889526119@chatroom)",
+      hint: "WeChat wxid (e.g. wxid_xxx / xxxxxxxx@chatroom)",
       /**
        * 接收任意微信目标格式, 直接返回 (后续 plugin.outbound 知道怎么发).
        * 框架会调 resolveTarget 后再用返回值 (.to) 去调 outbound.sendText / sendImage / sendMedia.

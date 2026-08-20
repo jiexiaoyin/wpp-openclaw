@@ -134,4 +134,53 @@ export const SEARCH_META: ToolMeta = {
     }),
     (name: string, query?: string) => getSearchApi().service(name, query ?? ""),
   ],
+  /** /Search/Channels/Detail — 视频号内容详情 (v1.3.67 新 API) */
+  channelsDetail: [
+    "获取视频号内容详情. contentToken 来自视频号搜索结果.",
+    Type.Object({ contentToken: Type.String() }),
+    (contentToken: string) => getSearchApi().channelsDetail(contentToken),
+  ],
+  /** /Search/Channels/Comments — 视频号评论 (v1.3.67 新 API) */
+  channelsComments: [
+    "获取视频号评论. commentToken 来自搜索结果, cursor 翻页, rootCommentId 看一级评论的回复.",
+    Type.Object({
+      commentToken: Type.String(),
+      cursor: Type.Optional(Type.String()),
+      rootCommentId: Type.Optional(Type.String()),
+    }),
+    (commentToken: string, cursor?: string, rootCommentId?: string) =>
+      getSearchApi().channelsComments(commentToken, cursor ?? "", rootCommentId ?? ""),
+  ],
+  /** /Search/Channels/Media — 视频号媒体流 (v1.3.67 新 API GET) */
+  channelsMedia: [
+    "获取视频号媒体流. mediaToken 来自搜索结果, download=1 下载 / 0 预览播放.",
+    Type.Object({
+      mediaToken: Type.String(),
+      download: Type.Optional(Type.Number({ description: "1 下载, 0 预览" })),
+    }),
+    (mediaToken: string, download?: number) => getSearchApi().channelsMedia(mediaToken, download ?? 0),
+  ],
+  /** /Search/Channels/ResolveShare — 解析视频号分享链接 (v1.3.67 新 API) */
+  channelsResolveShare: [
+    "解析视频号分享链接 (weixin.qq.com/sph/... 分享链接), 返回可直接使用的业务字段.",
+    Type.Object({ url: Type.String() }),
+    (url: string) => getSearchApi().channelsResolveShare(url),
+  ],
+  /** /Search/AI/Conversation — 获取 AI 搜索会话 (v1.3.67 新 API GET) */
+  aiConversation: [
+    "获取 AI 搜索会话 (问答轮次/Markdown 答案/参考资料/建议追问). sessionId=会话 ID.",
+    Type.Object({ sessionId: Type.String() }),
+    (sessionId: string) => getSearchApi().aiConversation(sessionId),
+  ],
+  /** /Search/AI/FollowUp — AI 搜索追问 (v1.3.67 新 API) */
+  aiFollowUp: [
+    "AI 搜索追问 (用首问返回的 sessionId 继续对话).",
+    Type.Object({
+      sessionId: Type.String(),
+      query: Type.String(),
+      clientMessageId: Type.Optional(Type.String()),
+    }),
+    (sessionId: string, query: string, clientMessageId?: string) =>
+      getSearchApi().aiFollowUp(sessionId, query, clientMessageId ?? ""),
+  ],
 };

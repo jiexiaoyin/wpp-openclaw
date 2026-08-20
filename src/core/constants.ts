@@ -2,7 +2,7 @@
 
 export const CHANNEL_ID = "wechatpadpro";
 export const PLUGIN_NAME = "wechatpadpro";
-export const PLUGIN_VERSION = "1.3.63";
+export const PLUGIN_VERSION = "1.3.73";
 
 // 默认 bot 昵称 (群 @ 触发检测用; accounts/<id>.json nickname 优先, 配置驱动 + 默认兜底)
 export const DEFAULT_BOT_NICKNAME = "YourBot";

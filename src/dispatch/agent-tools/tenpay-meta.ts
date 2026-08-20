@@ -130,4 +130,22 @@ export const TEN_PAY_META: ToolMeta = {
     (amountFen: number, content: string, count: number, username: string, wxid?: string, redType?: number, from?: number) =>
       getTenPayApi().createRedPacket(amountFen, content, count, username, wxid ?? "", redType ?? 1, from ?? 0),
   ],
+  /** /TenPay/OpenHongBaoWithParams — 抢红包完整参数 (v1.3.67 新 API) */
+  openHongBaoWithParams: [
+    "抢红包 (完整参数). sendId=红包ID, sendUserName=发送者, timingIdentifier=定时标识, xml=红包消息.",
+    Type.Object({
+      sendId: Type.String(),
+      sendUserName: Type.String(),
+      timingIdentifier: Type.String(),
+      xml: Type.String(),
+    }),
+    (sendId: string, sendUserName: string, timingIdentifier: string, xml: string) =>
+      getTenPayApi().openHongBaoWithParams(sendId, sendUserName, timingIdentifier, xml),
+  ],
+  /** /TenPay/ReceivewxhbWithoutEncryption — 打开红包无加密 (v1.3.67 新 API) */
+  receiveWxhbWithoutEncryption: [
+    "打开红包 (无加密兼容模式). xml=红包消息内容.",
+    Type.Object({ xml: Type.String() }),
+    (xml: string) => getTenPayApi().receiveWxhbWithoutEncryption(xml),
+  ],
 };

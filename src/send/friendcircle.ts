@@ -207,6 +207,27 @@ export function makeWppFriendCircle(ctx: WppAccountCtx) {
       assertFriendCirclePublishAllowed(ctx.accountId); // v1.3.63 P1: 补 guard (原漏网)
       return dispatch("/FriendCircle/SetBackgroundImage", { imageData });
     },
+
+    /** /FriendCircle/GetCollectCircle — 读取收藏动态详情 (v1.3.67 新 API; sourceId=收藏来源标识) */
+    getCollectCircle: (sourceId: string) =>
+      dispatch("/FriendCircle/GetCollectCircle", { sourceId }),
+
+    /** /FriendCircle/SendFavItemCircle — 从收藏项发布朋友圈 (v1.3.67 新 API; favItemId=收藏项ID) */
+    sendFavItemCircle: (favItemId: number, sourceId: string, blackList = "", locationMode = 1) =>
+      dispatch("/FriendCircle/SendFavItemCircle", {
+        favItemId, sourceId, blackList, locationMode,
+      }),
+
+    /** /FriendCircle/SendOneIdCircle — 通过已有动态 id 再发朋友圈 (v1.3.67 新 API) */
+    sendOneIdCircle: (id: string, blackList = "", locationMode = 1) =>
+      dispatch("/FriendCircle/SendOneIdCircle", { id, blackList, locationMode }),
+
+    /** /FriendCircle/SetFriendCircleDays — 设置朋友圈可见范围 (v1.3.67 新 API; range=three_days/one_month/six_months/all) */
+    setFriendCircleDays: (range: "three_days" | "one_month" | "six_months" | "all") =>
+      dispatch("/FriendCircle/SetFriendCircleDays", { range }),
+
+    /** /FriendCircle/ActiveTasks — 查询朋友圈评论转发任务 (v1.3.67 新 API) */
+    activeTasks: () => dispatch("/FriendCircle/ActiveTasks", {}),
   };
 }
 

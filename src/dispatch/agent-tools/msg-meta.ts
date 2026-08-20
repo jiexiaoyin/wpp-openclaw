@@ -254,4 +254,32 @@ export const MSG_META: ToolMeta = {
     }),
     (imgBase64: string, toWxid: string) => getMsgApi().uploadImg(imgBase64, toWxid),
   ],
+  /** /Msg/SendGroupMassMsgText — 群发文本 (v1.3.67 新 API) */
+  sendGroupMassMsgText: [
+    "群发文本消息到多个群 (ToIds=群 wxid 数组).",
+    Type.Object({
+      toIds: Type.Array(Type.String()),
+      content: Type.String(),
+    }),
+    (toIds: string[], content: string) => getMsgApi().sendGroupMassMsgText(toIds, content),
+  ],
+  /** /Msg/SendFile — 发送文件 (v1.3.67 新 API; 自动上传+发送) */
+  sendFileV2: [
+    "发送文件 (文件名 + base64 内容). 自动上传并发送.",
+    Type.Object({
+      toWxid: Type.String(),
+      fileName: Type.String(),
+      base64: Type.String(),
+    }),
+    (toWxid: string, fileName: string, base64: string) =>
+      getMsgApi().sendFileV2(toWxid, fileName, base64),
+  ],
+  /** /Msg/SendAppMessage — 发送结构化应用卡片 (v1.3.67 新 API) */
+  sendAppMessage: [
+    "发送结构化应用卡片 (链接/小程序/音乐/文件). items 数组, 单次最多 20 项.",
+    Type.Object({
+      items: Type.Array(Type.Unknown()),
+    }),
+    (items: unknown[]) => getMsgApi().sendAppMessage(items),
+  ],
 };

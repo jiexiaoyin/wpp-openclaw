@@ -783,3 +783,55 @@ test("v1.3.39 — filehelper 命令消息放行 (非命令仍过滤)", () => {
   } as never);
   assert.equal(plain.length, 0, "非命令仍过滤");
 });
+
+// ===== v1.3.72 红包/系统通知不触发 AI (老板 2026-08-20) =====
+
+test("v1.3.72 红包消息不触发 dispatch (收到红包静默)", async () => {
+  resetAdapter();
+  const fake = new FakeDbForEnrich();
+  setAdapterForTest(fake);
+  const dispatched: WppInboundMessage[] = [];
+  const handler = createWppInboundHandler({
+    accountId: "default",
+    triggerConfig: defaultTriggerConfig(),
+    triggerCtx: { botWxid: "wxid_bot", allowFrom: ["wxid_alice"] },
+    enableDispatch: true,
+    onDispatch: async (msg) => { dispatched.push(msg); },
+  });
+
+  // 红包消息 (msg_type=49, content 含"红包" → isRedPacketMessage true)
+  await handler.handle({
+    fromUser: "wxid_alice",
+    content: "微信红包",
+    msgType: 49,
+    msgId: "hb-1",
+    raw: { app: { title: "微信红包", description: "我给你发了一个红包" } },
+  } as WppWebhookPayload);
+  await handler.flushAll();
+  assert.equal(dispatched.length, 0, `红包消息不应触发 dispatch, 实际 ${dispatched.length}`);
+});
+
+test("v1.3.72 系统通知 (msg_type=10000) 不触发 dispatch (红包领取/转账静默)", async () => {
+  resetAdapter();
+  const fake = new FakeDbForEnrich();
+  setAdapterForTest(fake);
+  const dispatched: WppInboundMessage[] = [];
+  const handler = createWppInboundHandler({
+    accountId: "default",
+    triggerConfig: defaultTriggerConfig(),
+    triggerCtx: { botWxid: "wxid_bot", allowFrom: ["wxid_alice"] },
+    enableDispatch: true,
+    onDispatch: async (msg) => { dispatched.push(msg); },
+  });
+
+  // 系统通知 (msg_type=10000, kind=system)
+  await handler.handle({
+    fromUser: "wxid_alice",
+    content: "收到一条微信系统通知",
+    msgType: 10000,
+    msgId: "sys-1",
+    raw: { system: { category: "system_notice", title: "微信系统通知" } },
+  } as WppWebhookPayload);
+  await handler.flushAll();
+  assert.equal(dispatched.length, 0, `系统通知不应触发 dispatch, 实际 ${dispatched.length}`);
+});

@@ -121,4 +121,23 @@ export const USER_META: ToolMeta = {
     Type.Object({}),
     () => getUserApi().checkCanSetAlias(),
   ],
+  /** /User/FriendVerification — 加我为朋友需验证 (v1.3.67 新 API) */
+  friendVerification: [
+    "设置「加我为朋友时需要验证」. enabled=true 需验证, false 关闭.",
+    Type.Object({ enabled: Type.Boolean() }),
+    (enabled: boolean) => getUserApi().friendVerification(enabled),
+  ],
+  /** /User/AddMeMethods — 添加我的方式 (v1.3.67 新 API) */
+  addMeMethods: [
+    "设置「添加我的方式」(微信: 我→设置→朋友权限→添加我的方式). 只传要修改的字段, true=允许该方式添加.",
+    Type.Object({
+      phone: Type.Optional(Type.Boolean()),
+      wechat_id: Type.Optional(Type.Boolean()),
+      group_chat: Type.Optional(Type.Boolean()),
+      qr_code: Type.Optional(Type.Boolean()),
+      contact_card: Type.Optional(Type.Boolean()),
+    }),
+    (opts: { phone?: boolean; wechat_id?: boolean; group_chat?: boolean; qr_code?: boolean; contact_card?: boolean }) =>
+      getUserApi().addMeMethods(opts),
+  ],
 };

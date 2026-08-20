@@ -103,25 +103,26 @@ cp release-docs/GETTING_STARTED.md release/
 cp release-docs/README.md release/
 cp release-docs/DEPLOY.md release/
 cp release-docs/USAGE.md release/
+# 文档配图 (README 顶部展示)
+mkdir -p release/images
+cp release-docs/images/* release/images/
 cp LICENSE release/
-# 配套服务端 (vendor) — 插件仅适配此版本 (v8_m4.1.12.29_p8.0.75.53)
-#   镜像 tar 从 /opt/1panel/docker/compose/ 复制; README 源在 release-docs/vendor/README.md
+# 配套服务端 (vendor) — v1.3.68 起不再捆绑服务端二进制
+#   老板拍板 (2026-08-20): 发布包移除旧 vendor tar; 新 vendor 通过官方 Docker 镜像获取
+#   docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
+#   部署方式: 官方 docker-deploy 发布包 (host 网络 + 独立 Redis), 见 README "配套服务端" 段
+#   vendor/ 附带: 部署文档 (README.md) + 人脸登录文档 (FACE-LOGIN.md) + 官方一键部署包 (8075docker-deploy.zip)
 mkdir -p release/vendor
 cp release-docs/vendor/README.md release/vendor/
-VENDOR_TAR="/opt/1panel/docker/compose/20260809_030557_linux64_v8_m4.1.12.29_p8.0.75.53.tar.gz"
-if [ -f "$VENDOR_TAR" ]; then
-  cp "$VENDOR_TAR" release/vendor/
-  echo "vendor 镜像已复制: $(du -h release/vendor/*.tar.gz | cut -f1)"
-else
-  echo "⚠ 未找到 vendor 镜像 $VENDOR_TAR, 跳过 (发布包不含服务端)"
-fi
+cp release-docs/vendor/FACE-LOGIN.md release/vendor/
+cp release-docs/vendor/8075docker-deploy.zip release/vendor/
 # package.json 清洗: scripts 只留 setup (发布版无 devDependencies, 其它 scripts 会失败); description 去内部部署引用
 node -e "
 const fs=require('fs');
 const p=JSON.parse(fs.readFileSync('release/package.json','utf8'));
 p.scripts = { setup: 'node scripts/setup.js' };
 delete p.devDependencies;
-p.description = 'WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw 适配插件. 语音 silk 自动转码 + 转码失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 254 paths API 覆盖.';
+p.description = 'WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw 适配插件. 语音 silk 自动转码 + 转码失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 适配新 vendor v2026.08.18.1 (313 paths, 含群发/公众号/视频号/小微等新增).';
 fs.writeFileSync('release/package.json', JSON.stringify(p,null,2));
 "
 
@@ -134,9 +135,14 @@ echo "=== [8/6] 发布包最终脱敏校验 ==="
 FINAL_PERSONAL="wx\.juhe\.chat|接晓银|q139198824|wxid_dbdmq8riblxo12|wxid_eezdbu1ytws422|71bed0f5|19908568237|53889526119|57737516566|jsnjzhou|zhuqixia520520|knowhub|益融|淮安|盱眙|wechatpadpromax|silk_decoder|/root/silk_decoder|56Z8kt5ySirXyyGj|71bed0f5-626a"
 # 服务端部署文档描述 vendor 二进制名 (wechatpadpromax08, 运行命令必需) 是准确信息, 非个性化泄漏 — 排除
 #   (GETTING_STARTED/DEPLOY/vendor-README 均含服务端运行命令 ./wechatpadpromax08)
+# 官方 vendor 部署包 (vendor/8075docker-deploy.zip) 内含 vendor 官方访问控制域名 (adminmax.knowhub.cloud,
+#   用户获取客户端密钥必用), 是 vendor 交付物非个性化泄漏 — 排除 zip
+# 部署引导文档 (README/FACE-LOGIN/vendor-README/GETTING_STARTED) 引用 adminmax.knowhub.cloud (官方平台
+#   地址, 接收方拿 tokenKey/authcode 必须访问) 是 vendor 官方信息非个性化泄漏 — 排除
 FINAL_HITS=$(grep -rlE "$FINAL_PERSONAL" release/ 2>/dev/null \
   | grep -v node_modules \
-  | grep -vE '^release/(GETTING_STARTED\.md|DEPLOY\.md|vendor/README\.md)$' \
+  | grep -vE '^release/(GETTING_STARTED\.md|DEPLOY\.md|vendor/README\.md|README\.md|vendor/FACE-LOGIN\.md)$' \
+  | grep -vE '\.zip$' \
   | head -5)
 if [ -n "$FINAL_HITS" ]; then
   echo "⚠ release/ 仍含个性化值:"

@@ -42,4 +42,10 @@ export const LABEL_META: ToolMeta = {
     // 历史不一致, 不优化
     (labelId: string, wxidList: string) => getLab().updateList(labelId, [wxidList]),
   ],
+  /** /Label/GetWXFriendListByLabel — 按标签拉好友 (v1.3.67 新 API; labelId number) */
+  getWXFriendListByLabel: [
+    "按标签拉取好友列表 (名称/备注/头像/标签). labelId=标签 ID (数字).",
+    Type.Object({ labelId: Type.Number() }),
+    (labelId: number) => getLab().getWXFriendListByLabel(labelId),
+  ],
 };

@@ -92,4 +92,10 @@ export const FRIEND_META: ToolMeta = {
     }),
     (latitude: number, longitude: number, _radius?: number) => getFriendApi().lbsFind(latitude, longitude),
   ],
+  /** /Friend/GetGHList — 通讯录完整拉取 (v1.3.67 新 API) */
+  getGHList: [
+    "通讯录完整拉取 (分页+批量补齐名称/备注/头像). 比 getContactList 更全.",
+    Type.Object({}),
+    () => getFriendApi().getGHList(),
+  ],
 };

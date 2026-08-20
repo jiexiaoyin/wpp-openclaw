@@ -59,7 +59,8 @@ export function makeWppTools(ctx: WppAccountCtx) {
     uploadFile: (fileBase64: string, fileType: string) =>
       dispatch("/Tools/UploadFile", { fileBase64, fileType }),
 
-    /** /Tools/setproxy — 修改微信步数 */
+    /** /Tools/setproxy — 修改微信步数. 保持用 setproxy (实测 2026-08-20 新 vendor Code:1 可用).
+     *  新端点 /Tools/SetStep 有 vendor bug (Step.go:107 index out of range panic → HTTP 500), 勿切. */
     setStep: (steps: number) => dispatch("/Tools/setproxy", { steps }),
 
     /**
