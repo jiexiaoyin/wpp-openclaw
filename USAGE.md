@@ -163,8 +163,8 @@ npm run setup remove wechatB --clean   # 删账号 + agent + binding (防残留)
 | `/pairs` | **查看当前配对码** + 有效期 (过期可重新生成) | `/pairs` |
 | `/adduser <wxid>` | **授权私聊白名单** — 添加允许私聊的用户 | `/adduser wxid_abc123` |
 | `/deluser <wxid>` | **移除私聊白名单** — 撤销私聊权限 | `/deluser wxid_abc123` |
-| `/addgroup <群ID>` | **授权群聊白名单** — 允许机器人响应某群 | `/addgroup 19908568237@chatroom` |
-| `/delgroup <群ID>` | **移除群聊白名单** — 停止响应某群 | `/delgroup 19908568237@chatroom` |
+| `/addgroup <群ID>` | **授权群聊白名单** — 允许机器人响应某群 | `/addgroup xxxxxxxx@chatroom` |
+| `/delgroup <群ID>` | **移除群聊白名单** — 停止响应某群 | `/delgroup xxxxxxxx@chatroom` |
 | `/xiaowei on\|off\|status` | **小微智能体开关** — 开启/关闭/查看小微 AI 智能体能力 (默认关闭) | `/xiaowei on` |
 
 > 💡 **说明**:

@@ -146,11 +146,11 @@ export const FILEHELPER_COMMANDS = [
     {
         name: "/addgroup",
         desc: "授权群聊白名单",
-        example: "/addgroup 123456789@chatroom",
+        example: "/addgroup xxxxxxxx@chatroom",
         handler: async ({ accountId, toWxid, args }) => {
             const target = args[0]?.trim();
             if (!target) {
-                await sendToFileHelper(accountId, toWxid, "用法: /addgroup <群ID>\n示例: /addgroup 123456789@chatroom");
+                await sendToFileHelper(accountId, toWxid, "用法: /addgroup <群ID>\n示例: /addgroup xxxxxxxx@chatroom");
                 return;
             }
             const r = await appendGroupAllowFrom(accountId, target);
@@ -162,11 +162,11 @@ export const FILEHELPER_COMMANDS = [
     {
         name: "/delgroup",
         desc: "移除群聊白名单",
-        example: "/delgroup 123456789@chatroom",
+        example: "/delgroup xxxxxxxx@chatroom",
         handler: async ({ accountId, toWxid, args }) => {
             const target = args[0]?.trim();
             if (!target) {
-                await sendToFileHelper(accountId, toWxid, "用法: /delgroup <群ID>\n示例: /delgroup 123456789@chatroom");
+                await sendToFileHelper(accountId, toWxid, "用法: /delgroup <群ID>\n示例: /delgroup xxxxxxxx@chatroom");
                 return;
             }
             const r = await removeGroupAllowFrom(accountId, target);
@@ -595,7 +595,7 @@ export const wppChannelPlugin = {
     },
     messaging: {
         targetResolver: {
-            hint: "WeChat wxid (e.g. YOUR_WXID / wxid_xxx / 123456789@chatroom)",
+            hint: "WeChat wxid (e.g. wxid_xxx / xxxxxxxx@chatroom)",
             async resolveTarget({ input }) {
                 const trimmed = String(input ?? "").trim();
                 if (!trimmed)
