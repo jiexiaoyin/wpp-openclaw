@@ -6,6 +6,9 @@ function getXiaoWei() {
     const state = getDefaultAccountRegistry().get(getCurrentAccountId() ?? "default");
     if (!state)
         throw new Error(`account not found: ${getCurrentAccountId() ?? "default"}`);
+    if (!state.config.xiaoweiEnabled) {
+        throw new Error("小微智能体未启用 (xiaoweiEnabled=false), 用 /xiaowei on 开启");
+    }
     return makeWppXiaoWei({
         baseUrl: state.config.apiBaseUrl,
         tokenKey: state.config.tokenKey,

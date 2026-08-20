@@ -449,3 +449,30 @@ export async function removeGroupAllowFrom(accountId, chatroomId) {
     log.info(`removeGroupAllowFrom: account=${accountId} groupAllowFrom=${groupAllowFrom.length} (-${chatroomId})`);
     return { ok: true, groupAllowFrom, filePath };
 }
+export async function setAccountFlag(accountId, field, value) {
+    const dir = join(await findPluginRoot(), "accounts");
+    const filePath = join(dir, `${accountId}.json`);
+    let raw;
+    try {
+        const text = await readFile(filePath, "utf8");
+        raw = JSON.parse(text);
+    }
+    catch (e) {
+        const err = e;
+        log.warn(`setAccountFlag: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        return { ok: false, current: false, filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+    }
+    raw[field] = value;
+    try {
+        const tmpPath = `${filePath}.tmp`;
+        await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+        await rename(tmpPath, filePath);
+    }
+    catch (e) {
+        log.warn(`setAccountFlag: write ${accountId}.json failed: ${e.message}`);
+        return { ok: false, current: false, filePath, reason: "write-failed" };
+    }
+    invalidateConfigCache(accountId);
+    log.info(`setAccountFlag: account=${accountId} ${field}=${value}`);
+    return { ok: true, current: value, filePath };
+}
