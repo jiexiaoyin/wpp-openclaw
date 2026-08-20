@@ -10,6 +10,64 @@ WeChatPadPro 微信 Pad 协议 → OpenClaw gateway → AI 自动回复。支持
 
 ---
 
+## ⚡ 快速部署 (先服务端, 再插件)
+
+> **先部署服务端 (vendor), 再装插件** — 插件依赖服务端提供 HTTP API + WebSocket。本包**不含服务端二进制**, 服务端通过官方 Docker 镜像获取。
+
+### 第 1 步: 部署服务端 (vendor, 官方 Docker)
+
+```bash
+# 1. 拉取官方镜像 (build 20260818, 唯一适配版本)
+docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
+
+# 2. 解压官方一键部署包 (本包 vendor/ 目录附带)
+unzip vendor/8075docker-deploy.zip
+cd docker-deploy
+
+# 3. 首次运行: install.sh 引导填 user_token_key (客户端密钥) + 自动生成 Redis 密码
+chmod +x install.sh check-proxy.sh
+./install.sh
+
+# 4. 验证服务就绪
+curl http://127.0.0.1:18062          # HTTP API
+curl http://127.0.0.1:18062/swagger/  # 313 个 API 文档
+```
+
+部署详情见 [`vendor/README.md`](./vendor/README.md) (host 网络 + 独立 Redis + 端口)。
+
+### 第 2 步: 人脸认证 + iPad 扫码登录
+
+首次登录微信需**人脸 face 认证** (装 CA 证书 + 18080 代理白名单) + **iPad 协议扫码**。完整引导 (含 GetQR/CheckQR 调用示例) 见 **[`vendor/FACE-LOGIN.md`](./vendor/FACE-LOGIN.md)**。
+
+登录后拿到 **authcode** (X-Access-Token), 用于第 3 步插件配置。
+
+### 第 3 步: 安装插件 (本包)
+
+```bash
+# 1. 解压发布包 + 安装依赖
+unzip wpp-plugin-release.zip && cd wpp-plugin-release
+npm ci
+
+# 2. 配账号 (交互式向导)
+cp accounts/default.json.example accounts/default.json
+npm run setup add default
+
+# 3. 设环境变量 — WPP_VENDOR_HOST 必设, 否则图片/语音/文件无法下载!
+export WPP_VENDOR_HOST="https://your-vendor-domain"   # 你的服务端域名
+export WECHATPRO_TOKEN_KEY="..."                      # = user_token_key
+export WECHATPRO_AUTHCODE="..."                       # 第 2 步登录拿到的 authcode
+export WECHATPRO_DB_PASSWORD="..."                    # MariaDB 密码
+
+# 4. 部署
+bash deploy.sh               # 验证 (18+ 项全 PASS)
+bash deploy-swap.sh --force  # 真实部署
+```
+
+> **zip 小 = 正常**: 发布包只含编译产物, 不含 node_modules。`npm ci` 会根据 package.json 自动下载全部依赖。
+> **`WPP_VENDOR_HOST` 别漏**: 媒体下载走白名单, 不设则图片/语音/文件全部无法下载。
+
+---
+
 ## 功能亮点
 
 | 能力 | 说明 |
@@ -23,36 +81,7 @@ WeChatPadPro 微信 Pad 协议 → OpenClaw gateway → AI 自动回复。支持
 | 👥 多账号 | AccountRegistry 多账号隔离, 一个微信一个 agent |
 | 🔐 安全门禁 | 私聊白名单 (fail-closed) + 群策略 + 凭证 env 隔离 |
 
-## 快速开始
-
-```bash
-# 0. 解压发布包 (不含依赖)
-unzip wpp-plugin-release.zip && cd wpp-plugin-release
-
-# 1. 安装依赖 (发布包不含 node_modules, 这一步联网下载依赖)
-npm ci
-
-# 2. 配账号 (交互式向导, 填你自己的 vendor 地址 + wxid)
-cp accounts/default.json.example accounts/default.json
-npm run setup add default
-
-# 3. 设环境变量 — WPP_VENDOR_HOST 必设, 否则图片/语音/文件无法下载!
-export WPP_VENDOR_HOST="https://your-vendor-domain"   # 你的服务端域名
-export WECHATPRO_TOKEN_KEY="..."                      # 服务端 API Token
-export WECHATPRO_AUTHCODE="..."                       # 服务端授权码
-export WECHATPRO_DB_PASSWORD="..."                    # MariaDB 密码
-
-# 4. 部署
-bash deploy.sh               # 验证 (18+ 项全 PASS)
-bash deploy-swap.sh --force  # 真实部署
-```
-
-> **zip 小 = 正常**: 发布包只含编译产物, 不含 node_modules。`npm ci` 会根据 package.json 自动下载全部依赖。
-> **`WPP_VENDOR_HOST` 别漏**: 媒体下载走白名单, 不设则图片/语音/文件全部无法下载。
-
-> **配套服务端**: 本包**不含服务端二进制**。服务端通过官方 Docker 镜像获取: `docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1`, 用官方 docker-deploy 包部署 (host 网络 + 独立 Redis)。`vendor/` 目录附带部署包 `8075docker-deploy.zip` + 完整文档: [`vendor/README.md`](./vendor/README.md) (部署) + [`vendor/FACE-LOGIN.md`](./vendor/FACE-LOGIN.md) (人脸认证 + iPad 扫码登录)。插件仅适配此版本 (20260818)。
-
-详细步骤见 [GETTING_STARTED.md](./GETTING_STARTED.md)。
+> 完整安装步骤见 [GETTING_STARTED.md](./GETTING_STARTED.md)。
 
 ## 前置要求
 
