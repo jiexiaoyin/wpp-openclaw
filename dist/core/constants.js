@@ -1,6 +1,6 @@
 export const CHANNEL_ID = "wechatpadpro";
 export const PLUGIN_NAME = "wechatpadpro";
-export const PLUGIN_VERSION = "1.3.68";
+export const PLUGIN_VERSION = "1.3.69";
 export const DEFAULT_BOT_NICKNAME = "YourBot";
 export const DEFAULT_ACCOUNT_ID = "default";
 export const DEFAULT_VENDOR_API_BASE = "http://127.0.0.1:8062";
