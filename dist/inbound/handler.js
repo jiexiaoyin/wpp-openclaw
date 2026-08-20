@@ -53,11 +53,11 @@ export function createWppInboundHandler(opts) {
                             const imgR = await enrichImageMessage(opts.vendorCtx, m.content);
                             if (imgR.mediaUrl) {
                                 m.content = `${m.content}\n[图片] ${imgR.mediaUrl}`;
-                                log.info(`[WPP v1.2.0] image enrich ok: msgId=${m.msgId} url=${imgR.mediaUrl}`);
+                                log.info(`[WPP v1.3.74] image enrich ok: msgId=${m.msgId} url=${imgR.mediaUrl}`);
                             }
                         }
                         catch (e) {
-                            log.warn(`[WPP v1.2.0] image enrich failed (non-fatal): ${formatErr(e)}`, { msgId: m.msgId });
+                            log.warn(`[WPP v1.3.74] image enrich failed (non-fatal): ${formatErr(e)}`, { msgId: m.msgId });
                         }
                     }
                     else {
@@ -89,11 +89,11 @@ export function createWppInboundHandler(opts) {
                                         log.info(`[WPP v1.2.0 V1-SCHEMA-ENRICH] image enrich ok: msgId=${m.msgId} localId=${v1Info.localId} url=${imgR.mediaUrl} size=${imgR.mediaSize}`);
                                     }
                                     else {
-                                        log.warn(`[WPP v1.2.0] v1 schema image enrich returned no url: msgId=${m.msgId} localId=${v1Info.localId} error=${imgR.error}`, { msgId: m.msgId });
+                                        log.warn(`[WPP v1.3.74] v1 schema image enrich returned no url: msgId=${m.msgId} localId=${v1Info.localId} error=${imgR.error}`, { msgId: m.msgId });
                                     }
                                 }
                                 catch (e) {
-                                    log.warn(`[WPP v1.2.0] v1 schema image enrich failed (non-fatal): ${formatErr(e)}`, { msgId: m.msgId });
+                                    log.warn(`[WPP v1.3.74] v1 schema image enrich failed (non-fatal): ${formatErr(e)}`, { msgId: m.msgId });
                                 }
                             }
                         }
@@ -120,7 +120,7 @@ export function createWppInboundHandler(opts) {
                             vR = await enrichVideoMessage(opts.vendorCtx, m.content);
                         }
                         catch (e) {
-                            log.warn(`[WPP v1.2.0] video enrich exception: ${formatErr(e)}`, { msgId: m.msgId });
+                            log.warn(`[WPP v1.3.74] video enrich exception: ${formatErr(e)}`, { msgId: m.msgId });
                             vR = null;
                         }
                     }
@@ -169,7 +169,7 @@ export function createWppInboundHandler(opts) {
                             vR = await enrichVoiceMessage(opts.vendorCtx, m.content);
                         }
                         catch (e) {
-                            log.warn(`[WPP v1.2.0] voice enrich exception: ${formatErr(e)}`, { msgId: m.msgId });
+                            log.warn(`[WPP v1.3.74] voice enrich exception: ${formatErr(e)}`, { msgId: m.msgId });
                             vR = null;
                         }
                     }
@@ -190,17 +190,17 @@ export function createWppInboundHandler(opts) {
                         const fR = await enrichFileMessage(opts.vendorCtx, m.content);
                         if (fR.mediaUrl) {
                             m.content = `${m.content}\n[文件] ${fR.filename} (${fR.size ?? "?"} bytes) ${fR.mediaUrl}`;
-                            log.info(`[WPP v1.2.0] file enrich ok: msgId=${m.msgId} name=${fR.filename} url=${fR.mediaUrl} (msgType=${m.msgType})`);
+                            log.info(`[WPP v1.3.74] file enrich ok: msgId=${m.msgId} name=${fR.filename} url=${fR.mediaUrl} (msgType=${m.msgType})`);
                         }
                         else {
                             m.content = `${m.content}\n[文件] ${fR.filename} (${fR.size ?? "?"} bytes, 下载失败: ${fR.error ?? "unknown"})`;
-                            log.warn(`[WPP v1.2.0] file enrich failed (non-fatal): name=${fR.filename} err=${fR.error}`, {
+                            log.warn(`[WPP v1.3.74] file enrich failed (non-fatal): name=${fR.filename} err=${fR.error}`, {
                                 msgId: m.msgId,
                             });
                         }
                     }
                     catch (e) {
-                        log.warn(`[WPP v1.2.0] file enrich exception: ${formatErr(e)}`, { msgId: m.msgId });
+                        log.warn(`[WPP v1.3.74] file enrich exception: ${formatErr(e)}`, { msgId: m.msgId });
                     }
                 }
                 else if (m.msgType === 49) {
@@ -281,7 +281,7 @@ export function createWppInboundHandler(opts) {
                                 if (mediaMatch) {
                                     const tag = mediaMatch[1] ?? "媒体";
                                     const ossUrl = mediaMatch[2] ?? "";
-                                    info(`[WPP v1.2.0] QUOTE media inject: msgId=${m.msgId} quoted.msgId=${quotedMsgId} type=${tag} ossUrl=${ossUrl}`);
+                                    info(`[WPP v1.3.74] QUOTE media inject: msgId=${m.msgId} quoted.msgId=${quotedMsgId} type=${tag} ossUrl=${ossUrl}`);
                                     m.content = `${m.content}\n[引用${tag}] ${ossUrl}`;
                                 }
                             }

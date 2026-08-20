@@ -7,7 +7,7 @@ const SILICONFLOW_API_KEY = process.env.SILICONFLOW_API_KEY || "";
 const WAV_SAMPLE_RATE = 24_000;
 const WAV_CHANNELS = 1;
 const WAV_BITS_PER_SAMPLE = 16;
-function buildWavBuffer(pcmBuffer) {
+export function buildWavBuffer(pcmBuffer) {
     const pcmLen = pcmBuffer.length;
     const totalSize = 44 + pcmLen;
     const wav = Buffer.allocUnsafe(totalSize);

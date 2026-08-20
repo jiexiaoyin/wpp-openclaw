@@ -51,11 +51,11 @@ export async function enrichFileMessage(ctx, xml) {
         const safeName = parsed.filename.replace(/[^\w.\-]/g, "_");
         const ossKey = buildOssKey(ctx.accountId, "files", `${hash}-${safeName}`);
         const url = await uploadToOss(oss, tmpPath, ossKey);
-        log.info(`[WPP v1.2.0] file enrich OSS: ${url} (${buf.length} bytes, ${parsed.filename})`);
+        log.info(`[WPP v1.3.74] file enrich OSS: ${url} (${buf.length} bytes, ${parsed.filename})`);
         return { mediaUrl: url, filename: parsed.filename, size: buf.length };
     }
     catch (e) {
-        log.warn(`[WPP v1.2.0] file enrich failed: ${formatErr(e)}`, { filename: parsed.filename });
+        log.warn(`[WPP v1.3.74] file enrich failed: ${formatErr(e)}`, { filename: parsed.filename });
         return { mediaUrl: null, filename: parsed.filename, size: parsed.size ?? null, error: e.message };
     }
     finally {

@@ -22,11 +22,11 @@ export async function enrichVideoMessage(ctx, xml) {
         const filename = `${parsed.md5 ?? crypto.randomBytes(8).toString("hex")}.mp4`;
         const ossKey = buildOssKey(ctx.accountId, "videos", filename);
         const url = await uploadToOss(oss, tmpPath, ossKey);
-        log.info(`[WPP v1.2.0] video enrich OSS: ${url} (${buf.length} bytes)`);
+        log.info(`[WPP v1.3.74] video enrich OSS: ${url} (${buf.length} bytes)`);
         return { mediaUrl: url, mediaSize: buf.length };
     }
     catch (e) {
-        log.warn(`[WPP v1.2.0] video enrich failed: ${formatErr(e)}`, { aesKey: parsed.aesKey });
+        log.warn(`[WPP v1.3.74] video enrich failed: ${formatErr(e)}`, { aesKey: parsed.aesKey });
         return { mediaUrl: null, mediaSize: null, error: e.message };
     }
     finally {

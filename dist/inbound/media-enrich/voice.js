@@ -28,17 +28,17 @@ export async function enrichVoiceMessage(ctx, xml) {
             const sttR = await transcribeSilkBuffer(buf);
             if (sttR?.text) {
                 sttText = sttR.text;
-                log.info(`[WPP v1.2.0] voice STT ok: text="${sttText.slice(0, 50)}${sttText.length > 50 ? "..." : ""}"`);
+                log.info(`[WPP v1.3.74] voice STT ok: text="${sttText.slice(0, 50)}${sttText.length > 50 ? "..." : ""}"`);
             }
         }
         catch (e) {
-            log.warn(`[WPP v1.2.0] voice STT failed (non-fatal): ${formatErr(e)}`);
+            log.warn(`[WPP v1.3.74] voice STT failed (non-fatal): ${formatErr(e)}`);
         }
-        log.info(`[WPP v1.2.0] voice enrich OSS: ${url} (${buf.length} bytes, ${parsed.durationMs ?? "?"}ms)`);
+        log.info(`[WPP v1.3.74] voice enrich OSS: ${url} (${buf.length} bytes, ${parsed.durationMs ?? "?"}ms)`);
         return { mediaUrl: url, mediaSize: buf.length, ...(sttText ? { filename: sttText } : {}) };
     }
     catch (e) {
-        log.warn(`[WPP v1.2.0] voice enrich failed: ${formatErr(e)}`, { aesKey: parsed.aesKey });
+        log.warn(`[WPP v1.3.74] voice enrich failed: ${formatErr(e)}`, { aesKey: parsed.aesKey });
         return { mediaUrl: null, mediaSize: null, error: e.message };
     }
     finally {
