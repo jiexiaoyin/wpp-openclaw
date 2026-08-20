@@ -18,7 +18,8 @@ import { makeWppSayHello } from "./sayhello.js";
 import { makeWppTranslate } from "./translate.js";
 import { makeWppCustomized } from "./customized.js";
 import { makeWppWebhook } from "./webhook.js";
-export { makeWppLogin, makeWppMsg, makeWppGroup, makeWppFriend, makeWppUser, makeWppFinder, makeWppFriendCircle, makeWppSearch, makeWppWxapp, makeWppOfficialAccounts, makeWppTools, makeWppTenPay, makeWppFavorites, makeWppLabel, makeWppVoice, makeWppQWContact, makeWppSayHello, makeWppTranslate, makeWppCustomized, makeWppWebhook, };
+import { makeWppXiaoWei } from "./xiaowei.js";
+export { makeWppLogin, makeWppMsg, makeWppGroup, makeWppFriend, makeWppUser, makeWppFinder, makeWppFriendCircle, makeWppSearch, makeWppWxapp, makeWppOfficialAccounts, makeWppTools, makeWppTenPay, makeWppFavorites, makeWppLabel, makeWppVoice, makeWppQWContact, makeWppSayHello, makeWppTranslate, makeWppCustomized, makeWppWebhook, makeWppXiaoWei, };
 export function makeWppSend(ctx) {
     return {
         login: makeWppLogin(ctx),
@@ -41,6 +42,7 @@ export function makeWppSend(ctx) {
         translate: makeWppTranslate(ctx),
         customized: makeWppCustomized(ctx),
         webhook: makeWppWebhook(ctx),
+        xiaoWei: makeWppXiaoWei(ctx),
     };
 }
 export const WPP_VENDOR_ENDPOINTS = {
@@ -356,5 +358,27 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Webhook/Remove",
         "/Webhook/Set",
         "/Webhook/Test",
+    ],
+    xiaoWei: [
+        "/XiaoWei/Cards/ScreenshotSecurityCheck",
+        "/XiaoWei/Cards/Users",
+        "/XiaoWei/Chat/Sessions",
+        "/XiaoWei/Chat/Sessions/{session_id}",
+        "/XiaoWei/Chat/Sessions/{session_id}/Cancel",
+        "/XiaoWei/Chat/Sessions/{session_id}/Events",
+        "/XiaoWei/Chat/Sessions/{session_id}/Messages",
+        "/XiaoWei/Chat/Sessions/{session_id}/Regenerate",
+        "/XiaoWei/Chat/Sessions/{session_id}/SwitchRoom",
+        "/XiaoWei/Conversations/A2A/List",
+        "/XiaoWei/Conversations/Suggestions",
+        "/XiaoWei/History/Delete",
+        "/XiaoWei/History/Fill",
+        "/XiaoWei/History/List",
+        "/XiaoWei/Invites",
+        "/XiaoWei/Invites/Candidates",
+        "/XiaoWei/Invites/Info",
+        "/XiaoWei/Permission",
+        "/XiaoWei/RedDots/Query",
+        "/XiaoWei/RedDots/Read",
     ],
 };
