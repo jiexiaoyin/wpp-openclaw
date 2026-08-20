@@ -13,8 +13,12 @@ import { WPP_VENDOR_ENDPOINTS } from "../src/send/index.js";
 //   拉不到 (vendor 未启动) 才 t.skip (环境性跳过, 不再硬 fail)
 // v1.3.25 SWAGGER-254: 指向最新 swagger (254 paths, vendor 新增 18 接口)
 // v1.3.67 (2026-08-20): 新 vendor 容器 → 18062; 旧容器已退役 (8062 已停)
+// v1.3.74 (2026-08-20 审阅 P2-5): 固定 swagger 快照 (tests/fixtures/vendor-swagger-paths.json) — vendor 不可达不再 t.skip (假绿),
+//   优先用本地快照保持真校验; 只有快照也缺失才 t.skip.
 const SWAGGER_PATH = "/tmp/swagger-latest.json";
 const VENDOR_SWAGGER_URL = "http://127.0.0.1:18062/swagger.json";
+// v1.3.74 P2-5: 固定 swagger 快照 (vendor 不可达时不假绿, 用快照保持真校验)
+const SNAPSHOT_PATH = new URL("./fixtures/vendor-swagger-paths.json", import.meta.url);
 
 interface SwaggerDoc {
   paths: Record<string, unknown>;
@@ -41,8 +45,16 @@ async function loadVendorPaths(t: { skip: (msg: string) => void }): Promise<Set<
     }
   }
   if (!raw) {
-    t.skip(`vendor swagger 不可用: 无 ${SWAGGER_PATH} 且 ${VENDOR_SWAGGER_URL} 不可达 (环境性跳过)`);
-    return null;
+    // v1.3.74 P2-5: vendor 不可达 → fallback 到固定快照 (不再 t.skip 假绿)
+    try {
+      const snapshot = JSON.parse(readFileSync(SNAPSHOT_PATH, "utf8")) as { paths: string[] };
+      // eslint-disable-next-line no-console -- 测试诊断输出
+      console.log(`[api-coverage] vendor swagger 不可达, 用固定快照 ${snapshot.paths.length} paths (P2-5 防假绿)`);
+      return new Set(snapshot.paths);
+    } catch {
+      t.skip(`vendor swagger 不可达且无固定快照 (环境性跳过)`);
+      return null;
+    }
   }
   const doc = JSON.parse(raw) as SwaggerDoc;
   return new Set(Object.keys(doc.paths));

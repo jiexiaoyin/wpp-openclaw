@@ -1,11 +1,10 @@
 // src/dispatch/agent-tools/xiaowei-meta.ts - XiaoWei tag (小微 AI 智能体)
-// v1.3.69 预开发 (老板拍板: 预开发但不启用)
+// v1.3.69 预开发 (老板拍板: 预开发但不启用); v1.3.71 起工具已进 AGENT_TOOLS_META
 //
-// ⚠️ 默认禁用: 本 meta 默认不导出到 AGENT_TOOLS_META (AI 无法调用)
-//   启用方法 (老板拍板后才做):
-//     1. 在 agent-tools/index.ts 引入本文件 + 展开到 AGENT_TOOLS_META
-//     2. 跑全量测试 (agent-tools.test.ts 计数会变, 需同步更新)
-//     3. 需先确认 vendor 小微能力已开通 (Permission 返回开通) + SSE 事件流稳定
+// ⚠️ 默认禁用 (v1.3.71 起实现方式): 工具在 AGENT_TOOLS_META (AI 可见), 但执行前检查 xiaoweiEnabled
+//   (getXiaoWei 里 `!state.config.xiaoweiEnabled` 抛"未启用") — 默认 false 关闭, /xiaowei on 开启
+//   关闭时 AI 调用 → 报"小微智能体未启用 (xiaoweiEnabled=false), 用 /xiaowei on 开启"
+//   开启 (老板拍板后 /xiaowei on) → 正常调用, 需先确认 vendor 小微已开通 (Permission)
 //
 // 小微智能体调用流程:
 //   createSession → events_url (SSE) → sendMessage → 回答经 Events 流返回 (text.delta/message/completed)

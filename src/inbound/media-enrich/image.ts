@@ -43,10 +43,10 @@ export async function enrichImageMessage(
     const filename = `${sanitizeFilenamePart(parsed.md5)}.jpg`;
     const ossKey = buildOssKey(ctx.accountId, "images", filename);
     const url = await uploadToOss(oss, tmpPath, ossKey);
-    log.info(`[WPP v1.2.0] image enrich OSS: ${url} (${img.length} bytes)`);
+    log.info(`[WPP v1.3.74] image enrich OSS: ${url} (${img.length} bytes)`);
     return { mediaUrl: url, mediaSize: img.length };
   } catch (e) {
-    log.warn(`[WPP v1.2.0] image enrich failed: ${formatErr(e)}`, {
+    log.warn(`[WPP v1.3.74] image enrich failed: ${formatErr(e)}`, {
       aesKey: parsed.aesKey,
     });
     return { mediaUrl: null, mediaSize: null, error: (e as Error).message };
@@ -130,7 +130,7 @@ export async function enrichImageMessageFromV1(
     );
     return { mediaUrl: url, mediaSize: img.length };
   } catch (e) {
-    log.warn(`[WPP v1.2.0] v1 schema image enrich failed: ${formatErr(e)}`, { localId });
+    log.warn(`[WPP v1.3.74] v1 schema image enrich failed: ${formatErr(e)}`, { localId });
     return { mediaUrl: null, mediaSize: null, error: (e as Error).message };
   } finally {
     if (tmpPath) {

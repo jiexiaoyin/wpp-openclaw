@@ -88,7 +88,7 @@ export async function uploadToOss(
     }
     lastErr = r;
     log.warn(
-      `[WPP v1.2.0] ossutil cp attempt ${attempt}/3 failed (code=${r.code} signal=${r.signal ?? "none"}) stderr=${(r.stderr || r.stdout).slice(0, 100)}`,
+      `[WPP v1.3.74] ossutil cp attempt ${attempt}/3 failed (code=${r.code} signal=${r.signal ?? "none"}) stderr=${(r.stderr || r.stdout).slice(0, 100)}`,
     );
     if (attempt < 3) await new Promise((r) => setTimeout(r, 1000 * attempt));
   }
