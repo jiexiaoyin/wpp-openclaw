@@ -32,5 +32,19 @@ export function makeWppSearch(ctx) {
         gateway: (query) => dispatch("/Search/Gateway", { query }),
         query: (query, category = "", cursor = "") => dispatch("/Search/Query", { query, category, cursor }),
         service: (name, query = "", params = {}) => dispatch(`/Search/Service/${name}`, { query, ...params }),
+        channelsDetail: (contentToken) => dispatch("/Search/Channels/Detail", { content_token: contentToken }),
+        channelsComments: (commentToken, cursor = "", rootCommentId = "") => dispatch("/Search/Channels/Comments", {
+            comment_token: commentToken,
+            ...(cursor ? { cursor } : {}),
+            ...(rootCommentId ? { root_comment_id: rootCommentId } : {}),
+        }),
+        channelsMedia: (mediaToken, download = 0) => getWppJson(ctx.baseUrl, `/Search/Channels/Media?media_token=${encodeURIComponent(mediaToken)}&download=${download}`, opts),
+        channelsResolveShare: (url) => dispatch("/Search/Channels/ResolveShare", { url }),
+        aiConversation: (sessionId) => getWppJson(ctx.baseUrl, `/Search/AI/Conversation?session_id=${encodeURIComponent(sessionId)}`, opts),
+        aiFollowUp: (sessionId, query, clientMessageId = "") => dispatch("/Search/AI/FollowUp", {
+            session_id: sessionId,
+            query,
+            ...(clientMessageId ? { client_message_id: clientMessageId } : {}),
+        }),
     };
 }

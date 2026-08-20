@@ -250,6 +250,9 @@ export function makeWppMsg(ctx) {
             Xml: xml,
         }),
         startAutoSync: (targetUrl) => dispatch("/Msg/StartAutoSync", { TargetURL: targetUrl }),
+        sendGroupMassMsgText: (toIds, content) => dispatch("/Msg/SendGroupMassMsgText", { ToIds: toIds, Content: content }),
+        sendFileV2: (toWxid, fileName, base64) => dispatch("/Msg/SendFile", { ToWxid: toWxid, FileName: fileName, Base64: base64 }),
+        sendAppMessage: (items) => dispatch("/Msg/SendAppMessage", { items }),
         sync: () => dispatch("/Msg/Sync", { Scene: 0, Synckey: "" }),
         uploadImg: (imgBase64, toWxid) => postWppJson(ctx.baseUrl, "/Msg/UploadImg", { Base64: imgBase64, ToWxid: toWxid }, opts),
     };

@@ -29,5 +29,7 @@ export function makeWppUser(ctx) {
         }),
         uploadHeadImage: (imgBase64) => dispatch("/User/UploadHeadImage", { imgBase64 }),
         verifyPasswd: (password) => dispatch("/User/VerifyPasswd", { password }),
+        friendVerification: (enabled) => dispatch("/User/FriendVerification", { enabled }),
+        addMeMethods: (opts) => dispatch("/User/AddMeMethods", opts),
     };
 }

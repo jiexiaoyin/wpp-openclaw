@@ -85,7 +85,7 @@ export const TOOLS_META = {
         () => getToolsApi().getBandCardList(),
     ],
     setStepCount: [
-        "修改微信运动步数.",
+        "修改微信运动步数 (当天步数, 最高 98000).",
         Type.Object({ steps: Type.Number() }),
         (steps) => getToolsApi().setStep(steps),
     ],

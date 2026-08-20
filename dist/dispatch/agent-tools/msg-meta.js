@@ -201,4 +201,28 @@ export const MSG_META = {
         }),
         (imgBase64, toWxid) => getMsgApi().uploadImg(imgBase64, toWxid),
     ],
+    sendGroupMassMsgText: [
+        "群发文本消息到多个群 (ToIds=群 wxid 数组).",
+        Type.Object({
+            toIds: Type.Array(Type.String()),
+            content: Type.String(),
+        }),
+        (toIds, content) => getMsgApi().sendGroupMassMsgText(toIds, content),
+    ],
+    sendFileV2: [
+        "发送文件 (文件名 + base64 内容). 自动上传并发送.",
+        Type.Object({
+            toWxid: Type.String(),
+            fileName: Type.String(),
+            base64: Type.String(),
+        }),
+        (toWxid, fileName, base64) => getMsgApi().sendFileV2(toWxid, fileName, base64),
+    ],
+    sendAppMessage: [
+        "发送结构化应用卡片 (链接/小程序/音乐/文件). items 数组, 单次最多 20 项.",
+        Type.Object({
+            items: Type.Array(Type.Unknown()),
+        }),
+        (items) => getMsgApi().sendAppMessage(items),
+    ],
 };

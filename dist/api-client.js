@@ -1,4 +1,4 @@
-import { postWppJson, getWppJson, stringifyLargeInts } from "./api/client.js";
+import { postWppJson, stringifyLargeInts } from "./api/client.js";
 import { logObj as log } from "./core/logger.js";
 import { safeFetchWithCap } from "./util/safe-fetch.js";
 import { makeWppMsg } from "./send/msg.js";
@@ -53,12 +53,6 @@ export class WechatpadproApiClient {
     }
     async call(endpoint, body = {}) {
         return postWppJson(this.cfg.apiBaseUrl, endpoint, body, {
-            tokenKey: this.cfg.tokenKey,
-            authcode: this.cfg.authcode,
-        });
-    }
-    async get(endpoint) {
-        return getWppJson(this.cfg.apiBaseUrl, endpoint, {
             tokenKey: this.cfg.tokenKey,
             authcode: this.cfg.authcode,
         });
@@ -144,7 +138,7 @@ export class WechatpadproApiClient {
         return makeFriendFor(this.cfg, this.accountId).getContractList();
     }
     async getProfile() {
-        return this.get("/User/GetContractProfile");
+        return this.call("/User/GetContractProfile", {});
     }
     async setWebhook(url, _authcode) {
         return makeWebhookFor(this.cfg, this.accountId).set(url);

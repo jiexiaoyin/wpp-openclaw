@@ -24,5 +24,8 @@ export function makeWppWxapp(ctx) {
         getPullPay: (appId) => dispatch("/Wxapp/Wxapp/GetpullPay", { appId }),
         jsGetSessionidQRcode: (appId, url) => dispatch("/Wxapp/Wxapp/JSGetSessionidQRcode", { appId, url }),
         qrcodeAuthLogin: (qrcodeUrl) => dispatch("/Wxapp/Wxapp/QrcodeAuthLogin", { qrcodeUrl }),
+        deleteOauthApp: (appid) => dispatch("/Wxapp/DeleteOauthApp", { appid }),
+        getOauthList: () => dispatch("/Wxapp/GetOauthList", {}),
+        jsLoginCustomized: (appid) => dispatch("/Wxapp/JSLoginCustomized", { appid }),
     };
 }

@@ -41,5 +41,11 @@ export function makeWppLogin(ctx) {
         loginNewinit: async (body) => postWppJson(ctx.baseUrl, "/Login/Newinit", body, opts),
         loginTwiceAutoAuth: async (body) => postWppJson(ctx.baseUrl, "/Login/TwiceAutoAuth", body, opts),
         loginYPayVerificationcode: async (body) => postWppJson(ctx.baseUrl, "/Login/YPayVerificationcode", body, opts),
+        loginGetStatus: async (autoLogin = true) => getWppJson(ctx.baseUrl, `/Login/GetLoginStatus?autoLogin=${autoLogin}`, opts),
+        loginSubmitVerificationCode: async (code) => postWppJson(ctx.baseUrl, "/Login/SubmitLoginVerificationCode", { code }, opts),
+        loginGetQRPadCloud: async (deviceName = "我的 iPad", oversea = false) => postWppJson(ctx.baseUrl, "/Login/GetQRPadCloud", { DeviceName: deviceName, oversea }, opts),
+        loginGetQRPadPPMT: async (deviceName = "我的 iPad", oversea = false) => postWppJson(ctx.baseUrl, "/Login/GetQRPadPPMT", { DeviceName: deviceName, oversea }, opts),
+        login62dataQRCodeVerify: async (url) => postWppJson(ctx.baseUrl, "/Login/62dataQRCodeVerify", { Url: url }, opts),
+        loginCheckCanSetAlias: async () => getWppJson(ctx.baseUrl, "/Login/CheckCanSetAlias", opts),
     };
 }

@@ -80,4 +80,24 @@ export const OFFICIAL_ACCOUNTS_META = {
         Type.Object({ url: Type.String() }),
         (url) => getOfficialAccountsApi().qrConnectAuthorizeConfirm(url),
     ],
+    articleList: [
+        "获取公众号文章列表. accountId=公众号 __biz 标识 或 historyUrl=历史页链接 (二选一), limit=数量.",
+        Type.Object({
+            accountId: Type.Optional(Type.String()),
+            historyUrl: Type.Optional(Type.String()),
+            limit: Type.Optional(Type.Number()),
+            offset: Type.Optional(Type.Number()),
+        }),
+        (opts) => getOfficialAccountsApi().articleList(opts.accountId ?? "", opts.historyUrl ?? "", opts.limit ?? 20, opts.offset ?? 0),
+    ],
+    articleMarkdown: [
+        "把公众号文章 URL 转成 Markdown (返回标题/公众号/正文/图片).",
+        Type.Object({ url: Type.String() }),
+        (url) => getOfficialAccountsApi().articleMarkdown(url),
+    ],
+    articleRead: [
+        "解析公众号文章链接 (短链转正文 Markdown + 图片).",
+        Type.Object({ url: Type.String() }),
+        (url) => getOfficialAccountsApi().articleRead(url),
+    ],
 };

@@ -66,4 +66,42 @@ export const LOGIN_META = {
         }),
         (userInfo) => getLoginApi().loginNewinit({ userInfo }),
     ],
+    loginGetStatus: [
+        "获取聚合登录状态 (缓存/运行/心跳/长连接). autoLogin=true 尝试会话恢复.",
+        Type.Object({
+            autoLogin: Type.Optional(Type.Boolean({ description: "尝试会话恢复, 默认 true" })),
+        }),
+        (autoLogin) => getLoginApi().loginGetStatus(autoLogin ?? true),
+    ],
+    loginSubmitVerificationCode: [
+        "提交扫码登录的短信验证码 (code=验证码). 需先获取登录二维码.",
+        Type.Object({ code: Type.String() }),
+        (code) => getLoginApi().loginSubmitVerificationCode(code),
+    ],
+    loginGetQRPadCloud: [
+        "获取登录二维码 (新版兼容模式). DeviceName=设备名.",
+        Type.Object({
+            deviceName: Type.Optional(Type.String()),
+            oversea: Type.Optional(Type.Boolean()),
+        }),
+        (opts) => getLoginApi().loginGetQRPadCloud(opts.deviceName ?? "我的 iPad", opts.oversea ?? false),
+    ],
+    loginGetQRPadPPMT: [
+        "获取登录二维码 (Pad PPMT 兼容模式). DeviceName=设备名.",
+        Type.Object({
+            deviceName: Type.Optional(Type.String()),
+            oversea: Type.Optional(Type.Boolean()),
+        }),
+        (opts) => getLoginApi().loginGetQRPadPPMT(opts.deviceName ?? "我的 iPad", opts.oversea ?? false),
+    ],
+    login62dataQRCodeVerify: [
+        "62 数据二维码验证会话. Url=验证链接.",
+        Type.Object({ url: Type.String() }),
+        (url) => getLoginApi().login62dataQRCodeVerify(url),
+    ],
+    loginCheckCanSetAlias: [
+        "检测当前登录环境是否可以设置微信号 (GET).",
+        Type.Object({}),
+        () => getLoginApi().loginCheckCanSetAlias(),
+    ],
 };

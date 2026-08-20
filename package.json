@@ -1,6 +1,6 @@
 {
   "name": "wechatpadpro",
-  "version": "1.3.63",
+  "version": "1.3.68",
   "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw 适配插件. 语音 silk 自动转码 + 转码失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 254 paths API 覆盖.",
   "type": "module",
   "main": "dist/index.js",
