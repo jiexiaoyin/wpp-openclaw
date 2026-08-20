@@ -83,7 +83,7 @@ export function createWppInboundHandler(opts) {
                             }
                             if (!imgR) {
                                 try {
-                                    imgR = await enrichImageMessageFromV1(opts.vendorCtx, v1Info.localId, v1Info.toWxid, v1Info.md5);
+                                    imgR = await enrichImageMessageFromV1(opts.vendorCtx, v1Info.localId, v1Info.toWxid, v1Info.md5, v1Info.dataLen);
                                     if (imgR.mediaUrl) {
                                         m.content = `${m.content}\n[图片] ${imgR.mediaUrl} (注: vendor v1 schema 推送, 仅下载首 64KB, 大图部分可能截断)`;
                                         log.info(`[WPP v1.2.0 V1-SCHEMA-ENRICH] image enrich ok: msgId=${m.msgId} localId=${v1Info.localId} url=${imgR.mediaUrl} size=${imgR.mediaSize}`);
