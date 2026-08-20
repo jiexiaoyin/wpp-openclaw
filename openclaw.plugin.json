@@ -1,7 +1,7 @@
 {
   "name": "wechatpadpro",
   "id": "wechatpadpro",
-  "version": "1.3.69",
+  "version": "1.3.70",
   "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 254 paths API 覆盖.",
   "channelId": "wechatpadpro",
   "channelName": "WeChatPadPro (微信 Pad 协议)",
