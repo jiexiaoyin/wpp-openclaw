@@ -16,5 +16,6 @@ export function makeWppFriend(ctx) {
         sendRequest: (v1, v2) => dispatch("/Friend/SendRequest", { v1, v2 }),
         setRemarks: (wxid, remarks) => dispatch("/Friend/SetRemarks", { toWxid: wxid, remarks }),
         upload: (phoneNo, opcode = "2", currentPhoneNo = "") => dispatch("/Friend/Upload", { phoneNo, opcode, currentPhoneNo }),
+        getGHList: () => dispatch("/Friend/GetGHList", {}),
     };
 }

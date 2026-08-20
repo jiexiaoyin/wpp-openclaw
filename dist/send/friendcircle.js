@@ -87,5 +87,12 @@ export function makeWppFriendCircle(ctx) {
             assertFriendCirclePublishAllowed(ctx.accountId);
             return dispatch("/FriendCircle/SetBackgroundImage", { imageData });
         },
+        getCollectCircle: (sourceId) => dispatch("/FriendCircle/GetCollectCircle", { sourceId }),
+        sendFavItemCircle: (favItemId, sourceId, blackList = "", locationMode = 1) => dispatch("/FriendCircle/SendFavItemCircle", {
+            favItemId, sourceId, blackList, locationMode,
+        }),
+        sendOneIdCircle: (id, blackList = "", locationMode = 1) => dispatch("/FriendCircle/SendOneIdCircle", { id, blackList, locationMode }),
+        setFriendCircleDays: (range) => dispatch("/FriendCircle/SetFriendCircleDays", { range }),
+        activeTasks: () => dispatch("/FriendCircle/ActiveTasks", {}),
     };
 }

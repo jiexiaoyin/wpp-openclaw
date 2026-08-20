@@ -83,6 +83,12 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Login/Newinit",
         "/Login/TwiceAutoAuth",
         "/Login/YPayVerificationcode",
+        "/Login/GetLoginStatus",
+        "/Login/SubmitLoginVerificationCode",
+        "/Login/GetQRPadCloud",
+        "/Login/GetQRPadPPMT",
+        "/Login/62dataQRCodeVerify",
+        "/Login/CheckCanSetAlias",
     ],
     msg: [
         "/Msg/Quote",
@@ -103,6 +109,9 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Msg/StartAutoSync",
         "/Msg/Sync",
         "/Msg/UploadImg",
+        "/Msg/SendGroupMassMsgText",
+        "/Msg/SendFile",
+        "/Msg/SendAppMessage",
     ],
     group: [
         "/Group/AddChatRoomMember",
@@ -142,6 +151,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Friend/SendRequest",
         "/Friend/SetRemarks",
         "/Friend/Upload",
+        "/Friend/GetGHList",
     ],
     user: [
         "/User/BindQQ",
@@ -161,6 +171,8 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/User/UpdateProfile",
         "/User/UploadHeadImage",
         "/User/VerifyPasswd",
+        "/User/FriendVerification",
+        "/User/AddMeMethods",
     ],
     finder: [
         "/Finder/Comment",
@@ -178,6 +190,10 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Finder/Search",
         "/Finder/TargetUserPage",
         "/Finder/UserPrepare",
+        "/Finder/PlayVideo",
+        "/Finder/PlayVideoStop",
+        "/Finder/PlayVideoStatus",
+        "/Finder/PlayVideoTasks",
     ],
     friendCircle: [
         "/FriendCircle/Comment",
@@ -197,6 +213,11 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/FriendCircle/UploadImage",
         "/FriendCircle/UploadImages",
         "/FriendCircle/UploadVideo",
+        "/FriendCircle/GetCollectCircle",
+        "/FriendCircle/SendFavItemCircle",
+        "/FriendCircle/SendOneIdCircle",
+        "/FriendCircle/SetFriendCircleDays",
+        "/FriendCircle/ActiveTasks",
     ],
     search: [
         "/Search/AI",
@@ -222,6 +243,12 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Search/Query",
         "/Search/Service/{name}",
         "/Search/Services",
+        "/Search/Channels/Detail",
+        "/Search/Channels/Comments",
+        "/Search/Channels/Media",
+        "/Search/Channels/ResolveShare",
+        "/Search/AI/Conversation",
+        "/Search/AI/FollowUp",
     ],
     wxapp: [
         "/Wxapp/AddAvatar",
@@ -244,6 +271,9 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Wxapp/Wxapp/GetpullPay",
         "/Wxapp/Wxapp/JSGetSessionidQRcode",
         "/Wxapp/Wxapp/QrcodeAuthLogin",
+        "/Wxapp/DeleteOauthApp",
+        "/Wxapp/GetOauthList",
+        "/Wxapp/JSLoginCustomized",
     ],
     officialAccounts: [
         "/OfficialAccounts/AuthMpLogin",
@@ -258,6 +288,9 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/OfficialAccounts/QRConnectAuthorize",
         "/OfficialAccounts/QRConnectAuthorizeConfirm",
         "/OfficialAccounts/Quit",
+        "/OfficialAccounts/ArticleList",
+        "/OfficialAccounts/ArticleMarkdown",
+        "/OfficialAccounts/ArticleRead",
     ],
     tools: [
         "/Tools/CdnDownloadImage",
@@ -291,6 +324,8 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/TenPay/GeneratePayQCode",
         "/TenPay/GetRedPacketListApi",
         "/TenPay/WXCreateRedPacketApi",
+        "/TenPay/OpenHongBaoWithParams",
+        "/TenPay/ReceivewxhbWithoutEncryption",
     ],
     favorites: ["/Favor/Del", "/Favor/GetFavInfo", "/Favor/GetFavItem", "/Favor/Sync"],
     label: [
@@ -299,6 +334,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Label/GetList",
         "/Label/UpdateList",
         "/Label/UpdateName",
+        "/Label/GetWXFriendListByLabel",
     ],
     voice: [
         "/Voice/MessageTranscribe",
@@ -307,10 +343,10 @@ export const WPP_VENDOR_ENDPOINTS = {
     ],
     qwContact: [
         "/QWContact/QWApplyAddContact",
-        "/QWContact/QWContact/QWAddContact",
+        "/QWContact/QWAddContact",
         "/QWContact/SearchQWContact",
     ],
-    sayHello: ["/SayHello/Modelv1", "/SayHello/Modelv2"],
+    sayHello: ["/SayHello/Modelv1", "/SayHello/Modelv2", "/SayHello/Modelv3"],
     translate: ["/Translate/Send", "/Translate/Text"],
     customized: ["/Customized/WXCTDUniftyAuthBatch"],
     webhook: [

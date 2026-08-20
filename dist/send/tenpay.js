@@ -36,5 +36,7 @@ export function makeWppTenPay(ctx) {
             username,
             wxid,
         }),
+        openHongBaoWithParams: (sendId, sendUserName, timingIdentifier, xml) => dispatch("/TenPay/OpenHongBaoWithParams", { SendId: sendId, SendUserName: sendUserName, TimingIdentifier: timingIdentifier, Xml: xml }),
+        receiveWxhbWithoutEncryption: (xml) => dispatch("/TenPay/ReceivewxhbWithoutEncryption", { Xml: xml }),
     };
 }

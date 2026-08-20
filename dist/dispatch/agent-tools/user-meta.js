@@ -100,4 +100,20 @@ export const USER_META = {
         Type.Object({}),
         () => getUserApi().checkCanSetAlias(),
     ],
+    friendVerification: [
+        "设置「加我为朋友时需要验证」. enabled=true 需验证, false 关闭.",
+        Type.Object({ enabled: Type.Boolean() }),
+        (enabled) => getUserApi().friendVerification(enabled),
+    ],
+    addMeMethods: [
+        "设置「添加我的方式」(微信: 我→设置→朋友权限→添加我的方式). 只传要修改的字段, true=允许该方式添加.",
+        Type.Object({
+            phone: Type.Optional(Type.Boolean()),
+            wechat_id: Type.Optional(Type.Boolean()),
+            group_chat: Type.Optional(Type.Boolean()),
+            qr_code: Type.Optional(Type.Boolean()),
+            contact_card: Type.Optional(Type.Boolean()),
+        }),
+        (opts) => getUserApi().addMeMethods(opts),
+    ],
 };

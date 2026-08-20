@@ -36,4 +36,9 @@ export const LABEL_META = {
         }),
         (labelId, wxidList) => getLab().updateList(labelId, [wxidList]),
     ],
+    getWXFriendListByLabel: [
+        "按标签拉取好友列表 (名称/备注/头像/标签). labelId=标签 ID (数字).",
+        Type.Object({ labelId: Type.Number() }),
+        (labelId) => getLab().getWXFriendListByLabel(labelId),
+    ],
 };

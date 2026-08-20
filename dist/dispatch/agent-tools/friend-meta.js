@@ -75,4 +75,9 @@ export const FRIEND_META = {
         }),
         (latitude, longitude, _radius) => getFriendApi().lbsFind(latitude, longitude),
     ],
+    getGHList: [
+        "通讯录完整拉取 (分页+批量补齐名称/备注/头像). 比 getContactList 更全.",
+        Type.Object({}),
+        () => getFriendApi().getGHList(),
+    ],
 };

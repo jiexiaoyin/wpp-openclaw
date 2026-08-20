@@ -114,4 +114,43 @@ export const FRIEND_CIRCLE_META = {
         Type.Object({ imageData: Type.String({ description: "背景图 base64" }) }),
         (imageData) => getFriendCircleApi().setBackgroundImage(imageData),
     ],
+    getCollectCircle: [
+        "读取收藏的朋友圈动态详情. sourceId=收藏来源标识.",
+        Type.Object({ sourceId: Type.String() }),
+        (sourceId) => getFriendCircleApi().getCollectCircle(sourceId),
+    ],
+    sendFavItemCircle: [
+        "从收藏项发布朋友圈. favItemId=收藏项ID(数字), sourceId=收藏来源.",
+        Type.Object({
+            favItemId: Type.Number(),
+            sourceId: Type.String(),
+            blackList: Type.Optional(Type.String()),
+            locationMode: Type.Optional(Type.Number({ description: "0保留位置 1移除 2自定义" })),
+        }),
+        (favItemId, sourceId, blackList = "", locationMode = 1) => getFriendCircleApi().sendFavItemCircle(favItemId, sourceId, blackList, locationMode),
+    ],
+    sendOneIdCircle: [
+        "通过已有动态 id 再发朋友圈 (支持文字/图片/视频/链接). id=原动态id.",
+        Type.Object({
+            id: Type.String(),
+            blackList: Type.Optional(Type.String()),
+            locationMode: Type.Optional(Type.Number({ description: "0保留位置 1移除 2自定义" })),
+        }),
+        (id, blackList = "", locationMode = 1) => getFriendCircleApi().sendOneIdCircle(id, blackList, locationMode),
+    ],
+    setFriendCircleDays: [
+        "设置朋友圈可见范围. range=three_days/one_month/six_months/all.",
+        Type.Object({
+            range: Type.Union([
+                Type.Literal("three_days"), Type.Literal("one_month"),
+                Type.Literal("six_months"), Type.Literal("all"),
+            ]),
+        }),
+        (range) => getFriendCircleApi().setFriendCircleDays(range),
+    ],
+    activeTasks: [
+        "查询正在执行的朋友圈评论转发任务.",
+        Type.Object({}),
+        () => getFriendCircleApi().activeTasks(),
+    ],
 };

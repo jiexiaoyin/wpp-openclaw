@@ -16,5 +16,12 @@ export function makeWppOfficialAccounts(ctx) {
         qrConnectAuthorize: (url) => dispatch("/OfficialAccounts/QRConnectAuthorize", { url }),
         qrConnectAuthorizeConfirm: (url) => dispatch("/OfficialAccounts/QRConnectAuthorizeConfirm", { url }),
         quit: (biz) => dispatch("/OfficialAccounts/Quit", { biz }),
+        articleList: (accountId = "", historyUrl = "", limit = 20, offset = 0) => dispatch("/OfficialAccounts/ArticleList", {
+            ...(accountId ? { account_id: accountId } : {}),
+            ...(historyUrl ? { history_url: historyUrl } : {}),
+            limit, offset,
+        }),
+        articleMarkdown: (url) => dispatch("/OfficialAccounts/ArticleMarkdown", { url }),
+        articleRead: (url) => dispatch("/OfficialAccounts/ArticleRead", { url }),
     };
 }

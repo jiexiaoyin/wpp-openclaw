@@ -104,4 +104,30 @@ export const FINDER_META = {
         }),
         (finderUsername, objectId, rootCommentId) => getFinderApi().getCommentDetail(finderUsername, objectId, rootCommentId ?? ""),
     ],
+    playVideo: [
+        "播放视频号视频. objectId=视频内容Id, finderUsername=作者, playUrl=播放地址 (选传); loop=true 循环播放.",
+        Type.Object({
+            objectId: Type.Optional(Type.String()),
+            finderUsername: Type.Optional(Type.String()),
+            playUrl: Type.Optional(Type.String()),
+            loop: Type.Optional(Type.Boolean()),
+            playSeconds: Type.Optional(Type.Number({ description: "播放秒数, 0=不限" })),
+        }),
+        (opts) => getFinderApi().playVideo(opts),
+    ],
+    playVideoStop: [
+        "停止视频号播放任务. taskId=playVideo 返回的任务 ID.",
+        Type.Object({ taskId: Type.String() }),
+        (taskId) => getFinderApi().playVideoStop(taskId),
+    ],
+    playVideoStatus: [
+        "查询视频号播放任务状态. taskId=任务 ID.",
+        Type.Object({ taskId: Type.String() }),
+        (taskId) => getFinderApi().playVideoStatus(taskId),
+    ],
+    playVideoTasks: [
+        "列出视频号播放任务 (运行中 + 24h 内已结束).",
+        Type.Object({}),
+        () => getFinderApi().playVideoTasks(),
+    ],
 };

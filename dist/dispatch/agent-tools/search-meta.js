@@ -110,4 +110,45 @@ export const SEARCH_META = {
         }),
         (name, query) => getSearchApi().service(name, query ?? ""),
     ],
+    channelsDetail: [
+        "获取视频号内容详情. contentToken 来自视频号搜索结果.",
+        Type.Object({ contentToken: Type.String() }),
+        (contentToken) => getSearchApi().channelsDetail(contentToken),
+    ],
+    channelsComments: [
+        "获取视频号评论. commentToken 来自搜索结果, cursor 翻页, rootCommentId 看一级评论的回复.",
+        Type.Object({
+            commentToken: Type.String(),
+            cursor: Type.Optional(Type.String()),
+            rootCommentId: Type.Optional(Type.String()),
+        }),
+        (commentToken, cursor, rootCommentId) => getSearchApi().channelsComments(commentToken, cursor ?? "", rootCommentId ?? ""),
+    ],
+    channelsMedia: [
+        "获取视频号媒体流. mediaToken 来自搜索结果, download=1 下载 / 0 预览播放.",
+        Type.Object({
+            mediaToken: Type.String(),
+            download: Type.Optional(Type.Number({ description: "1 下载, 0 预览" })),
+        }),
+        (mediaToken, download) => getSearchApi().channelsMedia(mediaToken, download ?? 0),
+    ],
+    channelsResolveShare: [
+        "解析视频号分享链接 (weixin.qq.com/sph/... 分享链接), 返回可直接使用的业务字段.",
+        Type.Object({ url: Type.String() }),
+        (url) => getSearchApi().channelsResolveShare(url),
+    ],
+    aiConversation: [
+        "获取 AI 搜索会话 (问答轮次/Markdown 答案/参考资料/建议追问). sessionId=会话 ID.",
+        Type.Object({ sessionId: Type.String() }),
+        (sessionId) => getSearchApi().aiConversation(sessionId),
+    ],
+    aiFollowUp: [
+        "AI 搜索追问 (用首问返回的 sessionId 继续对话).",
+        Type.Object({
+            sessionId: Type.String(),
+            query: Type.String(),
+            clientMessageId: Type.Optional(Type.String()),
+        }),
+        (sessionId, query, clientMessageId) => getSearchApi().aiFollowUp(sessionId, query, clientMessageId ?? ""),
+    ],
 };

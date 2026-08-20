@@ -1,4 +1,4 @@
-import { postWppJson } from "../api/client.js";
+import { postWppJson, getWppJson } from "../api/client.js";
 import { ctxToCallOpts } from "./factory.js";
 export function makeWppFinder(ctx) {
     const opts = ctxToCallOpts(ctx);
@@ -37,5 +37,17 @@ export function makeWppFinder(ctx) {
         search: (keyword) => dispatch("/Finder/Search", { keyword }),
         targetUserPage: (target) => dispatch("/Finder/TargetUserPage", { Target: target, LastBuffer: "" }),
         userPrepare: () => dispatch("/Finder/UserPrepare", {}),
+        playVideo: (opts) => dispatch("/Finder/PlayVideo", {
+            ...(opts.objectId ? { object_id: opts.objectId } : {}),
+            ...(opts.finderUsername ? { finder_username: opts.finderUsername } : {}),
+            ...(opts.playUrl ? { play_url: opts.playUrl } : {}),
+            loop: opts.loop ?? false,
+            loop_count: opts.loopCount ?? 0,
+            play_seconds: opts.playSeconds ?? 0,
+            async: opts.async ?? true,
+        }),
+        playVideoStop: (taskId) => dispatch("/Finder/PlayVideoStop", { task_id: taskId }),
+        playVideoStatus: (taskId) => getWppJson(ctx.baseUrl, `/Finder/PlayVideoStatus?task_id=${encodeURIComponent(taskId)}`, opts),
+        playVideoTasks: () => getWppJson(ctx.baseUrl, "/Finder/PlayVideoTasks", opts),
     };
 }

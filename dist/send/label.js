@@ -9,5 +9,6 @@ export function makeWppLabel(ctx) {
         getList: () => dispatch("/Label/GetList", {}),
         updateList: (labelId, wxidList) => dispatch("/Label/UpdateList", { LabelID: labelId, ToWxids: wxidList.join(",") }),
         updateName: (labelId, labelName) => dispatch("/Label/UpdateName", { labelId, labelName }),
+        getWXFriendListByLabel: (labelId) => dispatch("/Label/GetWXFriendListByLabel", { labelId: Number(labelId) }),
     };
 }

@@ -61,4 +61,19 @@ export const WXAPP_META = {
         Type.Object({ appId: Type.String() }),
         (appId) => getWxappApi().getPullPay(appId),
     ],
+    deleteOauthApp: [
+        "移除小程序授权. appid=小程序 appid.",
+        Type.Object({ appid: Type.String() }),
+        (appid) => getWxappApi().deleteOauthApp(appid),
+    ],
+    getOauthList: [
+        "获取小程序授权管理列表.",
+        Type.Object({}),
+        () => getWxappApi().getOauthList(),
+    ],
+    jsLoginCustomized: [
+        "小程序定制登录. appid=小程序 appid.",
+        Type.Object({ appid: Type.String() }),
+        (appid) => getWxappApi().jsLoginCustomized(appid),
+    ],
 };

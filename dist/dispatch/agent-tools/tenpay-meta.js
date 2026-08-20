@@ -91,4 +91,19 @@ export const TEN_PAY_META = {
         }),
         (amountFen, content, count, username, wxid, redType, from) => getTenPayApi().createRedPacket(amountFen, content, count, username, wxid ?? "", redType ?? 1, from ?? 0),
     ],
+    openHongBaoWithParams: [
+        "抢红包 (完整参数). sendId=红包ID, sendUserName=发送者, timingIdentifier=定时标识, xml=红包消息.",
+        Type.Object({
+            sendId: Type.String(),
+            sendUserName: Type.String(),
+            timingIdentifier: Type.String(),
+            xml: Type.String(),
+        }),
+        (sendId, sendUserName, timingIdentifier, xml) => getTenPayApi().openHongBaoWithParams(sendId, sendUserName, timingIdentifier, xml),
+    ],
+    receiveWxhbWithoutEncryption: [
+        "打开红包 (无加密兼容模式). xml=红包消息内容.",
+        Type.Object({ xml: Type.String() }),
+        (xml) => getTenPayApi().receiveWxhbWithoutEncryption(xml),
+    ],
 };
