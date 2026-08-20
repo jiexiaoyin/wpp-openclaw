@@ -8,12 +8,15 @@ WeChatPadPro 微信 Pad 协议 → OpenClaw gateway → AI 自动回复。支持
 
 > **只分享编译后代码** — 本包不含 TypeScript 源码, 提供完整可用的配置向导。
 
+![WeChatPadPro OpenClaw Plugin 概览](./images/wpp-overview.jpg)
+
 ---
 
 ## ✨ 功能亮点
 
 | 能力 | 说明 |
 |---|---|
+| 🤖 **小微 AI 智能体** | 微信内原生 AI 对话 (Chat 会话 + SSE 事件流 + 记忆/邀请/红点/卡片, 20 API **已预开发**) |
 | 📨 **消息收发** | 文本 / 图片 / 语音 / 视频 / 文件, 全类型支持 |
 | 🤖 **AI 自动回复** | 私聊 / 群聊 @ 机器人 → OpenClaw agent 生成回复 (可接任意 LLM) |
 | 💬 **引用回复** | AI 引用用户消息回复 (type=57 引用卡片, 上下文清晰) |
@@ -28,7 +31,7 @@ WeChatPadPro 微信 Pad 协议 → OpenClaw gateway → AI 自动回复。支持
 | 🔐 **安全门禁** | 私聊白名单 (fail-closed) + 群策略 + 凭证 env 隔离 |
 | 📊 **监控** | Prometheus metrics (消息/错误/性能) |
 
-> **200+ AI 工具 · 313 vendor 端点 · 6 配置助手** — 完整能力见 [功能清单](#功能清单)。
+> **200+ AI 工具 · 313 vendor 端点 (含小微 20) · 6 配置助手** — 完整能力见 [功能清单](#功能清单)。
 
 ---
 
@@ -131,6 +134,7 @@ bash deploy-swap.sh --force  # 真实部署
 - **撤回**: 消息撤回 (`Revoke`)
 
 ### 🤖 AI 与自动化
+- **小微 AI 智能体** (v1.3.69 预开发): 微信内原生 AI 对话 — Chat 会话 + SSE 事件流 (text.delta/message/completed)、记忆 (History)、邀请 (Invites)、红点 (RedDots)、卡片 (Cards)、多智能体 (A2A)。**20 API 已实现, 默认不启用, 待老板确认后开放**
 - **AI 自动回复**: 私聊 / 群聊 @ 机器人 → OpenClaw agent 生成回复
 - **群接龙自动触发**: `#接龙` 消息 → AI 自动应景回复 (节流防刷屏)
 - **图片 AI 识别**: 多模态看图
