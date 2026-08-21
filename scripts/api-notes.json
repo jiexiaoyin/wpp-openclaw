@@ -1,0 +1,140 @@
+{
+  "_comment": "WPP API 探索笔记 (人工维护)。key = METHOD /path。字段: usable(可用性), notes(坑/注意事项), example(调用示例/请求体), resp(返回结构说明), verified(实测日期)。",
+  "POST /Msg/SendTxt": {
+    "usable": true,
+    "notes": "发文本标准接口。Type=1 必填; 群@用 At 逗号分隔多个 wxid。persist 入库走 outbound.",
+    "example": "{\"ToWxid\":\"wxid_xxx\",\"Content\":\"hello\",\"At\":\"\",\"Type\":1}",
+    "verified": "2026-08-10"
+  },
+  "POST /Msg/SendApp": {
+    "usable": false,
+    "notes": "群发消息端点 (SendGroupMassMsgTextParamDoc), 误触发广播风险! 发单条请用 /Msg/ShareLink 或 /Msg/SendTxt。v1.1.17 已移除.",
+    "verified": "2026-08-10"
+  },
+  "POST /Msg/Quote": {
+    "usable": false,
+    "notes": "永久 ret=-2 不可用 (vendor /Msg/Quote 接口). 引用回复走 /Msg/ShareLink + 自构造 type=57 XML (gewe 范式).",
+    "verified": "2026-08-09"
+  },
+  "POST /Msg/SendCDNImg": {
+    "usable": "partial",
+    "notes": "发送 CDN 图片 (转发)。vendor 拉外网 URL 可能 ret=-2; 发本地图用 /Msg/UploadImg (base64) 更可靠.",
+    "verified": "2026-08-10"
+  },
+  "POST /Msg/UploadImg": {
+    "usable": true,
+    "notes": "发图片首选。Base64 裸 base64 (无前缀)。实测比 SendCDNImg 可靠.",
+    "example": "{\"ToWxid\":\"wxid_xxx\",\"Base64\":\"<base64>\"}",
+    "verified": "2026-08-10"
+  },
+  "POST /Msg/Revoke": {
+    "usable": true,
+    "notes": "撤回消息。ClientMsgId/NewMsgId 必须传 number (Go int64, string 报 Code=-8 INVALID_ARGUMENT); NewMsgId 19位大数 Number() 丢精度但 vendor 接受; CreateTime 必须用消息自己 server time (now 会 ret=0 但不真撤).",
+    "verified": "2026-08-10"
+  },
+  "POST /Login/GetQR": {
+    "usable": true,
+    "notes": "iPad 扫码登录二维码。Code:1 也是成功 (Success:true); Data 含 QrBase64/Uuid/check_token/QrUrl/ExpiredTime. DeviceName 必填, oversea 海外.",
+    "example": "{\"DeviceName\":\"我的 iPad\",\"oversea\":false}",
+    "verified": "2026-08-21"
+  },
+  "POST /Login/GetQRMac": {
+    "usable": true,
+    "notes": "Mac 扫码登录二维码。参数同 GetQR.",
+    "verified": "2026-08-21"
+  },
+  "POST /Login/GetQRPad": {
+    "usable": true,
+    "notes": "安卓Pad 扫码登录二维码。参数同 GetQR.",
+    "verified": "2026-08-21"
+  },
+  "POST /Login/AutoHeartBeat": {
+    "usable": true,
+    "notes": "开启自动心跳 + 自动二次登录。账号登录后 online=false (长连接未建) 时调此接口拉上线. 返回 Code:0 '自动心跳已启动'.",
+    "verified": "2026-08-21"
+  },
+  "GET /User/GetOnlineInfo": {
+    "usable": true,
+    "notes": "账号在线信息。Code==0 只代表能查到账号, 真在线看 Data.online==True (长连接已建, heartbeatRunning). wxid 在 Data.wxid.",
+    "verified": "2026-08-21"
+  },
+  "GET /Login/LongLinkStatus": {
+    "usable": "partial",
+    "notes": "长连接状态。state:disconnected 不表示链路断 (实测消息收发正常); 以实际收发为准. login_state=active 但 ready=false 是正常中间态.",
+    "verified": "2026-08-21"
+  },
+  "POST /User/GetContractProfile": {
+    "usable": true,
+    "notes": "取个人资料。Data.userInfo: UserName(wxid)/NickName/Province/City/Signature/BindEmail/BindMobile/Sex. 无头像 URL 字段. 值多为 {'string':'...'} 包装.",
+    "verified": "2026-08-21"
+  },
+  "POST /Tools/DownloadImg": {
+    "usable": "partial",
+    "notes": "v1 图片下载 (首 64KB JPEG, vendor 硬限). 必填 msg_id(用 local_id uint32 非 svr_id!)/to_wxid/data_len/compress_type/section. ret:-104 'cacheSize do not equal totalLen' = 缓存无此图, 走 /Tools/CdnDownloadImage.",
+    "example": "{\"msg_id\":1996983105,\"to_wxid\":\"q139198824\",\"data_len\":33349,\"compress_type\":0,\"section\":{\"start_pos\":0,\"data_len\":33349}}",
+    "verified": "2026-08-21"
+  },
+  "POST /Tools/CdnDownloadImage": {
+    "usable": true,
+    "notes": "v1 图片 CDN 完整大图 (首选). body {fileAesKey, fileNo} (来自 image.cdn_download_contexts). 返回 Data.Image (base64). 实测 373KB 成功.",
+    "example": "{\"fileAesKey\":\"<aes_key>\",\"fileNo\":\"<file_no>\"}",
+    "verified": "2026-08-21"
+  },
+  "POST /Tools/DownloadFileBinary": {
+    "usable": true,
+    "notes": "v1 文件完整下载. authcode 走 query + TokenKey header. body {attach_id, user_name, data_len, section}. 返回原始字节流 (非 base64!). 100MB cap.",
+    "example": "{\"attach_id\":\"@cdn_...\",\"user_name\":\"wxid_xxx\",\"data_len\":24575,\"section\":{\"start_pos\":0,\"data_len\":24575}}",
+    "verified": "2026-08-21"
+  },
+  "POST /Tools/DownloadVideo": {
+    "usable": true,
+    "notes": "v1 视频分片下载. body {to_wxid, msg_id, data_len, section:{start_pos,data_len}, compress_type}. 分片循环: startPos 从0, 每段 min(1MB,totalLen-startPos), 直到 startPos>=totalLen. 每段响应 Data.data.buffer (base64) 或 Data.Video; Data.totalLen 动态更新真实总长. 终止条件用 startPos>=totalLen (别用 chunk.length<sectionLen, 每段固定 61440 提前 break). 200MB cap.",
+    "verified": "2026-08-21"
+  },
+  "POST /Tools/DownloadVoice": {
+    "usable": true,
+    "notes": "语音下载 (v0). body {aesKey, fileNo} (from parseVoiceXml). 返回 base64.",
+    "verified": "2026-08-10"
+  },
+  "POST /Voice/MessageTranscribe": {
+    "usable": "partial",
+    "notes": "接收到的语音转文字 (异步). 但 vendor 推送的语音消息 voice.transcript 已自带微信官方转写, 一般无需调此接口. 需 msg_id/voice_id 等一堆参数.",
+    "verified": "2026-08-21"
+  },
+  "POST /Webhook/Set": {
+    "usable": true,
+    "notes": "配置消息回调 URL. body {url, enabled, enabledSet, includeSelfMessage, messageTypes, secret, timeout}. messageTypes 空=全部.",
+    "example": "{\"url\":\"http://x/wpp/webhook\",\"enabled\":true,\"enabledSet\":true,\"includeSelfMessage\":false,\"messageTypes\":[]}",
+    "verified": "2026-08-21"
+  },
+  "GET /Webhook/Business/Get": {
+    "usable": true,
+    "notes": "获取业务回调URL (按授权码).",
+    "verified": "2026-08-10"
+  },
+  "POST /Webhook/Business/Set": {
+    "usable": true,
+    "notes": "设置业务回调URL. body {eventUrl, logoutUrl, syncMessageUrl}.",
+    "verified": "2026-08-10"
+  },
+  "GET /User/GetAllOnline": {
+    "usable": "partial",
+    "notes": "获取所有在线wxid (需管理员 key, query key 参数). 普通 authcode 无权限.",
+    "verified": "2026-08-10"
+  },
+  "POST /Friend/GetContractList": {
+    "usable": "partial",
+    "notes": "通讯录好友列表. 返回 ContactUsernameList (分页 wxid 数组, 每页100), 无头像/昵称. 需自行翻页 (CurrentWxcontactSeq).",
+    "verified": "2026-08-11"
+  },
+  "POST /FriendCircle/Messages": {
+    "usable": true,
+    "notes": "发布朋友圈 (纯文字/图文/视频/链接). 图片走 /FriendCircle/UploadImage 后 MediaList 引用.",
+    "verified": "2026-08-10"
+  },
+  "POST /FriendCircle/UploadImage": {
+    "usable": true,
+    "notes": "朋友圈上传图片. 返回 CDN 标识供发布引用.",
+    "verified": "2026-08-10"
+  }
+}

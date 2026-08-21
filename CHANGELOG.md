@@ -4,6 +4,13 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [docs] API 使用文档完善 (2026-08-21)
+- **WPP-API-REFERENCE.md 全量升级**: 254 → **313 端点** (swagger 全量)
+- **三源合并生成**: swagger 定义 + `send/*.ts` 源码实测调用 (299 端点) + `api-notes.json` 探索笔记 (26 端点)
+- **新增 `scripts/api-notes.json`**: 人工维护的探索经验 (可用性/坑/示例/实测日期)
+- **`gen-api-reference.py` 升级**: 从源码提取实测调用 + notes 合并, 重新生成不丢人工经验
+- 覆盖开发中探索出的坑: SendApp 群发勿用 / Msg/Quote ret=-2 / DownloadImg 64KB / CDN 图片 / DownloadFileBinary / DownloadVideo 分片 / GetQR Code:1 等
+
 ## [v1.3.74]
 - 2026-08-20 (审阅核实修复 + 性能/测试/僵尸优化)
 - **P2-5 api-coverage 固定 swagger 快照**: tests/fixtures/vendor-swagger-paths.json (313 paths), vendor 不可达不再 t.skip 假绿, 用本地快照真校验
