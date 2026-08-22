@@ -14,6 +14,7 @@ import { payloadToAllInboundMessages } from "./parser.js";
 import { SeenTracker, buildDedupeKey } from "../webhook-receiver.js";
 import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1Cdn, enrichFileMessage, enrichFileMessageFromV1Binary, enrichVideoMessage, enrichVideoMessageFromV1, isV1SchemaVideo, enrichVoiceMessage, enrichVoiceMessageFromV1, isV1SchemaVoice, enrichFileMessageViaMcp, isV1SchemaImage, isV1SchemaFile } from "./media-enrich.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
+import { judgeHeartflow, recordRawMessage, getChatState, buildChatContextSummary, getRawBuffer, formatRawMessages, lastBotReply, secondsSinceLastReply, recordActiveReply, recordPassiveMessage, } from "./heartflow.js";
 const pendingEnrichs = new Map();
 const RELAY_THROTTLE_MS = 5 * 60 * 1000;
 const relayTriggerAt = new Map();
@@ -326,6 +327,24 @@ export function createWppInboundHandler(opts) {
                     continue;
                 }
             }
+            if (opts.heartflow?.enabled) {
+                for (const m of batch) {
+                    const tr = persistResults.get(m);
+                    if (tr?.via === "blocked")
+                        continue;
+                    if (m.peerKind !== "group")
+                        continue;
+                    if (m.msgType === 10000)
+                        continue;
+                    recordRawMessage(m.chatroomId ?? m.peerId, {
+                        senderName: m.fromNickname ?? m.fromWxid ?? "未知",
+                        senderId: m.fromWxid ?? "",
+                        content: m.content ?? "",
+                        timestamp: m.ts ?? Date.now() / 1000,
+                        isBot: !!opts.triggerCtx.botWxid && m.fromWxid === opts.triggerCtx.botWxid,
+                    });
+                }
+            }
             const triggerResults = persistResults;
             const dispatched = [];
             for (const [m, t] of triggerResults) {
@@ -365,6 +384,40 @@ export function createWppInboundHandler(opts) {
                     if (t.via === "at" || t.via === "keyword" || t.via === "msgType" ||
                         t.via === "quoteBot" || t.via === "group-open") {
                         dispatched.push(m);
+                    }
+                    else if (t.via === "heartflow" && opts.heartflow?.enabled) {
+                        const chatId = m.chatroomId ?? m.peerId;
+                        const hfCfg = opts.heartflow;
+                        try {
+                            const nowMs = Date.now();
+                            const st = getChatState(chatId, hfCfg, nowMs);
+                            const judgeResult = await judgeHeartflow({
+                                chatId,
+                                botNickname: opts.botNickname ?? "",
+                                content: m.content ?? "",
+                                senderName: m.fromNickname ?? m.fromWxid ?? "未知",
+                                chatContext: buildChatContextSummary(chatId, hfCfg, nowMs),
+                                recentMessages: formatRawMessages(getRawBuffer(chatId, hfCfg.contextMessagesCount ?? 5)),
+                                lastBotReply: lastBotReply(chatId) ?? "",
+                                secondsSinceLastReply: secondsSinceLastReply(chatId, nowMs),
+                                energy: st.energy,
+                            }, hfCfg, {
+                                apiKey: process.env.MINIMAX_API_KEY ?? "",
+                            });
+                            if (judgeResult?.shouldReply) {
+                                m.trigger = "heartflow";
+                                recordActiveReply(chatId, hfCfg, nowMs);
+                                dispatched.push(m);
+                                info(`[WPP HEARTFLOW] trigger: peer=${m.peerId} msgId=${m.msgId} score=${judgeResult.overallScore.toFixed(2)} reasoning=${judgeResult.reasoning.slice(0, 40) ?? ""}`);
+                            }
+                            else {
+                                recordPassiveMessage(chatId, hfCfg, nowMs);
+                                debug(`[WPP HEARTFLOW] skip (score=${judgeResult?.overallScore.toFixed(2) ?? "null"}): peer=${m.peerId}`);
+                            }
+                        }
+                        catch (e) {
+                            warn(`[WPP HEARTFLOW] judge error (skip): ${formatErr(e)}`);
+                        }
                     }
                 }
             }

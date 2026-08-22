@@ -1,4 +1,5 @@
 import { isBotMentionedByText } from "./parser/mention.js";
+import { checkHeartflowGate } from "./heartflow.js";
 export function shouldTrigger(msg, cfg, ctx) {
     if (ctx.botWxid && msg.fromWxid === ctx.botWxid) {
         return { triggered: false, via: "blocked" };
@@ -51,6 +52,12 @@ export function shouldTrigger(msg, cfg, ctx) {
             return { triggered: true, via: "keyword" };
         }
     }
+    if (msg.peerKind === "group" && cfg.heartflow?.enabled) {
+        const gate = checkHeartflowGate(msg.chatroomId ?? msg.peerId, msg.content ?? "", cfg.heartflow, Date.now());
+        if (gate.allowed) {
+            return { triggered: true, via: "heartflow" };
+        }
+    }
     return { triggered: false, via: null };
 }
 function isQuoteRefToBot(content, botWxid) {
@@ -90,5 +97,6 @@ export function defaultTriggerConfig() {
         chatroomDebug: false,
         groupPolicy: "open",
         groupAllowFrom: [],
+        heartflow: { enabled: false },
     };
 }
