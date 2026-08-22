@@ -32,7 +32,7 @@ import { buildSessionKey } from "./session-key.js";
 import { sendText as dispatchSendText, sendImage as dispatchSendImage } from "./dispatch/outbound.js";
 import { AGENT_TOOLS } from "./dispatch/agent-tools/index.js";
 import { getCurrentAccountId } from "./dispatch/account-context.js";
-import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag } from "./config.js";
+import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, ensureWebhookPathToken } from "./config.js";
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig, type ResolvedGlobalConfig } from "./core/runtime-config.js";
 import type { WppTriggerConfig, WppAccountTriggerCtx } from "./inbound/triggers.js";
@@ -44,6 +44,10 @@ import type { WppSendMessageParams, WppSendType } from "./dispatch/send-message.
 const runtimeTriggerConfigs = new Map<string, WppTriggerConfig>();
 const runtimeTriggerCtxs = new Map<string, WppAccountTriggerCtx>();
 const runtimeInboundHandlers = new Map<string, ReturnType<typeof createWppInboundHandler>>();
+
+// P1 (2026-08-23): 每账号 /Msg/Sync 全局锁 — webhook sync_message 与 ws-client triggerSync
+//   并发双拉 → vendor 被同时拉两次 + 游标竞争。webhook 路径用此锁串行 (ws 有自己 syncInFlight)。
+const accountSyncLocks = new Map<string, Promise<void>>();
 
 // v1.3.61 WEBHOOK-SHARED-PORT: 多账号共享单个 webhook server (单端口 + path 区分, 贴合 vendor 设计)
 //   vendor 按 authcode 区分账号 (Webhook/* 接口 URL query 带 authcode), 回调 URL 用 path 区分 (含 accountId)。
@@ -439,8 +443,9 @@ export async function startAccountById(
       const ws = new WechatpadproWsClient(cfg.wsUrl, cfg.authcode, {
         apiClient: state.apiClient,
         accountId,
-        onInboundMessage: async (msg) => {
-          await inboundHandler.handle(msg.raw as Record<string, unknown>);
+        // P0-3: WS 直接传原始 raw, 由 handler 统一解析 (payloadToAllInboundMessages 认 v1)
+        onInboundMessage: async (raw) => {
+          await inboundHandler.handle(raw);
         },
       });
       await ws.start();
@@ -453,6 +458,16 @@ export async function startAccountById(
   // v1.3.63 P1-7 webhook 加固 (2026-08-14 老板拍板): webhookPathToken 随机 token 插入 path
   //   → /wechatpadpro/<token>/webhook. 攻击者猜不到 token → 404 (webhook-receiver 精确 path 匹配天然拒绝).
   //   不影响 nginx catch-all ^~ /wechatpadpro/; vendor 注册 URL 由 autoSetWebhook 带 token 自动更新.
+  // v1.3.78 P0-1: 确保 token 一定存在 (未配则生成写回) — 无 token 不可启动 webhook
+  if (!cfg.webhookPathToken) {
+    const tk = await ensureWebhookPathToken(accountId);
+    if (tk.ok && tk.token) {
+      cfg.webhookPathToken = tk.token;
+      log.warn(`[WPP P0-1] account=${accountId} webhookPathToken 未配置, 已自动生成并写回 (token 尾部 ${tk.token.slice(-4)})`);
+    } else {
+      log.warn(`[WPP P0-1] account=${accountId} webhookPathToken 缺失且自动生成失败 (${tk.reason ?? "unknown"}) — webhook 无路径鉴权!`);
+    }
+  }
   const { webhookPath, businessPath } = deriveWebhookPaths(cfg);
 
   if (!state.webhookServer) {
@@ -476,24 +491,34 @@ export async function startAccountById(
     srv.addPath(webhookPath, async (payload) => {
       const raw = payload as Record<string, unknown>;
       if (raw.MessageType === "sync_message") {
-        try {
-          const prevSynckey = await getSynckey(accountId);
-          const sync = await state.apiClient.call<{
-            CmdList?: { Count?: number; List?: unknown[] };
-            KeyBuf?: { buffer?: string; iLen?: number };
-          }>("/Msg/Sync", { Scene: 0, Synckey: prevSynckey ?? "" });
-          const newKey = sync?.Data?.KeyBuf?.buffer;
-          if (newKey) {
-            await saveSynckey(accountId, newKey);
+        // P1: 每账号 /Msg/Sync 锁 — 与 ws-client triggerSync 串行, 防并发双拉 + 游标竞争
+        const prev = accountSyncLocks.get(accountId) ?? Promise.resolve();
+        const run = prev.then(async () => {
+          try {
+            const prevSynckey = await getSynckey(accountId);
+            const sync = await state.apiClient.call<{
+              CmdList?: { Count?: number; List?: unknown[] };
+              KeyBuf?: { buffer?: string; iLen?: number };
+            }>("/Msg/Sync", { Scene: 0, Synckey: prevSynckey ?? "" });
+            const newKey = sync?.Data?.KeyBuf?.buffer;
+            const list = sync?.Data?.CmdList?.List ?? [];
+            log.info(`webhook sync_message: /Msg/Sync pulled ${list.length} message(s) synckey=${prevSynckey ? "incremental" : "full"}`);
+            // P1: 先处理消息再保存 synckey (崩溃不丢消息; DB 幂等重拉安全)
+            for (const item of list) {
+              await inboundHandler.handle(item as Record<string, unknown>);
+            }
+            if (newKey) {
+              await saveSynckey(accountId, newKey);
+            }
+          } catch (e) {
+            log.warn(`webhook sync_message /Msg/Sync failed: ${formatErr(e)}`);
           }
-          const list = sync?.Data?.CmdList?.List ?? [];
-          log.info(`webhook sync_message: /Msg/Sync pulled ${list.length} message(s) synckey=${prevSynckey ? "incremental" : "full"}`);
-          for (const item of list) {
-            await inboundHandler.handle(item as Record<string, unknown>);
-          }
-        } catch (e) {
-          log.warn(`webhook sync_message /Msg/Sync failed: ${formatErr(e)}`);
-        }
+        }).finally(() => {
+          // 清理锁 (仅当还是自己的 promise)
+          if (accountSyncLocks.get(accountId) === run) accountSyncLocks.delete(accountId);
+        });
+        accountSyncLocks.set(accountId, run);
+        await run;
         return;
       }
       // 其他 vendor webhook 事件 (如 logout) → 尝试 parse

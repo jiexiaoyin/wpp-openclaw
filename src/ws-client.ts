@@ -1,26 +1,24 @@
 // ws-client.ts - WebSocket 客户端 (接 wechatpadpro /ws/sync)
 // vendor 推送实时消息 (替代 webhook 模式可选)
 //
-//   然后 payloadToInboundMessage → caller 提供的 onInboundMessage handler.
+//   然后 raw → caller 提供的 onInboundMessage handler (统一解析, P0-3).
 //   修复 PoC stub: 原实现只 log debug (vendor 推真消息完全不处理).
 //
 // 关键设计:
 
 import WebSocket from "ws";
 import { logObj as log, formatErr } from "./core/logger.js";
-import { payloadToInboundMessage } from "./inbound/parser.js";
 import { getSynckey, saveSynckey } from "./db.js";
 import { parseJsonText } from "./api/client.js";
 import type {
   WppWsClient,
   WppApiClient,
-  WppInboundMessage,
 } from "./types.js";
 
 export interface WechatpadproWsClientOpts {
   /** vendor HTTP API 客户端 (用于 SyncMessage) — 必须提供, 否则收到推送后不拉消息 */
   apiClient: WppApiClient;
-  /** 当前账号 ID (用于 payloadToInboundMessage) */
+  /** 当前账号 ID (用于 synckey 存取) */
   accountId: string;
   /** 同步间隔兜底 (vendor WS 没推时也定时 SyncMessage 拉取, 防 vendor 推送漏通知) */
   fallbackSyncMs?: number;
@@ -31,7 +29,8 @@ export interface WechatpadproWsClientOpts {
     multiplier?: number;
   };
   /** 主入口: 收到 SyncMessage 拉到的消息后, 调 caller. caller 负责 debouncer/triggers/dispatch */
-  onInboundMessage: (msg: WppInboundMessage) => void | Promise<void>;
+  /** P0-3: 直接收原始 raw (Record<string, unknown>), 由 caller 统一解析 (不再预解析丢 v1) */
+  onInboundMessage: (raw: Record<string, unknown>) => void | Promise<void>;
 }
 
 export class WechatpadproWsClient implements WppWsClient {
@@ -185,13 +184,7 @@ export class WechatpadproWsClient implements WppWsClient {
         ContinueFlag?: number;
         KeyBuf?: { buffer?: string; iLen?: number };
       }>("/Msg/Sync", { Scene: 0, Synckey: prevSynckey ?? "" });
-      // 保存新 Synckey (增量游标) — 即使 0 条也要存 (游标前进)
       const newKey = sync?.Data?.KeyBuf?.buffer;
-      if (newKey) {
-        await saveSynckey(this.opts.accountId, newKey);
-      } else {
-        log.debug(`ws sync: no KeyBuf returned (reason=${reason})`);
-      }
       const list = sync?.Data?.CmdList?.List ?? [];
       const count = list.length;
       if (count > 0) {
@@ -199,16 +192,25 @@ export class WechatpadproWsClient implements WppWsClient {
       } else {
         log.debug(`ws sync pulled 0 messages: reason=${reason} synckey=${prevSynckey ? "incremental" : "full"}`);
       }
+      // P1 (2026-08-23): 先 enqueue 消息, 再保存 synckey —
+      //   之前先 saveSynckey 再处理, 崩溃 (SIGKILL/OOM) 窗口内消息未落库但游标已前进 → 永久丢失。
+      //   DB 唯一键幂等 (wpp_messages UNIQUE), 重拉安全 (at-least-once)。
       for (const raw of list) {
         try {
-          const obj = raw as Record<string, unknown>;
-          const msg = payloadToInboundMessage(this.opts.accountId, obj);
-          if (msg) {
-            await this.opts.onInboundMessage(msg);
-          }
+          // P0-3 (2026-08-23): 不再用 payloadToInboundMessage 预解析 —
+          //   它不认 v1 schema (Data.messages[]), v1 消息返回 null 被静默丢弃。
+          //   直接把原始 raw 交给 caller, 由 handler 的统一解析器 (payloadToAllInboundMessages)
+          //   处理 v1 / 旧格式 / 单条兜底。
+          await this.opts.onInboundMessage(raw as Record<string, unknown>);
         } catch (e) {
           log.warn(`ws sync inbound dispatch failed: ${formatErr(e)}`);
         }
+      }
+      // P1: 消息全部 enqueue 后再保存 synckey (游标前进) — 崩溃窗口不丢消息
+      if (newKey) {
+        await saveSynckey(this.opts.accountId, newKey);
+      } else {
+        log.debug(`ws sync: no KeyBuf returned (reason=${reason})`);
       }
     } catch (e) {
       log.warn(`ws sync /Msg/Sync failed: ${formatErr(e)}`);
@@ -219,7 +221,11 @@ export class WechatpadproWsClient implements WppWsClient {
 
   private scheduleRetry(): void {
     if (this.stopped) return;
-    const delay = Math.min(this.retryDelay, this.maxRetryDelay);
+    // P1 (2026-08-23): 长退避 (LONG_BACKOFF_MS) 不被 maxRetryDelay 截断 —
+    //   之前 Math.min 把 5 分钟长退避压到 30s, 智能退避从未生效。
+    const delay = this.retryDelay >= WechatpadproWsClient.LONG_BACKOFF_MS
+      ? this.retryDelay
+      : Math.min(this.retryDelay, this.maxRetryDelay);
     log.info(`ws reconnect in ${delay}ms${this.lastBackoffReason ? ` (smart backoff: ${this.lastBackoffReason})` : ""}`);
     setTimeout(() => this.connect(), delay);
     this.retryDelay = Math.min(this.retryDelay * this.retryMultiplier, this.maxRetryDelay);

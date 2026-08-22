@@ -36,6 +36,7 @@ import {
   secondsSinceLastReply,
   recordActiveReply,
   recordPassiveMessage,
+  markHeartflowJudged,
   type HeartflowConfig,
 } from "./heartflow.js";
 import {
@@ -43,7 +44,7 @@ import {
   recordJargonMessage,
   shouldTriggerMine,
   mineJargonForGroup,
-  getRecentMessages,
+  getGroupMessageCount,
   type JargonConfig,
 } from "./jargon.js";
 import {
@@ -506,12 +507,13 @@ export function createWppInboundHandler(
           recordJargonMessage(groupId, m.fromWxid ?? "", content);
         }
         // 挖掘触发: 每群独立判断 (间隔 + 新增消息数), 异步执行不阻塞消息流
+        // P1: 用单调递增计数 (getGroupMessageCount) 而非有界缓冲长度 — 历史满 200 后长度恒 200 会永久停摆
         for (const m of batch) {
           const tr = persistResults.get(m);
           if (tr?.via === "blocked") continue;
           if (m.peerKind !== "group") continue;
           const groupId = m.chatroomId ?? m.peerId;
-          const msgCount = getRecentMessages(groupId, 200).length;
+          const msgCount = getGroupMessageCount(groupId);
           if (shouldTriggerMine(groupId, opts.jargon, Date.now(), msgCount)) {
             void mineJargonForGroup(groupId, opts.jargon, {
               apiKey: process.env.MINIMAX_API_KEY ?? "",
@@ -611,6 +613,8 @@ export function createWppInboundHandler(
                   apiKey: process.env.MINIMAX_API_KEY ?? "",
                 },
               );
+              // P1: 无论结果, 标记已 judge (频率闸生效)
+              markHeartflowJudged(chatId, nowMs);
               if (judgeResult?.shouldReply) {
                 m.trigger = "heartflow";
                 recordActiveReply(chatId, hfCfg, nowMs);
@@ -715,7 +719,8 @@ export function createWppInboundHandler(
       }
       for (const m of msgs) {
         // 双重去重: SeenTracker 内存态 + DB 持久化 (vendor 重放消息 / gateway 重启后防重复 dispatch)
-        const dk = buildDedupeKey(undefined, m.newMsgId, m.msgId, m.content);
+        // P0-4: 去重 key 并入 accountId — 多账号同群消息 (相同 newMsgId) 不再互判重复
+        const dk = buildDedupeKey(opts.accountId, m.newMsgId, m.msgId, m.content);
         if (!seenTracker.check(dk)) {
           continue;
         }

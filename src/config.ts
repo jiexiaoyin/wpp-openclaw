@@ -583,3 +583,46 @@ export async function setAccountFlag(
   log.info(`setAccountFlag: account=${accountId} ${field}=${value}`);
   return { ok: true, current: value, filePath };
 }
+
+/**
+ * v1.3.78 P0-1 webhook 加固: 确保证 webhookPathToken 一定存在.
+ *   配了 → 原样返回; 没配 → 生成 32 hex 并原子写回 accounts/<id>.json (重启稳定).
+ *   返回 { token, ok, reason? } — token 为空表示失败 (调用方应告警, 不可无 token 启动).
+ */
+export async function ensureWebhookPathToken(
+  accountId: string,
+): Promise<{ token: string; ok: boolean; reason?: string }> {
+  const dir = join(await findPluginRoot(), "accounts");
+  const filePath = join(dir, `${accountId}.json`);
+  let raw: Record<string, unknown>;
+  try {
+    const text = await readFile(filePath, "utf8");
+    raw = JSON.parse(text) as Record<string, unknown>;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    log.warn(`ensureWebhookPathToken: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    return { token: "", ok: false, reason: "read-failed" };
+  }
+
+  const existing = typeof raw.webhookPathToken === "string" && raw.webhookPathToken.trim()
+    ? (raw.webhookPathToken as string).trim()
+    : "";
+  if (existing) return { token: existing, ok: true };
+
+  // 生成 32 hex (128-bit) token
+  const { randomBytes } = await import("node:crypto");
+  const token = randomBytes(16).toString("hex");
+  raw.webhookPathToken = token;
+
+  try {
+    const tmpPath = `${filePath}.tmp`;
+    await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+    await rename(tmpPath, filePath);
+  } catch (e) {
+    log.warn(`ensureWebhookPathToken: write ${accountId}.json failed: ${(e as Error).message}`);
+    return { token, ok: false, reason: "write-failed" };
+  }
+  invalidateConfigCache(accountId);
+  log.info(`ensureWebhookPathToken: account=${accountId} generated new webhookPathToken (128-bit)`);
+  return { token, ok: true };
+}

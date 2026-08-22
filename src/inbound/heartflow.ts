@@ -48,6 +48,8 @@ export interface HeartflowConfig {
   contextMessagesCount?: number;
   /** 最小回复间隔秒 (默认 0 = 不限) */
   minReplyIntervalSec?: number;
+  /** P1: 最小 LLM 判断间隔秒 (默认 0 = 每条都判; 建议 >0 降 LLM 调用, 如 30 = 每 30s 最多判 1 次) */
+  minJudgeIntervalSec?: number;
   /** 群白名单 (空 = 不启用白名单; 非空 = 仅这些群触发) */
   whitelistGroups?: string[];
   /** 5 维权重 (默认 relevance/willingness/social/timing/continuity) */
@@ -74,10 +76,11 @@ export function defaultHeartflowConfig(): HeartflowConfig {
     energyRecoveryRate: 0.02,
     contextMessagesCount: 5,
     minReplyIntervalSec: 0,
+    minJudgeIntervalSec: 0,
     whitelistGroups: [],
     weights: { relevance: 0.25, willingness: 0.2, social: 0.2, timing: 0.15, continuity: 0.2 },
     includeReasoning: false,
-    maxRetries: 2,
+    maxRetries: 1, // P1: 默认 1 次重试 (原 2 → 3 次调用, 阻塞最坏 15s)
   };
 }
 
@@ -108,6 +111,8 @@ export interface HeartflowChatState {
   lastResetDate: string;
   totalMessages: number;
   totalReplies: number;
+  /** P0-5: 上次精力时间恢复的时间戳 (独立于 lastReplyTime, 避免恢复推进冷却) */
+  lastEnergyRecoveryTs: number;
 }
 
 // ===== 纯逻辑: JSON 稳健解析 (移植自 Heartflow _extract_json) =====
@@ -167,7 +172,8 @@ export function resetHeartflowStates(): void {
 
 /**
  * 获取 (或创建) 群状态, 并应用每日重置 + 时间自然恢复。
- * 注意: 时间恢复会推进 lastReplyTime (移植原逻辑), 避免重复累加。
+ * P0-5: 时间恢复用独立 lastEnergyRecoveryTs, 不再推进 lastReplyTime —
+ *   否则每次 judge 调用都重置 lastReplyTime → secondsSinceLastReply 恒≈0 → 冷却失效。
  */
 export function getChatState(
   chatId: string,
@@ -176,7 +182,7 @@ export function getChatState(
 ): HeartflowChatState {
   let st = chatStates.get(chatId);
   if (!st) {
-    st = { energy: 1.0, lastReplyTime: 0, lastResetDate: "", totalMessages: 0, totalReplies: 0 };
+    st = { energy: 1.0, lastReplyTime: 0, lastResetDate: "", totalMessages: 0, totalReplies: 0, lastEnergyRecoveryTs: 0 };
     chatStates.set(chatId, st);
   }
   const today = new Date(nowMs).toISOString().slice(0, 10);
@@ -184,13 +190,15 @@ export function getChatState(
     st.lastResetDate = today;
     st.energy = Math.min(1.0, st.energy + 0.2); // 每日重置恢复 20%
   }
-  // 时间自然恢复: 每 5 分钟恢复 recovery * 5 (移植原逻辑)
-  if (st.lastReplyTime > 0) {
-    const elapsedMs = nowMs - st.lastReplyTime;
-    const timeRecovery = (elapsedMs / (60 * 1000)) * ((cfg.energyRecoveryRate ?? 0.02) * 5);
-    st.energy = Math.min(1.0, st.energy + timeRecovery);
-    st.lastReplyTime = nowMs; // 重置计时起点, 避免重复累加
+  // 时间自然恢复: 每 5 分钟恢复 recovery * 5 (基于上次恢复时间, 不碰 lastReplyTime)
+  if (st.lastEnergyRecoveryTs > 0) {
+    const elapsedMs = nowMs - st.lastEnergyRecoveryTs;
+    if (elapsedMs > 0) {
+      const timeRecovery = (elapsedMs / (60 * 1000)) * ((cfg.energyRecoveryRate ?? 0.02) * 5);
+      st.energy = Math.min(1.0, st.energy + timeRecovery);
+    }
   }
+  st.lastEnergyRecoveryTs = nowMs;
   return st;
 }
 
@@ -534,6 +542,19 @@ export interface HeartflowGateResult {
  * - 冷却期 (minReplyIntervalSec) → 拒绝
  * 通过后由调用方调 judgeHeartflow 做 LLM 打分。
  */
+/** P1: 每群最近一次 LLM judge 时间 (minJudgeIntervalSec 频率闸用) */
+const lastJudgeAt = new Map<string, number>();
+
+/** 测试/热重载: 清空 judge 频率 */
+export function resetHeartflowJudgeIntervals(): void {
+  lastJudgeAt.clear();
+}
+
+/** 标记某群已 judge (judgeHeartflow 实际调用后更新) */
+export function markHeartflowJudged(chatId: string, nowMs: number): void {
+  lastJudgeAt.set(chatId, nowMs);
+}
+
 export function checkHeartflowGate(
   chatId: string,
   content: string,
@@ -549,6 +570,14 @@ export function checkHeartflowGate(
   if (minInterval > 0) {
     const since = secondsSinceLastReply(chatId, nowMs);
     if (since > 0 && since < minInterval) return { allowed: false, reason: "cooling" };
+  }
+  // P1: LLM judge 频率闸 — 每群 minJudgeIntervalSec 内最多 judge 1 次 (降 LLM 调用 + 防阻塞)
+  const judgeInterval = cfg.minJudgeIntervalSec ?? 0;
+  if (judgeInterval > 0) {
+    const last = lastJudgeAt.get(chatId) ?? 0;
+    if (last > 0 && nowMs - last < judgeInterval * 1000) {
+      return { allowed: false, reason: "judge-cooldown" };
+    }
   }
   return { allowed: true };
 }

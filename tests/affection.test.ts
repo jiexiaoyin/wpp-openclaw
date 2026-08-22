@@ -30,11 +30,13 @@ test("affection: 关键词分类 明确词", () => {
   assert.equal(classifyInteractionByRules("傻逼"), "insult");
   assert.equal(classifyInteractionByRules("弄死你"), "threat");
 });
-test("affection: 关键词分类 原版宽泛行为 (compliment 先匹配)", () => {
-  // 原版: compliment 含 "好"/"不错", 检查顺序在 care 前
-  assert.equal(classifyInteractionByRules("今天天气不错"), "compliment");
-  assert.equal(classifyInteractionByRules("晚上好"), "compliment");
-  assert.equal(classifyInteractionByRules("你好呀"), "compliment");
+test("affection: 关键词分类 修复后单字不误判 (P1)", () => {
+  // 修复: 去掉单字 好/死/狗, 不再误判称赞/侮辱
+  assert.equal(classifyInteractionByRules("今天天气不错"), "compliment"); // 不错 保留
+  assert.equal(classifyInteractionByRules("晚上好"), "care"); // 单字 好 移除 → 走 care (晚上好)
+  assert.equal(classifyInteractionByRules("笑死我了"), undefined); // 单字 死 已移除
+  assert.equal(classifyInteractionByRules("狗粮"), undefined); // 单字 狗 已移除
+  assert.equal(classifyInteractionByRules("热狗"), undefined);
 });
 test("affection: 无匹配返回 undefined", () => {
   assert.equal(classifyInteractionByRules("今天群里聊天"), undefined);

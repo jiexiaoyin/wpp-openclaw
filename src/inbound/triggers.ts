@@ -111,7 +111,9 @@ export function shouldTrigger(
     }
     if (policy === "allowlist") {
       const allowGroups = cfg.groupAllowFrom ?? [];
-      if (allowGroups.length > 0 && !allowGroups.includes(msg.chatroomId ?? "")) {
+      // P0-2 (2026-08-23): allowlist 空列表 = 拒绝所有群 (fail-closed, 与 DM allowFrom 语义对齐)。
+      //   之前 allowGroups.length===0 时放行全部 — 管理员清空群白名单"暂时禁用"反而全放行, 静默隐患。
+      if (allowGroups.length === 0 || !allowGroups.includes(msg.chatroomId ?? "")) {
         return { triggered: false, via: "blocked" };
       }
     }

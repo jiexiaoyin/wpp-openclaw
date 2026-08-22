@@ -49,12 +49,12 @@ export function checkGroupPolicy(opts: CheckGroupPolicyOpts): GroupPolicyResult 
 
   if (policy === "allowlist") {
     const chatroomId = msg.chatroomId;
+    // P0-2 (2026-08-23): allowlist 空列表 = 拒绝所有群 (fail-closed, 与 triggers.ts 对齐)
     if (
-      groupAllowFrom.length > 0 &&
-      chatroomId &&
-      !groupAllowFrom.includes(chatroomId)
+      groupAllowFrom.length === 0 ||
+      (chatroomId && !groupAllowFrom.includes(chatroomId))
     ) {
-      return { allowed: false, reason: `groupAllowFrom mismatch: ${chatroomId}` };
+      return { allowed: false, reason: `groupAllowFrom mismatch: ${chatroomId ?? "(空)"}` };
     }
   }
 

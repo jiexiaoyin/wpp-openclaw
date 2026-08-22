@@ -379,6 +379,10 @@ export function defaultJargonConfig(): JargonConfig {
 const msgHistory = new Map<string, string[]>();
 const MSG_HISTORY_MAX = 200;
 
+/** P1 (2026-08-23): 每群单调递增消息计数 — shouldTriggerMine 用独立计数器,
+ *   不再用有界缓冲长度 (历史满 200 条后长度恒 200 → 新增消息数恒 0 → 挖掘永久停摆) */
+const groupMsgCounter = new Map<string, number>();
+
 /** 记录消息 (旁路, 供 LLM 挖掘) */
 export function recordJargonMessage(groupId: string, senderId: string, content: string): void {
   if (!content?.trim()) return;
@@ -386,6 +390,13 @@ export function recordJargonMessage(groupId: string, senderId: string, content: 
   hist.push(`${senderId}: ${content}`);
   if (hist.length > MSG_HISTORY_MAX) hist = hist.slice(-MSG_HISTORY_MAX);
   msgHistory.set(groupId, hist);
+  // P1: 单调递增计数 (只增不清, 供 shouldTriggerMine 判断新增消息数)
+  groupMsgCounter.set(groupId, (groupMsgCounter.get(groupId) ?? 0) + 1);
+}
+
+/** P1: 群累计消息数 (单调递增) */
+export function getGroupMessageCount(groupId: string): number {
+  return groupMsgCounter.get(groupId) ?? 0;
 }
 
 /** 取最近 N 条消息文本 */
@@ -397,6 +408,7 @@ export function getRecentMessages(groupId: string, n: number): string[] {
 /** 测试/热重载: 清空历史 */
 export function resetJargonHistory(): void {
   msgHistory.clear();
+  groupMsgCounter.clear();
 }
 
 // ===== LLM Prompt (复刻 jargon_miner) =====
