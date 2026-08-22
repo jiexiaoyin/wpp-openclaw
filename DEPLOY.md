@@ -1,6 +1,6 @@
 # 部署指南 (DEPLOY.md)
 
-WeChatPadPro OpenClaw Plugin v1.3.63 部署到 OpenClaw gateway 的详细指南。
+WeChatPadPro OpenClaw Plugin v1.3.75 部署到 OpenClaw gateway 的详细指南。
 
 > 本插件部署分**两层**, 都要跑通:
 > 1. **服务端 (vendor)** — 微信 Pad 协议服务 (本包 `vendor/` 已含), 提供 HTTP API + WS
@@ -179,7 +179,7 @@ rm -rf "$OPENCLAW_ROOT/extensions/wechatpadpro"
 
 | 组件 | 版本 |
 |---|---|
-| 插件 | v1.3.63 (本发布包) |
+| 插件 | v1.3.75 (本发布包) |
 | 服务端 (vendor) | v8_m4.1.12.29_p8.0.75.53 (本包 `vendor/` 已含) |
 
 > **插件仅适配此版本服务端** — 升级服务端前请先确认插件兼容, 或同步升级插件。

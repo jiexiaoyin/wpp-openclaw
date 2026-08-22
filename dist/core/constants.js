@@ -1,6 +1,6 @@
 export const CHANNEL_ID = "wechatpadpro";
 export const PLUGIN_NAME = "wechatpadpro";
-export const PLUGIN_VERSION = "1.3.74";
+export const PLUGIN_VERSION = "1.3.75";
 export const DEFAULT_BOT_NICKNAME = "YourBot";
 export const DEFAULT_ACCOUNT_ID = "default";
 export const DEFAULT_VENDOR_API_BASE = "http://127.0.0.1:8062";
@@ -25,7 +25,7 @@ export const LOG_TAG = `[WPP ${PLUGIN_VERSION}]`;
 export const DEFAULT_WEBHOOK_HOST = "127.0.0.1";
 export const DEFAULT_WEBHOOK_PORT = 4398;
 export const DEFAULT_WEBHOOK_PATH = "/wechatpadpro/webhook";
-export const DEFAULT_DEBOUNCE_MS = 1500;
+export const DEFAULT_DEBOUNCE_MS = 500;
 export const DEDUPE_TTL_MS = 30 * 60 * 1000;
 export const REQUEST_TIMEOUT_MS = 30_000;
 export const WEBHOOK_BODY_LIMIT_BYTES = 10 * 1024 * 1024;

@@ -25,6 +25,7 @@ import { extractReferencedFromReplyContext, extractReferencedFromApp } from "../
 import { classifyGroupIntent, decideIntentWithLlm, needsLlm, normalizeTriggerText, toIntentCandidate } from "./intent-llm.js";
 import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
 import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
+import { recordRawMessage } from "../inbound/heartflow.js";
 export { classifyGroupIntent } from "./intent-llm.js";
 import { setSessionChatInfo } from "../state.js";
 const NOOP_RUNTIME = {
@@ -352,12 +353,15 @@ function buildReferencedContextLines(msg, referencedMsg) {
     info(`[WPP v1.3.14 QUOTE-FORCE-CONTEXT] injected referenced ctx (1 msg: ${referencedMsg.msg_id}) → session=${buildSessionKeyForMsg(msg)} msgId=${msg.msgId}`);
     return lines.join("\n");
 }
-function buildCtxPayload(msg, sessionKey, injectedContext) {
+function buildCtxPayload(msg, sessionKey, injectedContext, heartflowNote) {
     const isGroup = msg.peerKind === "group";
     const toWxid = msg.toWxid ?? msg.accountId;
     let body = msg.content || "";
     if (injectedContext) {
         body = `${injectedContext}\n\n${body}`;
+    }
+    if (heartflowNote) {
+        body = `${body}\n\n[系统提示] ${heartflowNote}`;
     }
     const quoteCtx = buildQuoteContext(msg);
     if (quoteCtx) {
@@ -450,17 +454,39 @@ async function sendAiReply(accountId, toWxid, text, replyTo) {
             });
             if (qr.ok) {
                 _outboundDedup.set(dedupKey, now);
+                recordHeartflowBotReply(accountId, toWxid, text, now);
                 return { ok: true, msgId: qr.data?.msgId };
             }
             return { ok: false, error: qr.msg };
         }
         const r = await sendText(accountId, toWxid, text);
-        if (r.ok)
+        if (r.ok) {
             _outboundDedup.set(dedupKey, now);
+            recordHeartflowBotReply(accountId, toWxid, text, now);
+        }
         return r.ok ? { ok: true, msgId: r.msgId } : { ok: false, error: r.error };
     }
     catch (e) {
         return { ok: false, error: formatErr(e) };
+    }
+}
+function recordHeartflowBotReply(accountId, toWxid, text, nowMs) {
+    try {
+        const acct = getDefaultAccountRegistry().get(accountId);
+        const hf = acct?.config.heartflow;
+        if (!hf?.enabled)
+            return;
+        if (!toWxid.endsWith("@chatroom") && !toWxid.includes("@chatroom"))
+            return;
+        recordRawMessage(toWxid, {
+            senderName: "bot",
+            senderId: "bot",
+            content: text,
+            timestamp: nowMs / 1000,
+            isBot: true,
+        });
+    }
+    catch {
     }
 }
 export async function dispatchInboundToOpenClaw(msg, ctx = {}) {
@@ -531,7 +557,12 @@ async function dispatchOne(msg, ctx = {}) {
     const injectedGroupContext = groupCtxEnabled
         ? await buildGroupContextFromDb(msg)
         : null;
-    const ctxPayload = buildCtxPayload(msg, sessionKey, injectedGroupContext ?? undefined);
+    let heartflowNote = null;
+    if (msg.trigger === "heartflow") {
+        heartflowNote =
+            "（注意：本次是你主动参与群聊的，不是用户叫你。回复应自然随意，像普通群成员一样加入话题。不要提\"我是机器人\"或解释你的机制。）";
+    }
+    const ctxPayload = buildCtxPayload(msg, sessionKey, injectedGroupContext ?? undefined, heartflowNote ?? undefined);
     try {
         await runtime.session.recordInboundSession({ storePath, sessionKey, ctx: ctxPayload });
     }

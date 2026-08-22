@@ -1,6 +1,6 @@
 # 快速开始 (GETTING_STARTED.md)
 
-> **当前版本: v1.3.63** · 从零到可用 · 预计 20 分钟
+> **当前版本: v1.3.75** · 从零到可用 · 预计 20 分钟
 > 本包只含编译产物, 不含 TypeScript 源码。
 
 ---
@@ -180,7 +180,15 @@ journalctl --user -u "${GATEWAY_SERVICE:-openclaw-gateway}" -n 50 | grep "accoun
   "nickname": "YourBot",            // 机器人昵称
   "requireAtMention": true,
   "debounceMs": 1500,
-  "agent": "wpp-wechat"             // OpenClaw agent 绑定 (必填, 禁止 "main")
+  "agent": "wpp-wechat",            // OpenClaw agent 绑定 (必填, 禁止 "main")
+
+  // v1.3.75 心流主动回复 (可选, 默认关闭)
+  "heartflow": {
+    "enabled": true,                // 总开关: true=未@群消息也主动参与
+    "replyThreshold": 0.6,          // 回复阈值 (0-1, 越高越保守)
+    "contextMessagesCount": 5,      // 判断小模型看的上下文条数
+    "whitelistGroups": []           // 群白名单 (空=继承 groupAllowFrom 白名单群)
+  }
 }
 ```
 
@@ -188,6 +196,12 @@ journalctl --user -u "${GATEWAY_SERVICE:-openclaw-gateway}" -n 50 | grep "accoun
 > - 凭证一律走 env var, JSON 永远留空
 > - `allowFrom` 留空 = 拒绝所有私聊 (fail-closed)
 > - `agent` 必填且禁止 `"main"` (防多账号串号)
+>
+> **心流 (heartflow) 说明**:
+> - 默认 `enabled:false`, 不开启时行为与旧版完全一致 (只回 @)
+> - 开启后, **白名单群内**未@的消息也会由小模型判断是否主动参与 (5 维打分: 相关度/意愿/社交/时机/连贯)
+> - 精力状态机自动控频 (回复后精力下降), 不会刷屏
+> - 判断模型走 `MINIMAX_API_KEY` (与群聊上下文 LLM 判断共用), 需已配置
 
 ---
 

@@ -255,6 +255,7 @@ export async function startAccountById(accountId, _agentId = "main") {
             requireAtMention: cfg.requireAtMention,
             groupPolicy: cfg.groupPolicy ?? "closed",
             groupAllowFrom: cfg.groupAllowFrom ?? [],
+            heartflow: cfg.heartflow,
         });
     }
     const triggerConfig = runtimeTriggerConfigs.get(accountId);
@@ -294,6 +295,8 @@ export async function startAccountById(accountId, _agentId = "main") {
                 await handleFileHelperCommand(accountId, msg, command);
             },
             groupContextEnabled: cfg.groupContextEnabled === true,
+            heartflow: cfg.heartflow,
+            botNickname: cfg.nickname,
         }));
     }
     const inboundHandler = runtimeInboundHandlers.get(accountId);

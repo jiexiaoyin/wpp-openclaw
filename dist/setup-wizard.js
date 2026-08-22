@@ -228,6 +228,7 @@ export async function writeAccountFile(input) {
         ...(input.embedIntentEnabled !== undefined ? { embedIntentEnabled: input.embedIntentEnabled } : {}),
         ...(input.embedIntentTopN !== undefined ? { embedIntentTopN: input.embedIntentTopN } : {}),
         ...(input.embedIntentThreshold !== undefined ? { embedIntentThreshold: input.embedIntentThreshold } : {}),
+        ...(input.heartflow ? { heartflow: input.heartflow } : {}),
         nickname: input.nickname,
         requireAtMention: input.requireAtMention,
         debounceMs: input.debounceMs,
@@ -444,7 +445,7 @@ export async function migrateFromV0Config(configJsonPath, accountId = "default",
         selfWxid: acc.selfWxid ?? "",
         nickname: acc.nickname ?? accountId,
         requireAtMention: acc.requireAtMention ?? true,
-        debounceMs: acc.debounceMs ?? 1500,
+        debounceMs: acc.debounceMs ?? 500,
     };
     const accountsDir = getAccountsDir();
     const newFile = join(accountsDir, `${accountId}.json`);
