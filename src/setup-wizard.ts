@@ -717,7 +717,7 @@ export async function migrateFromV0Config(
     selfWxid: acc.selfWxid ?? "",
     nickname: acc.nickname ?? accountId,
     requireAtMention: acc.requireAtMention ?? true,
-    debounceMs: acc.debounceMs ?? 1500,
+    debounceMs: acc.debounceMs ?? 500, // v1.3.74 PERF: 与 DEFAULT_DEBOUNCE_MS 对齐
   };
 
   const accountsDir = getAccountsDir();

@@ -2,7 +2,7 @@
 
 export const CHANNEL_ID = "wechatpadpro";
 export const PLUGIN_NAME = "wechatpadpro";
-export const PLUGIN_VERSION = "1.3.74";
+export const PLUGIN_VERSION = "1.3.75";
 
 // 默认 bot 昵称 (群 @ 触发检测用; accounts/<id>.json nickname 优先, 配置驱动 + 默认兜底)
 export const DEFAULT_BOT_NICKNAME = "YourBot";
@@ -48,7 +48,14 @@ export const DEFAULT_WEBHOOK_PORT = 4398;
 export const DEFAULT_WEBHOOK_PATH = "/wechatpadpro/webhook";
 
 // 默认 debounce 毫秒 (跟 本项目 一致)
-export const DEFAULT_DEBOUNCE_MS = 1500;
+/**
+ * v1.3.74 PERF: 默认 debounce 1500ms → 500ms (老板 2026-08-22 拍板, 高 ROI 性能优化).
+ *   - 1500ms 是早期设计保守值, 实测 webhook 到达延迟中位数 < 200ms, debounce 等到 1.5s 浪费明显
+ *   - 500ms 仍保留多包批合并 (用户配置优先 accounts/*.json debounceMs 不变)
+ *   - 配合 WS+webhook dedupe (webhook-receiver SeenTracker 范式), 整体回复延迟 -1s
+ *   - 风险: 极低 — 用户在 accounts/*.json 已显式配置的不受影响; 极端群高频消息场景下 batch 略小但功能等价
+ */
+export const DEFAULT_DEBOUNCE_MS = 500;
 
 // 30 分钟 in-memory dedupe TTL (标准值)
 export const DEDUPE_TTL_MS = 30 * 60 * 1000;
