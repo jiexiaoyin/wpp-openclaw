@@ -32,6 +32,7 @@ import { classifyGroupIntent, decideIntentWithLlm, needsLlm, normalizeTriggerTex
 import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
 import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
 import { recordRawMessage, type HeartflowConfig } from "../inbound/heartflow.js";
+import { getGroupMood, buildMoodSystemPrompt } from "../inbound/affection.js";
 // re-export (兼容旧测试/外部引用) — classifyGroupIntent/GroupIntent 定义在 intent-llm.ts
 export { classifyGroupIntent, type GroupIntent } from "./intent-llm.js";
 // 写内存 chat info cache, outbound 路径读 (见 state.ts setSessionChatInfo)
@@ -490,6 +491,7 @@ function buildCtxPayload(
   sessionKey: string,
   injectedContext?: string,
   heartflowNote?: string,
+  moodNote?: string,
 ): Record<string, unknown> {
   const isGroup = msg.peerKind === "group";
   const toWxid = msg.toWxid ?? msg.accountId;
@@ -500,6 +502,9 @@ function buildCtxPayload(
   }
   if (heartflowNote) {
     body = `${body}\n\n[系统提示] ${heartflowNote}`;
+  }
+  if (moodNote) {
+    body = `${body}\n\n${moodNote}`;
   }
   const quoteCtx = buildQuoteContext(msg);
   if (quoteCtx) {
@@ -793,12 +798,28 @@ async function dispatchOne(
       "（注意：本次是你主动参与群聊的，不是用户叫你。回复应自然随意，像普通群成员一样加入话题。不要提\"我是机器人\"或解释你的机制。）";
   }
 
+  // v1.3.77 AFFECTION: 好感度情绪注入 (群聊) —
+  //   群消息处理时已更新好感度+情绪状态, 这里把当前情绪注入 system prompt,
+  //   让 AI 回复风格受情绪影响 (移植自 affection_manager.get_mood_influenced_system_prompt)
+  //   仅在 affection enabled 且是群消息时注入
+  let moodNote: string | null = null;
+  if (isGroupMsg && (getDefaultAccountRegistry().get(msg.accountId)?.config.affection?.enabled)) {
+    try {
+      const mood = getGroupMood(roomId ?? "", Date.now());
+      const moodPrompt = buildMoodSystemPrompt("", mood);
+      if (moodPrompt.trim()) moodNote = `[系统提示-当前情绪] ${moodPrompt.trim()}`;
+    } catch {
+      /* 情绪注入失败不阻塞 */
+    }
+  }
+
   // Step 1: 记录入站消息 (AI 上下文), ctx 必填
   const ctxPayload = buildCtxPayload(
     msg,
     sessionKey,
     injectedGroupContext ?? undefined,
     heartflowNote ?? undefined,
+    moodNote ?? undefined,
   );
   try {
     await runtime.session.recordInboundSession({ storePath, sessionKey, ctx: ctxPayload });

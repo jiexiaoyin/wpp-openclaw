@@ -343,6 +343,9 @@ export interface AddAccountInput {
   // ============ v1.3.76 JARGON (2026-08-22 黑话挖掘): 群黑话自主学习 ============
   /** 黑话挖掘配置. 默认 {enabled:false} (关闭). 显式 enabled:true 才启用. */
   jargon?: import("./inbound/jargon.js").JargonConfig;
+  // ============ v1.3.77 AFFECTION (2026-08-22 好感度): 社交关系系统 ============
+  /** 好感度/社交关系配置. 默认 {enabled:false} (关闭). 显式 enabled:true 才启用. */
+  affection?: import("./inbound/affection.js").AffectionConfig;
 }
 
 /** 校验输入 + 写 accounts/<id>.json. 抛错 if 失败. */
@@ -407,6 +410,8 @@ export async function writeAccountFile(input: AddAccountInput): Promise<{ filePa
     ...(input.heartflow ? { heartflow: input.heartflow } : {}),
     // v1.3.76 JARGON: 黑话挖掘配置 (默认 undefined → 插件默认 {enabled:false})
     ...(input.jargon ? { jargon: input.jargon } : {}),
+    // v1.3.77 AFFECTION: 好感度配置 (默认 undefined → 插件默认 {enabled:false})
+    ...(input.affection ? { affection: input.affection } : {}),
     nickname: input.nickname,
     requireAtMention: input.requireAtMention,
     debounceMs: input.debounceMs,

@@ -415,6 +415,8 @@ export async function startAccountById(
       botNickname: cfg.nickname,
       // v1.3.76 JARGON: 黑话挖掘配置 (旁路采集 + 定时挖掘)
       jargon: resolveAiConfig(cfg, "jargon"),
+      // v1.3.77 AFFECTION: 好感度/社交关系配置 (旁路处理)
+      affection: resolveAiConfig(cfg, "affection"),
     }));
   }
   const inboundHandler = runtimeInboundHandlers.get(accountId)!;

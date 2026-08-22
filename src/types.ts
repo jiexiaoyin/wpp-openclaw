@@ -183,6 +183,13 @@ export interface WppAccountConfig {
    */
   jargon?: import("./inbound/jargon.js").JargonConfig;
   /**
+   * v1.3.77 AFFECTION: 好感度/社交关系系统
+   *   enabled=false (默认) 完全关闭
+   *   开启后旁路处理群消息 → 交互分类 (关键词规则+可选LLM) → 好感度增减 + 情绪状态
+   *   情绪注入 system prompt (dispatcher), 影响 AI 回复风格
+   */
+  affection?: import("./inbound/affection.js").AffectionConfig;
+  /**
    * v1.2.0 VENDOR-MCP: 是否启用 vendor MCP 增强 (文件消息下载尝试)
    * 默认 true; false 则完全跳过 MCP (纯 v1 确定性回复兜底)
    * 注: 只调只读工具 (wechat_get_recent_messages), 不碰写, 不影响微信

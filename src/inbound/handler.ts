@@ -46,6 +46,10 @@ import {
   getRecentMessages,
   type JargonConfig,
 } from "./jargon.js";
+import {
+  processAffectionMessage,
+  type AffectionConfig,
+} from "./affection.js";
 
 // 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
 // 解法: enrich 时 trackEnrich 记录 promise, 触发 dispatch 前 waitForPendingEnrich 等待同 sender 的 enrich 完成。
@@ -132,6 +136,8 @@ export interface WppInboundHandlerOpts {
   botNickname?: string;
   /** v1.3.76 JARGON: 黑话挖掘配置 (默认 {enabled:false}; 旁路采集 + 定时挖掘) */
   jargon?: JargonConfig;
+  /** v1.3.77 AFFECTION: 好感度/社交关系配置 (默认 {enabled:false}; 旁路处理) */
+  affection?: AffectionConfig;
 }
 
 /**
@@ -511,6 +517,30 @@ export function createWppInboundHandler(
               apiKey: process.env.MINIMAX_API_KEY ?? "",
             }).catch((e) => warn(`[WPP JARGON] mine failed (non-fatal): ${formatErr(e)}`));
           }
+        }
+      }
+
+      // v1.3.77 AFFECTION: 好感度/社交关系旁路处理 —
+      //   对群消息做交互分类 (关键词规则 + 可选 LLM) → 更新好感度 + 情绪状态。
+      //   纯旁路不触发 AI, 情绪状态注入在 dispatcher (dispatchOne)。
+      if (opts.affection?.enabled) {
+        for (const m of batch) {
+          const tr = persistResults.get(m);
+          if (tr?.via === "blocked") continue;
+          if (m.peerKind !== "group") continue;
+          if (m.msgType === 10000) continue; // 系统通知不处理
+          if (m.fromWxid === opts.triggerCtx.botWxid) continue; // 自己消息不累计
+          const content = m.content ?? "";
+          if (!content.trim()) continue;
+          void processAffectionMessage(
+            m.chatroomId ?? m.peerId,
+            m.fromWxid ?? "",
+            content,
+            m.fromNickname ?? "",
+            opts.affection,
+            { apiKey: process.env.MINIMAX_API_KEY ?? "" },
+            Date.now(),
+          ).catch(() => { /* 好感度处理失败不阻塞 */ });
         }
       }
 

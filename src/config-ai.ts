@@ -8,7 +8,7 @@ import type { WppAccountConfig } from "./types.js";
 
 export function resolveAiConfig<T extends { enabled?: boolean; model?: string; timeoutMs?: number }>(
   cfg: WppAccountConfig,
-  kind: "heartflow" | "jargon",
+  kind: "heartflow" | "jargon" | "affection",
 ): T | undefined {
   const ai = cfg.ai;
   const base = cfg[kind] as T | undefined;
