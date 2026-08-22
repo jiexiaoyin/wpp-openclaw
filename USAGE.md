@@ -1,6 +1,6 @@
 # 使用指南 (USAGE.md)
 
-> **当前版本: v1.3.75** · 安装见 [GETTING_STARTED.md](./GETTING_STARTED.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
+> **当前版本: v1.3.78** · 安装见 [GETTING_STARTED.md](./GETTING_STARTED.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
 
 WeChatPadPro OpenClaw Plugin 在 OpenClaw 框架下的使用指南: 加载、Agent Tools、消息收发、配置、多账号、验证与监控。
 
@@ -120,6 +120,17 @@ AI 决定回复 → 调 `send_*` 工具 → 服务端转发 → 用户微信收�
 
 > **⚠️ selfWxid 语义**: `selfWxid` 必须是 **bot 自己** 的 wxid (插件用它判断"这条消息是不是 bot 自己发的"), 不是使用者主号。填错会导致 AI 自我回复循环。
 
+**统一 AI 判断模型 (v1.3.77, 可选)**:
+
+```json
+"ai": {
+  "judgeModel": "MiniMax-M2.5",   // 心流+黑话共用判断模型
+  "timeoutMs": 5000
+}
+```
+- `heartflow.model` / `jargon.model` 未配置时默认引用 `ai.judgeModel`
+- 各自配置了 `model` → 覆盖 `ai.judgeModel`
+
 **心流主动回复 (v1.3.75, 可选)**:
 
 ```json
@@ -139,6 +150,34 @@ AI 决定回复 → 调 `send_*` 工具 → 服务端转发 → 用户微信收�
 - 开启后白名单群内未@消息由**小模型 5 维打分**判断是否主动参与, 精力状态机自动控频
 - 判断模型走 `MINIMAX_API_KEY`, 失败自动降级不打扰
 - 与群白名单 (`groupPolicy:allowlist` + `groupAllowFrom`) **天然叠加**: 只会在白名单群内主动发言
+
+**群黑话挖掘 (v1.3.76, 可选)**:
+
+```json
+"jargon": {
+  "enabled": true,              // true=自动挖掘群黑话
+  "mineIntervalSec": 60,        // 挖掘间隔秒
+  "minMessages": 10,            // 每次挖掘最少新增消息数
+  "maxCandidatesPerGroup": 50   // 每群候选上限
+}
+```
+- 旁路采集群消息词频 (零 LLM) → 定时 LLM 挖掘黑话 → 存 DB → AI 可调 `query_jargon` / `list_jargon` 查群黑话含义
+- 与心流/好感度互补: 心流=何时开口, 黑话=听懂群文化
+
+**好感度/社交关系 (v1.3.77, 可选)**:
+
+```json
+"affection": {
+  "enabled": true,              // true=建立好感度+情绪
+  "maxUserAffection": 100,      // 单用户好感度上限
+  "maxTotalAffection": 500,     // 群总好感度上限
+  "affectionDecayRate": 0.3,    // 重分配衰减率
+  "llmClassify": false          // true=LLM 增强交互分类 (默认纯规则)
+}
+```
+- 17 交互类型 × 情绪修正 → 好感度增减; 情绪注入 system prompt 影响回复风格
+- 关键词规则分类 (零 LLM) + 可选 LLM 增强; 侮辱/威胁会降好感度 + 触发负面情绪
+- 与群白名单天然叠加: 只处理白名单群
 
 ### 4.3 环境变量
 
@@ -217,7 +256,7 @@ ss -tlnp | grep 4398              # webhook 监听确认
 
 ### 7.3 日志与监控
 
-- 日志格式: `ISO时间 LEVEL [WPP v1.3.75] msg key=value`
+- 日志格式: `ISO时间 LEVEL [WPP v1.3.78] msg key=value`
 - DEBUG: `WPP_DEBUG=1`
 - Prometheus metrics: 14+ counters (received / processed / rejected_* / timeout 等)
 
