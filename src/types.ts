@@ -158,6 +158,13 @@ export interface WppAccountConfig {
   blacklistGroups?: string[];
   chatroomDebug?: boolean;
   /**
+   * v1.3.75 HEARTFLOW: 群聊主动回复 (心流机制, 未@消息主动参与)
+   *   enabled=false (默认) 完全关闭; 显式 true 才启用
+   *   配置项: model/replyThreshold/energyDecayRate/energyRecoveryRate/contextMessagesCount/
+   *           minReplyIntervalSec/whitelistGroups/weights/includeReasoning/maxRetries/timeoutMs
+   */
+  heartflow?: import("./inbound/heartflow.js").HeartflowConfig;
+  /**
    * v1.2.0 VENDOR-MCP: 是否启用 vendor MCP 增强 (文件消息下载尝试)
    * 默认 true; false 则完全跳过 MCP (纯 v1 确定性回复兜底)
    * 注: 只调只读工具 (wechat_get_recent_messages), 不碰写, 不影响微信
@@ -358,7 +365,8 @@ export interface WppInboundMessage {
     | "keyword"
     | "msgType"
     | "quoteBot"
-    | "group-open";
+    | "group-open"
+    | "heartflow"; // v1.3.75: 心流主动参与群聊
   /** Phase D 加: 群消息提取的 @列表 (供 prompt / debug) */
   atUserList?: string[];
 }

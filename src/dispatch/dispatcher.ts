@@ -31,6 +31,7 @@ import { extractReferencedFromReplyContext, extractReferencedFromApp } from "../
 import { classifyGroupIntent, decideIntentWithLlm, needsLlm, normalizeTriggerText, toIntentCandidate } from "./intent-llm.js";
 import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
 import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
+import { recordRawMessage, type HeartflowConfig } from "../inbound/heartflow.js";
 // re-export (兼容旧测试/外部引用) — classifyGroupIntent/GroupIntent 定义在 intent-llm.ts
 export { classifyGroupIntent, type GroupIntent } from "./intent-llm.js";
 // 写内存 chat info cache, outbound 路径读 (见 state.ts setSessionChatInfo)
@@ -488,6 +489,7 @@ function buildCtxPayload(
   msg: WppInboundMessage,
   sessionKey: string,
   injectedContext?: string,
+  heartflowNote?: string,
 ): Record<string, unknown> {
   const isGroup = msg.peerKind === "group";
   const toWxid = msg.toWxid ?? msg.accountId;
@@ -495,6 +497,9 @@ function buildCtxPayload(
   let body = msg.content || "";
   if (injectedContext) {
     body = `${injectedContext}\n\n${body}`;
+  }
+  if (heartflowNote) {
+    body = `${body}\n\n[系统提示] ${heartflowNote}`;
   }
   const quoteCtx = buildQuoteContext(msg);
   if (quoteCtx) {
@@ -635,16 +640,42 @@ async function sendAiReply(
       });
       if (qr.ok) {
         _outboundDedup.set(dedupKey, now); // 成功发送后才记 dedup ts
+        recordHeartflowBotReply(accountId, toWxid, text, now);
         return { ok: true, msgId: (qr.data as { msgId?: string } | undefined)?.msgId };
       }
       return { ok: false, error: qr.msg };
     }
     // 无被回复消息 → 普通文本 (兼容手动调用/工具场景)
     const r = await sendText(accountId, toWxid, text);
-    if (r.ok) _outboundDedup.set(dedupKey, now); // 成功发送后才记 dedup ts
+    if (r.ok) {
+      _outboundDedup.set(dedupKey, now); // 成功发送后才记 dedup ts
+      recordHeartflowBotReply(accountId, toWxid, text, now);
+    }
     return r.ok ? { ok: true, msgId: r.msgId } : { ok: false, error: r.error };
   } catch (e) {
     return { ok: false, error: formatErr(e) };
+  }
+}
+
+/**
+ * v1.3.75 HEARTFLOW: 记录 bot 发出的群聊回复进心流缓冲 (供后续判断小模型看"上次回复")。
+ * 仅当账号启用 heartflow 且目标是群 (含 @chatroom) 时记录; 私聊不记。
+ */
+function recordHeartflowBotReply(accountId: string, toWxid: string, text: string, nowMs: number): void {
+  try {
+    const acct = getDefaultAccountRegistry().get(accountId);
+    const hf: HeartflowConfig | undefined = acct?.config.heartflow;
+    if (!hf?.enabled) return;
+    if (!toWxid.endsWith("@chatroom") && !toWxid.includes("@chatroom")) return; // 仅群
+    recordRawMessage(toWxid, {
+      senderName: "bot",
+      senderId: "bot",
+      content: text,
+      timestamp: nowMs / 1000,
+      isBot: true,
+    });
+  } catch {
+    /* 记录失败不阻塞发送 */
   }
 }
 
@@ -753,8 +784,22 @@ async function dispatchOne(
     ? await buildGroupContextFromDb(msg)
     : null;
 
+  // v1.3.75 HEARTFLOW: 心流主动回复 → 注入"主动参与"提示 (让主 LLM 知道是自己主动插话,
+  //   不是用户叫的, 回复应自然随意像普通群成员 — 移植自 Heartflow on_llm_request)
+  //   仅在 heartflow 触发且未被引用/@ 覆盖时注入
+  let heartflowNote: string | null = null;
+  if (msg.trigger === "heartflow") {
+    heartflowNote =
+      "（注意：本次是你主动参与群聊的，不是用户叫你。回复应自然随意，像普通群成员一样加入话题。不要提\"我是机器人\"或解释你的机制。）";
+  }
+
   // Step 1: 记录入站消息 (AI 上下文), ctx 必填
-  const ctxPayload = buildCtxPayload(msg, sessionKey, injectedGroupContext ?? undefined);
+  const ctxPayload = buildCtxPayload(
+    msg,
+    sessionKey,
+    injectedGroupContext ?? undefined,
+    heartflowNote ?? undefined,
+  );
   try {
     await runtime.session.recordInboundSession({ storePath, sessionKey, ctx: ctxPayload });
   } catch (e) {

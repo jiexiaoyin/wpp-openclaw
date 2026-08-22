@@ -154,7 +154,7 @@ test("constants — channel + msgType sanity", () => {
   assert.equal(MsgType.VOICE, 34);
   assert.equal(PeerKind.DIRECT, "direct");
   assert.equal(PeerKind.GROUP, "group");
-  assert.equal(DEFAULT_DEBOUNCE_MS, 1500);
+  assert.equal(DEFAULT_DEBOUNCE_MS, 500); // v1.3.74: 1500→500 老板拍板
   assert.equal(WEBHOOK_BODY_LIMIT_BYTES, 10 * 1024 * 1024);
   assert.equal(DEDUPE_TTL_MS, 30 * 60 * 1000);
 });

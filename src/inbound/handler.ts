@@ -25,6 +25,19 @@ import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1C
 import { getDefaultAccountRegistry } from "../account-state.js";
 import type { WppInboundMessage, WppWebhookPayload } from "../types.js";
 import type { WppAccountCtx } from "../send/factory.js";
+import {
+  judgeHeartflow,
+  recordRawMessage,
+  getChatState,
+  buildChatContextSummary,
+  getRawBuffer,
+  formatRawMessages,
+  lastBotReply,
+  secondsSinceLastReply,
+  recordActiveReply,
+  recordPassiveMessage,
+  type HeartflowConfig,
+} from "./heartflow.js";
 
 // 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
 // 解法: enrich 时 trackEnrich 记录 promise, 触发 dispatch 前 waitForPendingEnrich 等待同 sender 的 enrich 完成。
@@ -105,6 +118,10 @@ export interface WppInboundHandlerOpts {
   allowFrom?: string[];
   /** v1.2.0 VENDOR-MCP: 是否启用 MCP 文件增强 (默认 true; false 则纯确定性回复兜底) */
   mcpEnabled?: boolean;
+  /** v1.3.75 HEARTFLOW: 心流配置 (触发器 shouldTrigger 已用 gate; 这里做 async judge) */
+  heartflow?: HeartflowConfig;
+  /** v1.3.75 HEARTFLOW: 机器人昵称 (判断 prompt 用) */
+  botNickname?: string;
 }
 
 /**
@@ -438,6 +455,25 @@ export function createWppInboundHandler(
         }
       }
 
+      // v1.3.75 HEARTFLOW: 记录所有群消息 (含 bot 自己发的 via outbound) 进心流缓冲 —
+      //   供判断小模型看上下文 (与 Heartflow _record_raw_message 一致)。
+      //   仅记录未 blocked 的群消息 (隐私: 黑名单/非白名单不入缓冲)。
+      if (opts.heartflow?.enabled) {
+        for (const m of batch) {
+          const tr = persistResults.get(m);
+          if (tr?.via === "blocked") continue;
+          if (m.peerKind !== "group") continue;
+          if (m.msgType === 10000) continue; // 系统通知不记
+          recordRawMessage(m.chatroomId ?? m.peerId, {
+            senderName: m.fromNickname ?? m.fromWxid ?? "未知",
+            senderId: m.fromWxid ?? "",
+            content: m.content ?? "",
+            timestamp: m.ts ?? Date.now() / 1000,
+            isBot: !!opts.triggerCtx.botWxid && m.fromWxid === opts.triggerCtx.botWxid,
+          });
+        }
+      }
+
       const triggerResults = persistResults; // Step 2 已算 (same ctxForTrigger + shouldTrigger)
       const dispatched: WppInboundMessage[] = [];
       for (const [m, t] of triggerResults) {
@@ -480,6 +516,43 @@ export function createWppInboundHandler(
           if (t.via === "at" || t.via === "keyword" || t.via === "msgType" ||
               t.via === "quoteBot" || t.via === "group-open") {
             dispatched.push(m);
+          } else if (t.via === "heartflow" && opts.heartflow?.enabled) {
+            // v1.3.75 HEARTFLOW: 异步小模型打分判断 — 通过才 dispatch (真触发), 不过记录被动状态
+            //   静默失败 (无 key/超时/坏 JSON) → 不 dispatch (保守, 不打扰群聊)
+            const chatId = m.chatroomId ?? m.peerId;
+            const hfCfg = opts.heartflow;
+            try {
+              const nowMs = Date.now();
+              const st = getChatState(chatId, hfCfg, nowMs);
+              const judgeResult = await judgeHeartflow(
+                {
+                  chatId,
+                  botNickname: opts.botNickname ?? "",
+                  content: m.content ?? "",
+                  senderName: m.fromNickname ?? m.fromWxid ?? "未知",
+                  chatContext: buildChatContextSummary(chatId, hfCfg, nowMs),
+                  recentMessages: formatRawMessages(getRawBuffer(chatId, hfCfg.contextMessagesCount ?? 5)),
+                  lastBotReply: lastBotReply(chatId) ?? "",
+                  secondsSinceLastReply: secondsSinceLastReply(chatId, nowMs),
+                  energy: st.energy,
+                },
+                hfCfg,
+                {
+                  apiKey: process.env.MINIMAX_API_KEY ?? "",
+                },
+              );
+              if (judgeResult?.shouldReply) {
+                m.trigger = "heartflow";
+                recordActiveReply(chatId, hfCfg, nowMs);
+                dispatched.push(m);
+                info(`[WPP HEARTFLOW] trigger: peer=${m.peerId} msgId=${m.msgId} score=${judgeResult.overallScore.toFixed(2)} reasoning=${judgeResult.reasoning.slice(0, 40) ?? ""}`);
+              } else {
+                recordPassiveMessage(chatId, hfCfg, nowMs);
+                debug(`[WPP HEARTFLOW] skip (score=${judgeResult?.overallScore.toFixed(2) ?? "null"}): peer=${m.peerId}`);
+              }
+            } catch (e) {
+              warn(`[WPP HEARTFLOW] judge error (skip): ${formatErr(e)}`);
+            }
           }
         }
       }

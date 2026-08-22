@@ -20,7 +20,7 @@ describe("resolveGlobalConfig (v1.1.40 GLOBAL-CONFIG)", () => {
     assert.equal(r.defaults.webhookHost, "127.0.0.1");
     assert.equal(r.defaults.webhookPort, 4398);
     assert.equal(r.defaults.webhookPath, "/wechatpadpro/webhook");
-    assert.equal(r.defaults.debounceMs, 1500);
+    assert.equal(r.defaults.debounceMs, 500); // v1.3.74: 1500→500 老板拍板
   });
 
   test("runtime 默认值正确", () => {

@@ -364,6 +364,7 @@ export async function startAccountById(
       requireAtMention: cfg.requireAtMention,
       groupPolicy: cfg.groupPolicy ?? "closed",
       groupAllowFrom: cfg.groupAllowFrom ?? [],
+      heartflow: cfg.heartflow, // v1.3.75: 心流配置 (默认 {enabled:false})
     });
   }
   const triggerConfig = runtimeTriggerConfigs.get(accountId)!;
@@ -406,6 +407,9 @@ export async function startAccountById(
         await handleFileHelperCommand(accountId, msg, command);
       },
       groupContextEnabled: cfg.groupContextEnabled === true,
+      // v1.3.75 HEARTFLOW: 心流配置 + 机器人昵称 (未@群消息主动参与判断)
+      heartflow: cfg.heartflow,
+      botNickname: cfg.nickname,
     }));
   }
   const inboundHandler = runtimeInboundHandlers.get(accountId)!;

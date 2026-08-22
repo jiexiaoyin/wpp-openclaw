@@ -3,8 +3,21 @@
 
 import type { WppInboundMessage } from "../types.js";
 import { isBotMentionedByText } from "./parser/mention.js";
+import type { HeartflowConfig } from "./heartflow.js";
+import { checkHeartflowGate } from "./heartflow.js";
 
 export type GroupPolicyValue = "open" | "disabled" | "allowlist" | "closed";
+
+/** v1.3.75: 触发来源 — 新增 heartflow (心流主动参与群聊, 未@消息) */
+export type TriggerVia =
+  | "at"
+  | "keyword"
+  | "msgType"
+  | "quoteBot"
+  | "group-open"
+  | "heartflow"
+  | "blocked"
+  | null;
 
 export interface WppTriggerConfig {
   /** 群聊 requireAtMention — 注意: 当前未在 shouldTrigger 内实现 (见下方说明) */
@@ -27,6 +40,8 @@ export interface WppTriggerConfig {
   blacklistGroups: string[];
   /** 是否启用 debug 短路 (强制触发, 不真发) */
   chatroomDebug?: boolean;
+  /** v1.3.75 HEARTFLOW: 心流主动回复配置 (未@群消息主动参与) */
+  heartflow?: HeartflowConfig;
   /**
    * 群聊策略 (live 路径强制执行)
    * - "open"      全放行 (走 4-way trigger)
@@ -65,7 +80,7 @@ export function shouldTrigger(
   msg: WppInboundMessage,
   cfg: WppTriggerConfig,
   ctx: WppAccountTriggerCtx,
-): { triggered: boolean; via: "at" | "keyword" | "msgType" | "quoteBot" | "group-open" | "blocked" | null } {
+): { triggered: boolean; via: TriggerVia } {
   // 自回环过滤: bot 自己发的消息不回 (防 vendor 回推 self → 自问自答)
   if (ctx.botWxid && msg.fromWxid === ctx.botWxid) {
     return { triggered: false, via: "blocked" };
@@ -135,6 +150,21 @@ export function shouldTrigger(
     }
   }
 
+  // v1.3.75 HEARTFLOW: 未@群消息 → 心流候选 (同步门禁 + 异步 LLM 打分由 handler 完成)
+  //   门禁通过 → via:"heartflow" (pending), handler 用 judgeHeartflow 判断是否真触发
+  //   门禁不过 (disabled/白名单外/空/冷却) → via:null (不触发)
+  if (msg.peerKind === "group" && cfg.heartflow?.enabled) {
+    const gate = checkHeartflowGate(
+      msg.chatroomId ?? msg.peerId,
+      msg.content ?? "",
+      cfg.heartflow,
+      Date.now(),
+    );
+    if (gate.allowed) {
+      return { triggered: true, via: "heartflow" };
+    }
+  }
+
   return { triggered: false, via: null };
 }
 
@@ -174,5 +204,6 @@ export function defaultTriggerConfig(): WppTriggerConfig {
     chatroomDebug: false,
     groupPolicy: "open",
     groupAllowFrom: [],
+    heartflow: { enabled: false }, // v1.3.75: 默认关闭
   };
 }
