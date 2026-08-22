@@ -2,8 +2,8 @@
 
 **日期**: 2026-08-20
 **对比**: 旧 `wechatpadpro:local` (swagger 254 端点) vs 新 `wechatpadpro/wechatpadprobusiness:v2026.08.18.1` (swagger 313 端点)
-**插件版本**: v1.3.65
-**范围**: 插件实际调用的 237 个端点全量核对
+**插件版本**: v1.3.74
+**范围**: 插件实际注册的 307 个端点全量核对
 
 ---
 

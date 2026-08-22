@@ -337,6 +337,9 @@ export interface AddAccountInput {
   // ============ v1.3.63 (2026-08-13 外部审计 follow-up): MCP 默认值修复 ============
   /** MCP 增强开关. 默认 false (vendor realtime 未开通时防白耗 5s connect; 与 default.json 一致). 显式 true 才开. */
   mcpEnabled?: boolean;
+  // ============ v1.3.75 HEARTFLOW (2026-08-22 心流主动回复): 未@群消息主动参与 ============
+  /** 心流主动回复配置. 默认 {enabled:false} (关闭). 显式 enabled:true 才启用. */
+  heartflow?: import("./inbound/heartflow.js").HeartflowConfig;
 }
 
 /** 校验输入 + 写 accounts/<id>.json. 抛错 if 失败. */
@@ -397,6 +400,8 @@ export async function writeAccountFile(input: AddAccountInput): Promise<{ filePa
     ...(input.embedIntentEnabled !== undefined ? { embedIntentEnabled: input.embedIntentEnabled } : {}),
     ...(input.embedIntentTopN !== undefined ? { embedIntentTopN: input.embedIntentTopN } : {}),
     ...(input.embedIntentThreshold !== undefined ? { embedIntentThreshold: input.embedIntentThreshold } : {}),
+    // v1.3.75 HEARTFLOW: 心流配置 (默认 undefined → 插件默认 {enabled:false})
+    ...(input.heartflow ? { heartflow: input.heartflow } : {}),
     nickname: input.nickname,
     requireAtMention: input.requireAtMention,
     debounceMs: input.debounceMs,

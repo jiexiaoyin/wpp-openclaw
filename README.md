@@ -1,4 +1,4 @@
-# WeChatPadPro OpenClaw Plugin v1.3.54
+# WeChatPadPro OpenClaw Plugin v1.3.75
 
 **基于 WeChatPadPro (微信 Pad 协议 HTTP API) 的 OpenClaw 适配插件**
 
@@ -6,13 +6,14 @@
 
 ## 状态
 
-- **版本**: v1.3.54 (生产已部署)
-- **能力**: 收发文本/图片/语音/视频/文件、AI 引用回复、图片 AI 识别(v1 schema 64KB)、语音收发(silk 自动转码)、群接龙自动触发 AI、文件确定性回复、多账号
+- **版本**: v1.3.75 (生产已部署)
+- **能力**: 收发文本/图片/语音/视频/文件、AI 引用回复、图片 AI 识别(v1 schema 64KB)、语音收发(silk 自动转码)、群接龙自动触发 AI、文件确定性回复、**心流主动回复**、多账号
+- **心流 HEARTFLOW** (v1.3.75): 未@群消息由**小模型 5 维打分** (相关度/意愿/社交/时机/连贯) 判断是否主动参与, **精力状态机**自动控频防刷屏, 让机器人在群里更"活" (需 `MINIMAX_API_KEY` + `heartflow.enabled:true`)
 - **语音 SILK-ONLY** (v1.3.52): vendor `/Msg/SendVoice` 只收 silk, mp3 自动转码, 转码失败降级发文件 (v1.3.53)
 - **接龙 RELAY-TRIGGER** (v1.3.54): 群接龙消息自动触发 AI, AI 根据接龙主题智能应景回复 (无需 @, 5 分钟节流防刷屏)
 - **MCP 增强** (v1.2.0): 集成 vendor MCP (`127.0.0.1:8062/mcp`), 文件消息经 `wechat_get_recent_messages` 尝试拿 CDN URL → OSS → AI 读到 (需 vendor realtime 权限 + `mcpEnabled=true`)
 - **OpenClaw 契约**: v2026.7.1+ 完整兼容 (register/api, config, meta, capabilities, gateway)
-- **测试**: 801/801 全绿 (73 test files)
+- **测试**: 941/941 全绿 (74 test files)
 - **生产部署**: ✅ `/root/.openclaw/extensions/wechatpadpro/` 已上线
 
 从零开始安装见 [GETTING_STARTED.md](./GETTING_STARTED.md)。详细 phase 进度见 [ROADMAP.md](./ROADMAP.md), 版本历史见 [CHANGELOG.md](./CHANGELOG.md)。

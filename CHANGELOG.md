@@ -4,6 +4,15 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.75] HEARTFLOW 心流主动回复
+- 2026-08-22 (心流机制 — 老板拍板: 让机器人在群里更"活", 移植自 AstrBot Heartflow v2.1.1)
+- **新增 `src/inbound/heartflow.ts`**: 未@群消息由**小模型 5 维打分** (相关度/意愿/社交/时机/连贯, 0-10 加权) 判断是否主动参与; 精力状态机自动控频 (回复衰减/不回复恢复/每日重置); 原始消息环形缓冲 (含 bot 自己回复); 群白名单 + 冷却期门禁; JSON 稳健解析 + 重试
+- **接入**: `triggers.ts` 未@群消息 → `via:"heartflow"` (同步门禁) → `handler.ts` 异步 judgeHeartflow 打分, 通过才 dispatch → `dispatcher.ts` 注入"主动参与"提示 + bot 群回复记录进缓冲
+- **配置**: `accounts/*.json` 加 `heartflow` 字段 (默认 `enabled:false`, 不开行为不变); 判断模型走 `MINIMAX_API_KEY`
+- **白名单叠加**: 心流天然只在 `groupAllowFrom` 白名单群内生效 (groupPolicy=allowlist 先于 heartflow gate)
+- **测试**: 941/941 全绿 (新增 tests/heartflow.test.ts 25 用例; 修 2 处 pre-existing debounce 断言 1500→500)
+- **版本**: 1.3.74 → 1.3.75
+
 ## [docs] API 使用文档完善 (2026-08-21)
 - **WPP-API-REFERENCE.md 全量升级**: 254 → **313 端点** (swagger 全量)
 - **三源合并生成**: swagger 定义 + `send/*.ts` 源码实测调用 (299 端点) + `api-notes.json` 探索笔记 (26 端点)

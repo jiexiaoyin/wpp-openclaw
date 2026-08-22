@@ -1,6 +1,6 @@
 # 使用指南 (USAGE.md)
 
-> **当前版本: v1.3.63** · 安装见 [GETTING_STARTED.md](./GETTING_STARTED.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
+> **当前版本: v1.3.75** · 安装见 [GETTING_STARTED.md](./GETTING_STARTED.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
 
 WeChatPadPro OpenClaw Plugin 在 OpenClaw 框架下的使用指南: 加载、Agent Tools、消息收发、配置、多账号、验证与监控。
 
@@ -120,6 +120,26 @@ AI 决定回复 → 调 `send_*` 工具 → 服务端转发 → 用户微信收�
 
 > **⚠️ selfWxid 语义**: `selfWxid` 必须是 **bot 自己** 的 wxid (插件用它判断"这条消息是不是 bot 自己发的"), 不是使用者主号。填错会导致 AI 自我回复循环。
 
+**心流主动回复 (v1.3.75, 可选)**:
+
+```json
+"heartflow": {
+  "enabled": true,              // true=白名单群内未@消息也主动参与
+  "replyThreshold": 0.6,        // 回复阈值 0-1 (高=保守, 低=活跃)
+  "energyDecayRate": 0.1,       // 每次回复后精力衰减 (控频)
+  "energyRecoveryRate": 0.02,   // 不回复时精力恢复
+  "contextMessagesCount": 5,    // 判断小模型上下文条数
+  "minReplyIntervalSec": 0,     // 最小回复间隔秒 (防连发)
+  "whitelistGroups": [],        // 群白名单 (空=继承 groupAllowFrom)
+  "weights": { "relevance": 0.25, "willingness": 0.2, "social": 0.2, "timing": 0.15, "continuity": 0.2 }
+}
+```
+
+- **默认关闭** (`enabled:false`), 不开行为与旧版完全一致 (只回 @)
+- 开启后白名单群内未@消息由**小模型 5 维打分**判断是否主动参与, 精力状态机自动控频
+- 判断模型走 `MINIMAX_API_KEY`, 失败自动降级不打扰
+- 与群白名单 (`groupPolicy:allowlist` + `groupAllowFrom`) **天然叠加**: 只会在白名单群内主动发言
+
 ### 4.3 环境变量
 
 | 变量 | 用途 | 必设? |
@@ -197,7 +217,7 @@ ss -tlnp | grep 4398              # webhook 监听确认
 
 ### 7.3 日志与监控
 
-- 日志格式: `ISO时间 LEVEL [WPP v1.3.63] msg key=value`
+- 日志格式: `ISO时间 LEVEL [WPP v1.3.75] msg key=value`
 - DEBUG: `WPP_DEBUG=1`
 - Prometheus metrics: 14+ counters (received / processed / rejected_* / timeout 等)
 
