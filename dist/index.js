@@ -14,12 +14,14 @@ import { buildSessionKey } from "./session-key.js";
 import { sendText as dispatchSendText, sendImage as dispatchSendImage } from "./dispatch/outbound.js";
 import { AGENT_TOOLS } from "./dispatch/agent-tools/index.js";
 import { getCurrentAccountId } from "./dispatch/account-context.js";
-import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag } from "./config.js";
+import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, ensureWebhookPathToken } from "./config.js";
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig } from "./core/runtime-config.js";
+import { resolveAiConfig } from "./config-ai.js";
 const runtimeTriggerConfigs = new Map();
 const runtimeTriggerCtxs = new Map();
 const runtimeInboundHandlers = new Map();
+const accountSyncLocks = new Map();
 let sharedWebhookServer = null;
 let sharedWebhookServerPort = null;
 export function deriveWebhookPaths(cfg) {
@@ -295,8 +297,10 @@ export async function startAccountById(accountId, _agentId = "main") {
                 await handleFileHelperCommand(accountId, msg, command);
             },
             groupContextEnabled: cfg.groupContextEnabled === true,
-            heartflow: cfg.heartflow,
+            heartflow: resolveAiConfig(cfg, "heartflow"),
             botNickname: cfg.nickname,
+            jargon: resolveAiConfig(cfg, "jargon"),
+            affection: resolveAiConfig(cfg, "affection"),
         }));
     }
     const inboundHandler = runtimeInboundHandlers.get(accountId);
@@ -314,8 +318,8 @@ export async function startAccountById(accountId, _agentId = "main") {
             const ws = new WechatpadproWsClient(cfg.wsUrl, cfg.authcode, {
                 apiClient: state.apiClient,
                 accountId,
-                onInboundMessage: async (msg) => {
-                    await inboundHandler.handle(msg.raw);
+                onInboundMessage: async (raw) => {
+                    await inboundHandler.handle(raw);
                 },
             });
             await ws.start();
@@ -324,6 +328,16 @@ export async function startAccountById(accountId, _agentId = "main") {
     }
     else if (!cfg.authcode) {
         log.warn(`ws client skipped (no authcode): ${accountId}`);
+    }
+    if (!cfg.webhookPathToken) {
+        const tk = await ensureWebhookPathToken(accountId);
+        if (tk.ok && tk.token) {
+            cfg.webhookPathToken = tk.token;
+            log.warn(`[WPP P0-1] account=${accountId} webhookPathToken 未配置, 已自动生成并写回 (token 尾部 ${tk.token.slice(-4)})`);
+        }
+        else {
+            log.warn(`[WPP P0-1] account=${accountId} webhookPathToken 缺失且自动生成失败 (${tk.reason ?? "unknown"}) — webhook 无路径鉴权!`);
+        }
     }
     const { webhookPath, businessPath } = deriveWebhookPaths(cfg);
     if (!state.webhookServer) {
@@ -339,22 +353,30 @@ export async function startAccountById(accountId, _agentId = "main") {
         srv.addPath(webhookPath, async (payload) => {
             const raw = payload;
             if (raw.MessageType === "sync_message") {
-                try {
-                    const prevSynckey = await getSynckey(accountId);
-                    const sync = await state.apiClient.call("/Msg/Sync", { Scene: 0, Synckey: prevSynckey ?? "" });
-                    const newKey = sync?.Data?.KeyBuf?.buffer;
-                    if (newKey) {
-                        await saveSynckey(accountId, newKey);
+                const prev = accountSyncLocks.get(accountId) ?? Promise.resolve();
+                const run = prev.then(async () => {
+                    try {
+                        const prevSynckey = await getSynckey(accountId);
+                        const sync = await state.apiClient.call("/Msg/Sync", { Scene: 0, Synckey: prevSynckey ?? "" });
+                        const newKey = sync?.Data?.KeyBuf?.buffer;
+                        const list = sync?.Data?.CmdList?.List ?? [];
+                        log.info(`webhook sync_message: /Msg/Sync pulled ${list.length} message(s) synckey=${prevSynckey ? "incremental" : "full"}`);
+                        for (const item of list) {
+                            await inboundHandler.handle(item);
+                        }
+                        if (newKey) {
+                            await saveSynckey(accountId, newKey);
+                        }
                     }
-                    const list = sync?.Data?.CmdList?.List ?? [];
-                    log.info(`webhook sync_message: /Msg/Sync pulled ${list.length} message(s) synckey=${prevSynckey ? "incremental" : "full"}`);
-                    for (const item of list) {
-                        await inboundHandler.handle(item);
+                    catch (e) {
+                        log.warn(`webhook sync_message /Msg/Sync failed: ${formatErr(e)}`);
                     }
-                }
-                catch (e) {
-                    log.warn(`webhook sync_message /Msg/Sync failed: ${formatErr(e)}`);
-                }
+                }).finally(() => {
+                    if (accountSyncLocks.get(accountId) === run)
+                        accountSyncLocks.delete(accountId);
+                });
+                accountSyncLocks.set(accountId, run);
+                await run;
                 return;
             }
             await inboundHandler.handle(payload);

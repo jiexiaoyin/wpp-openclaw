@@ -1,6 +1,5 @@
 import WebSocket from "ws";
 import { logObj as log, formatErr } from "./core/logger.js";
-import { payloadToInboundMessage } from "./inbound/parser.js";
 import { getSynckey, saveSynckey } from "./db.js";
 import { parseJsonText } from "./api/client.js";
 export class WechatpadproWsClient {
@@ -130,12 +129,6 @@ export class WechatpadproWsClient {
             const prevSynckey = await getSynckey(this.opts.accountId);
             const sync = await this.opts.apiClient.call("/Msg/Sync", { Scene: 0, Synckey: prevSynckey ?? "" });
             const newKey = sync?.Data?.KeyBuf?.buffer;
-            if (newKey) {
-                await saveSynckey(this.opts.accountId, newKey);
-            }
-            else {
-                log.debug(`ws sync: no KeyBuf returned (reason=${reason})`);
-            }
             const list = sync?.Data?.CmdList?.List ?? [];
             const count = list.length;
             if (count > 0) {
@@ -146,15 +139,17 @@ export class WechatpadproWsClient {
             }
             for (const raw of list) {
                 try {
-                    const obj = raw;
-                    const msg = payloadToInboundMessage(this.opts.accountId, obj);
-                    if (msg) {
-                        await this.opts.onInboundMessage(msg);
-                    }
+                    await this.opts.onInboundMessage(raw);
                 }
                 catch (e) {
                     log.warn(`ws sync inbound dispatch failed: ${formatErr(e)}`);
                 }
+            }
+            if (newKey) {
+                await saveSynckey(this.opts.accountId, newKey);
+            }
+            else {
+                log.debug(`ws sync: no KeyBuf returned (reason=${reason})`);
             }
         }
         catch (e) {
@@ -167,7 +162,9 @@ export class WechatpadproWsClient {
     scheduleRetry() {
         if (this.stopped)
             return;
-        const delay = Math.min(this.retryDelay, this.maxRetryDelay);
+        const delay = this.retryDelay >= WechatpadproWsClient.LONG_BACKOFF_MS
+            ? this.retryDelay
+            : Math.min(this.retryDelay, this.maxRetryDelay);
         log.info(`ws reconnect in ${delay}ms${this.lastBackoffReason ? ` (smart backoff: ${this.lastBackoffReason})` : ""}`);
         setTimeout(() => this.connect(), delay);
         this.retryDelay = Math.min(this.retryDelay * this.retryMultiplier, this.maxRetryDelay);

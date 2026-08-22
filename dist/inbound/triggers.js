@@ -24,7 +24,7 @@ export function shouldTrigger(msg, cfg, ctx) {
         }
         if (policy === "allowlist") {
             const allowGroups = cfg.groupAllowFrom ?? [];
-            if (allowGroups.length > 0 && !allowGroups.includes(msg.chatroomId ?? "")) {
+            if (allowGroups.length === 0 || !allowGroups.includes(msg.chatroomId ?? "")) {
                 return { triggered: false, via: "blocked" };
             }
         }

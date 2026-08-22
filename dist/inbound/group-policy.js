@@ -6,10 +6,9 @@ export function checkGroupPolicy(opts) {
     }
     if (policy === "allowlist") {
         const chatroomId = msg.chatroomId;
-        if (groupAllowFrom.length > 0 &&
-            chatroomId &&
-            !groupAllowFrom.includes(chatroomId)) {
-            return { allowed: false, reason: `groupAllowFrom mismatch: ${chatroomId}` };
+        if (groupAllowFrom.length === 0 ||
+            (chatroomId && !groupAllowFrom.includes(chatroomId))) {
+            return { allowed: false, reason: `groupAllowFrom mismatch: ${chatroomId ?? "(空)"}` };
         }
     }
     if (policy === "closed") {
