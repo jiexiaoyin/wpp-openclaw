@@ -1,4 +1,4 @@
-# WeChatPadPro OpenClaw Plugin v1.3.75
+# WeChatPadPro OpenClaw Plugin v1.3.78
 
 **基于 WeChatPadPro (微信 Pad 协议 HTTP API) 的 OpenClaw 适配插件**
 
@@ -6,14 +6,18 @@
 
 ## 状态
 
-- **版本**: v1.3.75 (生产已部署)
-- **能力**: 收发文本/图片/语音/视频/文件、AI 引用回复、图片 AI 识别(v1 schema 64KB)、语音收发(silk 自动转码)、群接龙自动触发 AI、文件确定性回复、**心流主动回复**、多账号
+- **版本**: v1.3.78 (生产已部署)
+- **能力**: 收发文本/图片/语音/视频/文件、AI 引用回复、图片 AI 识别(v1 schema 64KB)、语音收发(silk 自动转码)、群接龙自动触发 AI、文件确定性回复、**心流主动回复**、**群黑话挖掘**、**好感度系统**、多账号
 - **心流 HEARTFLOW** (v1.3.75): 未@群消息由**小模型 5 维打分** (相关度/意愿/社交/时机/连贯) 判断是否主动参与, **精力状态机**自动控频防刷屏, 让机器人在群里更"活" (需 `MINIMAX_API_KEY` + `heartflow.enabled:true`)
+- **群黑话 JARGON** (v1.3.76): 自主学习群黑话 — 统计预筛 (零LLM) + LLM 批量验证 + 三步推断, AI 可调 `query_jargon` 查群黑话含义, 回复更"像自己人"
+- **好感度 AFFECTION** (v1.3.77): 17 交互类型 × 情绪修正 → 好感度增减 + 情绪状态, 情绪注入 system prompt 影响回复风格 (夸奖→热情, 侮辱→谨慎)
+- **统一 AI 配置 AI-UNIFY** (v1.3.77): `accounts/*.json` 的 `ai.judgeModel` 统一心流/黑话/好感度判断模型
+- **完整审阅修复** (v1.3.78): 5 维度审阅 → 6 P0 + 7 P1 全修 (webhook token 强制 / 群白名单 fail-closed / WS v1 解析 / 去重账号隔离 / 心流冷却 / jargon 计数 / affection 去单字误判 / WS 长退避 / synckey 崩溃 / DB 重试 / sync 锁)
 - **语音 SILK-ONLY** (v1.3.52): vendor `/Msg/SendVoice` 只收 silk, mp3 自动转码, 转码失败降级发文件 (v1.3.53)
 - **接龙 RELAY-TRIGGER** (v1.3.54): 群接龙消息自动触发 AI, AI 根据接龙主题智能应景回复 (无需 @, 5 分钟节流防刷屏)
 - **MCP 增强** (v1.2.0): 集成 vendor MCP (`127.0.0.1:8062/mcp`), 文件消息经 `wechat_get_recent_messages` 尝试拿 CDN URL → OSS → AI 读到 (需 vendor realtime 权限 + `mcpEnabled=true`)
 - **OpenClaw 契约**: v2026.7.1+ 完整兼容 (register/api, config, meta, capabilities, gateway)
-- **测试**: 941/941 全绿 (74 test files)
+- **测试**: 989/989 全绿 (95 test files)
 - **生产部署**: ✅ `/root/.openclaw/extensions/wechatpadpro/` 已上线
 
 从零开始安装见 [GETTING_STARTED.md](./GETTING_STARTED.md)。详细 phase 进度见 [ROADMAP.md](./ROADMAP.md), 版本历史见 [CHANGELOG.md](./CHANGELOG.md)。

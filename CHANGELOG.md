@@ -4,6 +4,40 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.78] 完整审阅修复 — 6 P0 + 7 P1
+- 2026-08-23 (5 维度审阅: 安全/正确性/健壮性/代码质量/新功能 → 全部修复)
+- **P0 安全**:
+  - webhookPathToken 自动生成确保 (ensureWebhookPathToken, 无 token 不可启动 webhook)
+  - 群白名单 allowlist 空列表 = 拒绝所有群 (fail-closed, 与 DM 对齐; triggers + group-policy 双修)
+- **P0 正确性**:
+  - WS 路径 v1 schema 消息不丢失 (ws-client 直接传 raw 给 handler 统一解析)
+  - 去重 key 并入 accountId (多账号同群消息不互判重复)
+  - 心流精力恢复不再推进 lastReplyTime (冷却恢复生效)
+  - dispatcher 双派发: 确认 outbound-dedup 兜底
+- **P1 新功能**:
+  - jargon 挖掘不因历史满 200 条停摆 (独立单调计数器 getGroupMessageCount)
+  - heartflow judge 加 minJudgeIntervalSec 频率闸 + maxRetries 默认降 1 (防阻塞+每消息LLM)
+  - affection 去单字正/负向词 (笑死我了/狗粮/晚上好 不再误判)
+- **P1 健壮性**:
+  - WS 长退避不被 maxRetryDelay 截断 (5分钟退避生效)
+  - synckey 先处理消息再保存 (崩溃不丢消息; ws + webhook 两路径)
+  - DB 启动加退避重试 (3次 1s/2s/4s)
+  - webhook sync_message 加每账号锁 (与 ws 串行防并发双拉)
+- **测试**: 989/989 全绿 (新增 WS/synckey/频率闸/单字修复断言)
+- **部署**: 生产 v1.3.78, verify 0 error, affection.js 首次部署
+- **版本**: 1.3.77 → 1.3.78
+
+## [v1.3.77] AFFECTION 好感度/社交关系系统 + 情绪注入
+- 2026-08-22 (移植自 AstrBot self_learning v3.6.1 affection_manager 模块)
+- **新增 `src/inbound/affection.ts`**: 17 交互类型规则表 + 10 情绪修正 + 好感度增减/重分配
+  - 关键词规则分类 (零 LLM) + 可选 LLM 增强 (llmClassify)
+  - 情绪状态机 (负面/正面/一般响应), 情绪注入 system prompt 影响回复风格
+  - max(0,...) 下限对齐原版
+- **接入**: handler.ts 旁路处理群消息 → 好感度+情绪; dispatcher.ts 群聊 dispatch 注入情绪
+- **配置**: `accounts/*.json` 加 `affection` (默认 enabled:false); `ai` 块统一判断模型
+- **测试**: tests/affection.test.ts 22 用例
+- **版本**: 1.3.76 → 1.3.77
+
 ## [v1.3.76] JARGON 群黑话挖掘 + AI-UNIFY 统一模型配置
 - 2026-08-22 (自主学习黑话模块 — 移植自 AstrBot self_learning v3.6.1 jargon 模块)
 - **新增 `src/inbound/jargon.ts`**: 群黑话挖掘三层流水线

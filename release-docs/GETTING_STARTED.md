@@ -1,6 +1,6 @@
 # 快速开始 (GETTING_STARTED.md)
 
-> **当前版本: v1.3.76** · 从零到可用 · 预计 20 分钟
+> **当前版本: v1.3.78** · 从零到可用 · 预计 20 分钟
 > 本包只含编译产物, 不含 TypeScript 源码。
 
 ---
@@ -203,6 +203,14 @@ journalctl --user -u "${GATEWAY_SERVICE:-openclaw-gateway}" -n 50 | grep "accoun
     "mineIntervalSec": 60,          // 挖掘间隔秒
     "minMessages": 10               // 每次挖掘最少新增消息数
     // "model": "xxx"               // 覆盖 ai.judgeModel (可选)
+  },
+
+  // v1.3.77 好感度/社交关系 (可选, 默认关闭)
+  "affection": {
+    "enabled": true,                // 总开关: true=建立好感度+情绪
+    "maxUserAffection": 100,        // 单用户好感度上限
+    "maxTotalAffection": 500,       // 群总好感度上限
+    "llmClassify": false            // true=LLM 增强交互分类 (默认纯规则)
   }
 }
 ```
