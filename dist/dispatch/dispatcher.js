@@ -26,6 +26,7 @@ import { classifyGroupIntent, decideIntentWithLlm, needsLlm, normalizeTriggerTex
 import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
 import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
 import { recordRawMessage } from "../inbound/heartflow.js";
+import { getGroupMood, buildMoodSystemPrompt } from "../inbound/affection.js";
 export { classifyGroupIntent } from "./intent-llm.js";
 import { setSessionChatInfo } from "../state.js";
 const NOOP_RUNTIME = {
@@ -353,7 +354,7 @@ function buildReferencedContextLines(msg, referencedMsg) {
     info(`[WPP v1.3.14 QUOTE-FORCE-CONTEXT] injected referenced ctx (1 msg: ${referencedMsg.msg_id}) → session=${buildSessionKeyForMsg(msg)} msgId=${msg.msgId}`);
     return lines.join("\n");
 }
-function buildCtxPayload(msg, sessionKey, injectedContext, heartflowNote) {
+function buildCtxPayload(msg, sessionKey, injectedContext, heartflowNote, moodNote) {
     const isGroup = msg.peerKind === "group";
     const toWxid = msg.toWxid ?? msg.accountId;
     let body = msg.content || "";
@@ -362,6 +363,9 @@ function buildCtxPayload(msg, sessionKey, injectedContext, heartflowNote) {
     }
     if (heartflowNote) {
         body = `${body}\n\n[系统提示] ${heartflowNote}`;
+    }
+    if (moodNote) {
+        body = `${body}\n\n${moodNote}`;
     }
     const quoteCtx = buildQuoteContext(msg);
     if (quoteCtx) {
@@ -562,7 +566,18 @@ async function dispatchOne(msg, ctx = {}) {
         heartflowNote =
             "（注意：本次是你主动参与群聊的，不是用户叫你。回复应自然随意，像普通群成员一样加入话题。不要提\"我是机器人\"或解释你的机制。）";
     }
-    const ctxPayload = buildCtxPayload(msg, sessionKey, injectedGroupContext ?? undefined, heartflowNote ?? undefined);
+    let moodNote = null;
+    if (isGroupMsg && (getDefaultAccountRegistry().get(msg.accountId)?.config.affection?.enabled)) {
+        try {
+            const mood = getGroupMood(roomId ?? "", Date.now());
+            const moodPrompt = buildMoodSystemPrompt("", mood);
+            if (moodPrompt.trim())
+                moodNote = `[系统提示-当前情绪] ${moodPrompt.trim()}`;
+        }
+        catch {
+        }
+    }
+    const ctxPayload = buildCtxPayload(msg, sessionKey, injectedGroupContext ?? undefined, heartflowNote ?? undefined, moodNote ?? undefined);
     try {
         await runtime.session.recordInboundSession({ storePath, sessionKey, ctx: ctxPayload });
     }

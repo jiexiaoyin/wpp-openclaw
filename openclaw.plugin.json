@@ -1,8 +1,8 @@
 {
   "name": "wechatpadpro",
   "id": "wechatpadpro",
-  "version": "1.3.75",
-  "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 313 paths API 覆盖 (新 vendor v2026.08.18.1); v1.3.75 HEARTFLOW 心流主动回复 (未@群消息小模型5维打分自动参与).",
+  "version": "1.3.78",
+  "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 313 paths API 覆盖 (新 vendor v2026.08.18.1); v1.3.75 HEARTFLOW 心流主动回复 (未@群消息小模型5维打分自动参与); v1.3.76 JARGON 群黑话挖掘 (自主学习, AI 可查群黑话含义); v1.3.77 AFFECTION 好感度/社交关系系统 (交互分类→好感度+情绪注入回复风格) + AI-UNIFY 统一判断模型配置; v1.3.78 完整审阅加固 (webhook token 强制 / 群白名单 fail-closed / WS v1 解析 / 去重账号隔离 / 心流冷却 / jargon 计数 / affection 去单字误判 / WS 长退避 / synckey 崩溃 / DB 重试 / sync 锁).",
   "channelId": "wechatpadpro",
   "channelName": "WeChatPadPro (微信 Pad 协议)",
   "kind": "plugin",
@@ -283,6 +283,29 @@
               "includeReasoning": { "type": "boolean", "description": "判断时输出 reasoning (默认 false 省 token)" },
               "maxRetries": { "type": "number", "description": "判断重试 (默认 2)" },
               "timeoutMs": { "type": "number", "description": "判断超时毫秒 (默认 5000)" }
+            }
+          },
+          "jargon": {
+            "type": "object",
+            "description": "v1.3.76 JARGON: 群黑话挖掘 (自主学习, 旁路采集+定时挖掘)。enabled=false (默认) 关闭; 显式 true 启用。AI 可查 query_jargon 理解群黑话",
+            "properties": {
+              "enabled": { "type": "boolean", "description": "总开关 (默认 false)" },
+              "model": { "type": "string", "description": "挖掘模型 (默认 MiniMax-M2.5)" },
+              "mineIntervalSec": { "type": "number", "description": "挖掘间隔秒 (默认 60)" },
+              "minMessages": { "type": "number", "description": "每次挖掘最少新增消息数 (默认 10)" },
+              "maxCandidatesPerGroup": { "type": "number", "description": "每群候选上限 (默认 50)" },
+              "whitelistGroups": { "type": "array", "items": { "type": "string" }, "description": "群白名单 (空=全部)" }
+            }
+          },
+          "affection": {
+            "type": "object",
+            "description": "v1.3.77 AFFECTION: 好感度/社交关系系统。enabled=false (默认) 关闭; 显式 true 启用。交互分类→好感度增减+情绪状态→情绪注入回复风格",
+            "properties": {
+              "enabled": { "type": "boolean", "description": "总开关 (默认 false)" },
+              "maxUserAffection": { "type": "number", "description": "单用户好感度上限 (默认 100)" },
+              "maxTotalAffection": { "type": "number", "description": "群总好感度上限 (默认 500)" },
+              "affectionDecayRate": { "type": "number", "description": "重分配衰减率 (默认 0.3)" },
+              "llmClassify": { "type": "boolean", "description": "用 LLM 增强交互分类 (默认 false 纯规则)" }
             }
           },
           "dmPairingEnabled": {

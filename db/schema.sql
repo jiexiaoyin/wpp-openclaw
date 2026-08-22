@@ -116,3 +116,22 @@ CREATE TABLE IF NOT EXISTS wpp_chatroom_members (
   UNIQUE KEY uk_room_wxid (account_id, chatroom_id, wxid),
   INDEX idx_wxid (wxid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 群黑话表 (v1.3.76 2026-08-22 新增: 自主学习黑话挖掘)
+-- 数据源: jargon.ts 统计预筛 + LLM 挖掘
+-- 用途: AI 查询群黑话含义 (query_jargon tool), 理解群文化
+CREATE TABLE IF NOT EXISTS wpp_jargon_terms (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  account_id VARCHAR(64) NOT NULL,
+  group_id VARCHAR(128) NOT NULL,      -- 群 ID (@chatroom 结尾)
+  term VARCHAR(64) NOT NULL,           -- 黑话词条
+  raw_content VARCHAR(512),            -- 出现该词条的上下文样例
+  meaning VARCHAR(512),                -- LLM 推断含义
+  is_jargon TINYINT DEFAULT 1,         -- 是否确认黑话
+  frequency INT DEFAULT 1,             -- 词频
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_group_term (account_id, group_id, term),
+  INDEX idx_group (account_id, group_id),
+  INDEX idx_term (term)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -1,4 +1,4 @@
-import { error, info } from "../../core/logger.js";
+import { error, info, warn } from "../../core/logger.js";
 import { setBackend, getAdapter } from "./factory.js";
 import { resolveDbConfig } from "./factory.js";
 import { API_TIMEOUT_MS } from "../../core/constants.js";
@@ -27,10 +27,26 @@ export async function initDbPool(cfg) {
         },
     });
     const adapter = setBackend(resolved);
-    await adapter.init();
-    await adapter.ping();
-    info(`db ready: ${m.host}:${m.port}/${m.database} (user=${m.user}, limit=${m.connectionLimit ?? 5})`);
-    void API_TIMEOUT_MS;
+    const MAX_DB_INIT_RETRIES = 3;
+    let lastErr;
+    for (let attempt = 1; attempt <= MAX_DB_INIT_RETRIES; attempt++) {
+        try {
+            await adapter.init();
+            await adapter.ping();
+            info(`db ready: ${m.host}:${m.port}/${m.database} (user=${m.user}, limit=${m.connectionLimit ?? 5})`);
+            void API_TIMEOUT_MS;
+            return;
+        }
+        catch (e) {
+            lastErr = e;
+            if (attempt < MAX_DB_INIT_RETRIES) {
+                const backoffMs = 1000 * 2 ** (attempt - 1);
+                warn(`db init attempt ${attempt}/${MAX_DB_INIT_RETRIES} failed, retry in ${backoffMs}ms: ${e instanceof Error ? e.message : String(e)}`);
+                await new Promise((r) => setTimeout(r, backoffMs));
+            }
+        }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 export async function pingDb() {
     await getAdapter().ping();

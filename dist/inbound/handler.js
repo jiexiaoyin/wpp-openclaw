@@ -14,7 +14,9 @@ import { payloadToAllInboundMessages } from "./parser.js";
 import { SeenTracker, buildDedupeKey } from "../webhook-receiver.js";
 import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1Cdn, enrichFileMessage, enrichFileMessageFromV1Binary, enrichVideoMessage, enrichVideoMessageFromV1, isV1SchemaVideo, enrichVoiceMessage, enrichVoiceMessageFromV1, isV1SchemaVoice, enrichFileMessageViaMcp, isV1SchemaImage, isV1SchemaFile } from "./media-enrich.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
-import { judgeHeartflow, recordRawMessage, getChatState, buildChatContextSummary, getRawBuffer, formatRawMessages, lastBotReply, secondsSinceLastReply, recordActiveReply, recordPassiveMessage, } from "./heartflow.js";
+import { judgeHeartflow, recordRawMessage, getChatState, buildChatContextSummary, getRawBuffer, formatRawMessages, lastBotReply, secondsSinceLastReply, recordActiveReply, recordPassiveMessage, markHeartflowJudged, } from "./heartflow.js";
+import { updateJargonFromMessage, recordJargonMessage, shouldTriggerMine, mineJargonForGroup, getGroupMessageCount, } from "./jargon.js";
+import { processAffectionMessage, } from "./affection.js";
 const pendingEnrichs = new Map();
 const RELAY_THROTTLE_MS = 5 * 60 * 1000;
 const relayTriggerAt = new Map();
@@ -345,6 +347,54 @@ export function createWppInboundHandler(opts) {
                     });
                 }
             }
+            if (opts.jargon?.enabled) {
+                for (const m of batch) {
+                    const tr = persistResults.get(m);
+                    if (tr?.via === "blocked")
+                        continue;
+                    if (m.peerKind !== "group")
+                        continue;
+                    if (m.msgType === 10000)
+                        continue;
+                    const groupId = m.chatroomId ?? m.peerId;
+                    const content = m.content ?? "";
+                    if (!content.trim())
+                        continue;
+                    updateJargonFromMessage(content, groupId, m.fromWxid ?? "");
+                    recordJargonMessage(groupId, m.fromWxid ?? "", content);
+                }
+                for (const m of batch) {
+                    const tr = persistResults.get(m);
+                    if (tr?.via === "blocked")
+                        continue;
+                    if (m.peerKind !== "group")
+                        continue;
+                    const groupId = m.chatroomId ?? m.peerId;
+                    const msgCount = getGroupMessageCount(groupId);
+                    if (shouldTriggerMine(groupId, opts.jargon, Date.now(), msgCount)) {
+                        void mineJargonForGroup(groupId, opts.jargon, {
+                            apiKey: process.env.MINIMAX_API_KEY ?? "",
+                        }).catch((e) => warn(`[WPP JARGON] mine failed (non-fatal): ${formatErr(e)}`));
+                    }
+                }
+            }
+            if (opts.affection?.enabled) {
+                for (const m of batch) {
+                    const tr = persistResults.get(m);
+                    if (tr?.via === "blocked")
+                        continue;
+                    if (m.peerKind !== "group")
+                        continue;
+                    if (m.msgType === 10000)
+                        continue;
+                    if (m.fromWxid === opts.triggerCtx.botWxid)
+                        continue;
+                    const content = m.content ?? "";
+                    if (!content.trim())
+                        continue;
+                    void processAffectionMessage(m.chatroomId ?? m.peerId, m.fromWxid ?? "", content, m.fromNickname ?? "", opts.affection, { apiKey: process.env.MINIMAX_API_KEY ?? "" }, Date.now()).catch(() => { });
+                }
+            }
             const triggerResults = persistResults;
             const dispatched = [];
             for (const [m, t] of triggerResults) {
@@ -404,6 +454,7 @@ export function createWppInboundHandler(opts) {
                             }, hfCfg, {
                                 apiKey: process.env.MINIMAX_API_KEY ?? "",
                             });
+                            markHeartflowJudged(chatId, nowMs);
                             if (judgeResult?.shouldReply) {
                                 m.trigger = "heartflow";
                                 recordActiveReply(chatId, hfCfg, nowMs);
@@ -500,7 +551,7 @@ export function createWppInboundHandler(opts) {
                 return;
             }
             for (const m of msgs) {
-                const dk = buildDedupeKey(undefined, m.newMsgId, m.msgId, m.content);
+                const dk = buildDedupeKey(opts.accountId, m.newMsgId, m.msgId, m.content);
                 if (!seenTracker.check(dk)) {
                     continue;
                 }

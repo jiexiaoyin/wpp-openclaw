@@ -476,3 +476,37 @@ export async function setAccountFlag(accountId, field, value) {
     log.info(`setAccountFlag: account=${accountId} ${field}=${value}`);
     return { ok: true, current: value, filePath };
 }
+export async function ensureWebhookPathToken(accountId) {
+    const dir = join(await findPluginRoot(), "accounts");
+    const filePath = join(dir, `${accountId}.json`);
+    let raw;
+    try {
+        const text = await readFile(filePath, "utf8");
+        raw = JSON.parse(text);
+    }
+    catch (e) {
+        const err = e;
+        log.warn(`ensureWebhookPathToken: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        return { token: "", ok: false, reason: "read-failed" };
+    }
+    const existing = typeof raw.webhookPathToken === "string" && raw.webhookPathToken.trim()
+        ? raw.webhookPathToken.trim()
+        : "";
+    if (existing)
+        return { token: existing, ok: true };
+    const { randomBytes } = await import("node:crypto");
+    const token = randomBytes(16).toString("hex");
+    raw.webhookPathToken = token;
+    try {
+        const tmpPath = `${filePath}.tmp`;
+        await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+        await rename(tmpPath, filePath);
+    }
+    catch (e) {
+        log.warn(`ensureWebhookPathToken: write ${accountId}.json failed: ${e.message}`);
+        return { token, ok: false, reason: "write-failed" };
+    }
+    invalidateConfigCache(accountId);
+    log.info(`ensureWebhookPathToken: account=${accountId} generated new webhookPathToken (128-bit)`);
+    return { token, ok: true };
+}

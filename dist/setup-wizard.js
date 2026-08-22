@@ -229,6 +229,8 @@ export async function writeAccountFile(input) {
         ...(input.embedIntentTopN !== undefined ? { embedIntentTopN: input.embedIntentTopN } : {}),
         ...(input.embedIntentThreshold !== undefined ? { embedIntentThreshold: input.embedIntentThreshold } : {}),
         ...(input.heartflow ? { heartflow: input.heartflow } : {}),
+        ...(input.jargon ? { jargon: input.jargon } : {}),
+        ...(input.affection ? { affection: input.affection } : {}),
         nickname: input.nickname,
         requireAtMention: input.requireAtMention,
         debounceMs: input.debounceMs,

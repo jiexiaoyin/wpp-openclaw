@@ -21,6 +21,7 @@ import { CUSTOMIZED_META } from "./customized-meta.js";
 import { QW_CONTACT_META } from "./qwcontact-meta.js";
 import { MCP_META } from "./mcp-meta.js";
 import { XIAO_WEI_META } from "./xiaowei-meta.js";
+import { JARGON_META } from "./jargon-meta.js";
 export const AGENT_TOOLS_META = {
     ...LOGIN_META,
     ...MSG_META,
@@ -44,5 +45,6 @@ export const AGENT_TOOLS_META = {
     ...QW_CONTACT_META,
     ...MCP_META,
     ...XIAO_WEI_META,
+    ...JARGON_META,
 };
 export const AGENT_TOOLS = buildAgentTools(AGENT_TOOLS_META);

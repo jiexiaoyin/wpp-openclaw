@@ -10,10 +10,11 @@ export function defaultHeartflowConfig() {
         energyRecoveryRate: 0.02,
         contextMessagesCount: 5,
         minReplyIntervalSec: 0,
+        minJudgeIntervalSec: 0,
         whitelistGroups: [],
         weights: { relevance: 0.25, willingness: 0.2, social: 0.2, timing: 0.15, continuity: 0.2 },
         includeReasoning: false,
-        maxRetries: 2,
+        maxRetries: 1,
     };
 }
 export function extractHeartflowJson(text) {
@@ -60,7 +61,7 @@ export function resetHeartflowStates() {
 export function getChatState(chatId, cfg, nowMs) {
     let st = chatStates.get(chatId);
     if (!st) {
-        st = { energy: 1.0, lastReplyTime: 0, lastResetDate: "", totalMessages: 0, totalReplies: 0 };
+        st = { energy: 1.0, lastReplyTime: 0, lastResetDate: "", totalMessages: 0, totalReplies: 0, lastEnergyRecoveryTs: 0 };
         chatStates.set(chatId, st);
     }
     const today = new Date(nowMs).toISOString().slice(0, 10);
@@ -68,12 +69,14 @@ export function getChatState(chatId, cfg, nowMs) {
         st.lastResetDate = today;
         st.energy = Math.min(1.0, st.energy + 0.2);
     }
-    if (st.lastReplyTime > 0) {
-        const elapsedMs = nowMs - st.lastReplyTime;
-        const timeRecovery = (elapsedMs / (60 * 1000)) * ((cfg.energyRecoveryRate ?? 0.02) * 5);
-        st.energy = Math.min(1.0, st.energy + timeRecovery);
-        st.lastReplyTime = nowMs;
+    if (st.lastEnergyRecoveryTs > 0) {
+        const elapsedMs = nowMs - st.lastEnergyRecoveryTs;
+        if (elapsedMs > 0) {
+            const timeRecovery = (elapsedMs / (60 * 1000)) * ((cfg.energyRecoveryRate ?? 0.02) * 5);
+            st.energy = Math.min(1.0, st.energy + timeRecovery);
+        }
     }
+    st.lastEnergyRecoveryTs = nowMs;
     return st;
 }
 export function secondsSinceLastReply(chatId, nowMs) {
@@ -317,6 +320,13 @@ export async function judgeHeartflow(input, cfg, opts) {
     warn(`[WPP HEARTFLOW] judge failed after ${maxRetries + 1} attempts: ${lastErr}`);
     return null;
 }
+const lastJudgeAt = new Map();
+export function resetHeartflowJudgeIntervals() {
+    lastJudgeAt.clear();
+}
+export function markHeartflowJudged(chatId, nowMs) {
+    lastJudgeAt.set(chatId, nowMs);
+}
 export function checkHeartflowGate(chatId, content, cfg, nowMs) {
     if (!cfg.enabled)
         return { allowed: false, reason: "disabled" };
@@ -331,6 +341,13 @@ export function checkHeartflowGate(chatId, content, cfg, nowMs) {
         const since = secondsSinceLastReply(chatId, nowMs);
         if (since > 0 && since < minInterval)
             return { allowed: false, reason: "cooling" };
+    }
+    const judgeInterval = cfg.minJudgeIntervalSec ?? 0;
+    if (judgeInterval > 0) {
+        const last = lastJudgeAt.get(chatId) ?? 0;
+        if (last > 0 && nowMs - last < judgeInterval * 1000) {
+            return { allowed: false, reason: "judge-cooldown" };
+        }
     }
     return { allowed: true };
 }
