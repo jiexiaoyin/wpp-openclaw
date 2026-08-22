@@ -37,6 +37,7 @@ import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairi
 import { resolveGlobalConfig, resolveSyncConfig, type ResolvedGlobalConfig } from "./core/runtime-config.js";
 import type { WppTriggerConfig, WppAccountTriggerCtx } from "./inbound/triggers.js";
 import type { WppInboundMessage } from "./types.js";
+import { resolveAiConfig } from "./config-ai.js";
 import type { WppSendMessageParams, WppSendType } from "./dispatch/send-message.js";
 
 // 每账号 triggerConfig/triggerCtx 可变容器: handler 闭包持有对象引用, 热重载 update 字段即刻生效
@@ -69,6 +70,8 @@ function maskSecret(secret: string): string {
   if (!secret) return "(empty)";
   return secret.length <= 4 ? "****" : `${secret.slice(0, 4)}...${secret.slice(-2)}`;
 }
+
+// v1.3.77 AI-UNIFY: 统一 LLM 判断模型配置 (纯函数在 config-ai.ts)
 
 /**
  * v1.3.56 MULTI-ACCOUNT: outbound 兜底账号解析。
@@ -408,8 +411,10 @@ export async function startAccountById(
       },
       groupContextEnabled: cfg.groupContextEnabled === true,
       // v1.3.75 HEARTFLOW: 心流配置 + 机器人昵称 (未@群消息主动参与判断)
-      heartflow: cfg.heartflow,
+      heartflow: resolveAiConfig(cfg, "heartflow"),
       botNickname: cfg.nickname,
+      // v1.3.76 JARGON: 黑话挖掘配置 (旁路采集 + 定时挖掘)
+      jargon: resolveAiConfig(cfg, "jargon"),
     }));
   }
   const inboundHandler = runtimeInboundHandlers.get(accountId)!;

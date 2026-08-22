@@ -158,12 +158,30 @@ export interface WppAccountConfig {
   blacklistGroups?: string[];
   chatroomDebug?: boolean;
   /**
+   * v1.3.77 AI-UNIFY: 统一 LLM 判断模型配置 (心流/黑话共用)
+   *   heartflow.model / jargon.model 未配时默认引用 ai.judgeModel; 配了则各自覆盖
+   */
+  ai?: {
+    /** 统一判断模型 (默认 "MiniMax-M2.5", 快+便宜) */
+    judgeModel?: string;
+    /** LLM 调用超时毫秒 (默认 5000) */
+    timeoutMs?: number;
+  };
+  /**
    * v1.3.75 HEARTFLOW: 群聊主动回复 (心流机制, 未@消息主动参与)
    *   enabled=false (默认) 完全关闭; 显式 true 才启用
    *   配置项: model/replyThreshold/energyDecayRate/energyRecoveryRate/contextMessagesCount/
    *           minReplyIntervalSec/whitelistGroups/weights/includeReasoning/maxRetries/timeoutMs
+   *   model 未配 → 默认 ai.judgeModel (v1.3.77)
    */
   heartflow?: import("./inbound/heartflow.js").HeartflowConfig;
+  /**
+   * v1.3.76 JARGON: 群黑话挖掘 (自主学习, 旁路采集 + 定时挖掘)
+   *   enabled=false (默认) 完全关闭
+   *   开启后旁路采集群消息词频 → 定时 LLM 挖掘黑话 → 存 DB → AI 可查 query_jargon
+   *   model 未配 → 默认 ai.judgeModel (v1.3.77)
+   */
+  jargon?: import("./inbound/jargon.js").JargonConfig;
   /**
    * v1.2.0 VENDOR-MCP: 是否启用 vendor MCP 增强 (文件消息下载尝试)
    * 默认 true; false 则完全跳过 MCP (纯 v1 确定性回复兜底)

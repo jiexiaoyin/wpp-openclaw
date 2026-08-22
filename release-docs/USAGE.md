@@ -1,6 +1,6 @@
 # 使用指南 (USAGE.md)
 
-> **当前版本: v1.3.75** · 安装见 [GETTING_STARTED.md](./GETTING_STARTED.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
+> **当前版本: v1.3.76** · 安装见 [GETTING_STARTED.md](./GETTING_STARTED.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
 
 WeChatPadPro OpenClaw Plugin 在 OpenClaw 框架下的使用指南: 加载、Agent Tools、消息收发、配置、多账号、验证与监控。
 
@@ -120,6 +120,17 @@ AI 决定回复 → 调 `send_*` 工具 → 服务端转发 → 用户微信收�
 
 > **⚠️ selfWxid 语义**: `selfWxid` 必须是 **bot 自己** 的 wxid (插件用它判断"这条消息是不是 bot 自己发的"), 不是使用者主号。填错会导致 AI 自我回复循环。
 
+**统一 AI 判断模型 (v1.3.77, 可选)**:
+
+```json
+"ai": {
+  "judgeModel": "MiniMax-M2.5",   // 心流+黑话共用判断模型
+  "timeoutMs": 5000
+}
+```
+- `heartflow.model` / `jargon.model` 未配置时默认引用 `ai.judgeModel`
+- 各自配置了 `model` → 覆盖 `ai.judgeModel`
+
 **心流主动回复 (v1.3.75, 可选)**:
 
 ```json
@@ -217,7 +228,7 @@ ss -tlnp | grep 4398              # webhook 监听确认
 
 ### 7.3 日志与监控
 
-- 日志格式: `ISO时间 LEVEL [WPP v1.3.75] msg key=value`
+- 日志格式: `ISO时间 LEVEL [WPP v1.3.76] msg key=value`
 - DEBUG: `WPP_DEBUG=1`
 - Prometheus metrics: 14+ counters (received / processed / rejected_* / timeout 等)
 

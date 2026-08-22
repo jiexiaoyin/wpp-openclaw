@@ -38,6 +38,14 @@ import {
   recordPassiveMessage,
   type HeartflowConfig,
 } from "./heartflow.js";
+import {
+  updateJargonFromMessage,
+  recordJargonMessage,
+  shouldTriggerMine,
+  mineJargonForGroup,
+  getRecentMessages,
+  type JargonConfig,
+} from "./jargon.js";
 
 // 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
 // 解法: enrich 时 trackEnrich 记录 promise, 触发 dispatch 前 waitForPendingEnrich 等待同 sender 的 enrich 完成。
@@ -122,6 +130,8 @@ export interface WppInboundHandlerOpts {
   heartflow?: HeartflowConfig;
   /** v1.3.75 HEARTFLOW: 机器人昵称 (判断 prompt 用) */
   botNickname?: string;
+  /** v1.3.76 JARGON: 黑话挖掘配置 (默认 {enabled:false}; 旁路采集 + 定时挖掘) */
+  jargon?: JargonConfig;
 }
 
 /**
@@ -471,6 +481,36 @@ export function createWppInboundHandler(
             timestamp: m.ts ?? Date.now() / 1000,
             isBot: !!opts.triggerCtx.botWxid && m.fromWxid === opts.triggerCtx.botWxid,
           });
+        }
+      }
+
+      // v1.3.76 JARGON: 黑话旁路采集 (统计层 + 消息历史) —
+      //   不参与触发判断 (纯旁路, 与心流互补: 心流=何时开口, 黑话=听懂群文化)。
+      //   仅采集未 blocked 的群消息 (隐私对齐)。
+      if (opts.jargon?.enabled) {
+        for (const m of batch) {
+          const tr = persistResults.get(m);
+          if (tr?.via === "blocked") continue;
+          if (m.peerKind !== "group") continue;
+          if (m.msgType === 10000) continue; // 系统通知不采
+          const groupId = m.chatroomId ?? m.peerId;
+          const content = m.content ?? "";
+          if (!content.trim()) continue;
+          updateJargonFromMessage(content, groupId, m.fromWxid ?? "");
+          recordJargonMessage(groupId, m.fromWxid ?? "", content);
+        }
+        // 挖掘触发: 每群独立判断 (间隔 + 新增消息数), 异步执行不阻塞消息流
+        for (const m of batch) {
+          const tr = persistResults.get(m);
+          if (tr?.via === "blocked") continue;
+          if (m.peerKind !== "group") continue;
+          const groupId = m.chatroomId ?? m.peerId;
+          const msgCount = getRecentMessages(groupId, 200).length;
+          if (shouldTriggerMine(groupId, opts.jargon, Date.now(), msgCount)) {
+            void mineJargonForGroup(groupId, opts.jargon, {
+              apiKey: process.env.MINIMAX_API_KEY ?? "",
+            }).catch((e) => warn(`[WPP JARGON] mine failed (non-fatal): ${formatErr(e)}`));
+          }
         }
       }
 

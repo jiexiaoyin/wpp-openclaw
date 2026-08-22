@@ -4,6 +4,20 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.76] JARGON 群黑话挖掘 + AI-UNIFY 统一模型配置
+- 2026-08-22 (自主学习黑话模块 — 移植自 AstrBot self_learning v3.6.1 jargon 模块)
+- **新增 `src/inbound/jargon.ts`**: 群黑话挖掘三层流水线
+  - ① 统计预筛 (零 LLM): jieba/n-gram 分词 + 停用词/标准词过滤 → 跨群IDF + burst score + 用户集中度 → 高分候选
+  - ② LLM 批量验证: 一次调用筛掉普通词, 只留真黑话
+  - ③ LLM 三步推断: 上下文推断 vs 纯字面推断对比 → 判黑话 + 推断含义
+- **接入**: `handler.ts` 旁路采集 (不参与触发判断, 与心流互补) + 定时挖掘; `agent-tools/jargon-meta.ts` 加 `query_jargon`/`list_jargon` 工具 (AI 可查群黑话)
+- **存储**: `db/schema.sql` 加 `wpp_jargon_terms` 表; `storage/db/jargon.ts` CRUD
+- **v1.3.77 AI-UNIFY**: `accounts/*.json` 加 `ai` 块 (judgeModel/timeoutMs), heartflow/jargon 未配 model 时默认引用; `src/config-ai.ts` 纯函数
+- **配置**: `accounts/*.json` 加 `jargon` 字段 (默认 `enabled:false`); `ai` 块统一模型
+- **分词**: 可选 `@node-rs/jieba` (未装则 n-gram 降级, 不阻塞)
+- **测试**: 967/967 全绿 (新增 tests/jargon.test.ts 20 用例: 分词/过滤/统计/burst/score/JSON/prompt/ai-unify)
+- **版本**: 1.3.75 → 1.3.76
+
 ## [v1.3.75] HEARTFLOW 心流主动回复
 - 2026-08-22 (心流机制 — 老板拍板: 让机器人在群里更"活", 移植自 AstrBot Heartflow v2.1.1)
 - **新增 `src/inbound/heartflow.ts`**: 未@群消息由**小模型 5 维打分** (相关度/意愿/社交/时机/连贯, 0-10 加权) 判断是否主动参与; 精力状态机自动控频 (回复衰减/不回复恢复/每日重置); 原始消息环形缓冲 (含 bot 自己回复); 群白名单 + 冷却期门禁; JSON 稳健解析 + 重试

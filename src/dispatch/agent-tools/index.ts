@@ -24,6 +24,7 @@ import { CUSTOMIZED_META } from "./customized-meta.js";
 import { QW_CONTACT_META } from "./qwcontact-meta.js";
 import { MCP_META } from "./mcp-meta.js";
 import { XIAO_WEI_META } from "./xiaowei-meta.js"; // v1.3.71: 小微预开发 — 工具在 AGENT_TOOLS, 但执行前检查 xiaoweiEnabled 开关
+import { JARGON_META } from "./jargon-meta.js"; // v1.3.76: 黑话查询 (自主学习)
 
 /** 全部 vendor tag meta 合并为 AGENT_TOOLS_META */
 export const AGENT_TOOLS_META = {
@@ -49,6 +50,7 @@ export const AGENT_TOOLS_META = {
   ...QW_CONTACT_META,
   ...MCP_META, // v1.3.58 MCP-READONLY: vendor MCP 只读工具 (账号/联系人/群/搜索)
   ...XIAO_WEI_META, // v1.3.71: 小微智能体 (工具暴露但执行前检查 xiaoweiEnabled 开关)
+  ...JARGON_META, // v1.3.76: 黑话查询 (自主学习)
 };
 
 /** Phase F final: AGENT_TOOLS ChannelAgentTool[] 给 plugin.agentTools 注入 */

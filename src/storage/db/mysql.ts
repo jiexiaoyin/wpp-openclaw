@@ -17,6 +17,7 @@ import type {
   ChatroomRecord,
   ContactRecord,
   DbAdapter,
+  JargonTermRecord,
   MessageRecord,
   ResolvedDbConfig,
   SessionStateRecord,
@@ -674,6 +675,61 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       );
       const first = firstRow(rows);
       return first ? rowToAccount(first) : null;
+    },
+
+    // ====== v1.3.76 Jargon (黑话) ======
+    async saveJargonTerm(record: JargonTermRecord): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `INSERT INTO wpp_jargon_terms
+         (account_id, group_id, term, raw_content, meaning, is_jargon, frequency)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           raw_content = VALUES(raw_content),
+           meaning = VALUES(meaning),
+           is_jargon = VALUES(is_jargon),
+           frequency = VALUES(frequency)`,
+        [
+          record.account_id,
+          record.group_id,
+          record.term,
+          record.raw_content ?? null,
+          record.meaning ?? null,
+          record.is_jargon ?? 1,
+          record.frequency ?? 1,
+        ],
+      );
+    },
+    async getJargonTerms(accountId, groupId, limit = 50): Promise<JargonTermRecord[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT account_id, group_id, term, raw_content, meaning, is_jargon, frequency
+         FROM wpp_jargon_terms
+         WHERE account_id = ? AND group_id = ?
+         ORDER BY frequency DESC
+         LIMIT ?`,
+        [accountId, groupId, Math.min(Math.max(limit, 1), 200)],
+      );
+      return rows.map((r) => ({
+        account_id: String(r.account_id),
+        group_id: String(r.group_id),
+        term: String(r.term),
+        raw_content: r.raw_content == null ? null : String(r.raw_content),
+        meaning: r.meaning == null ? null : String(r.meaning),
+        is_jargon: r.is_jargon == null ? 1 : Number(r.is_jargon),
+        frequency: r.frequency == null ? 1 : Number(r.frequency),
+      }));
+    },
+    async hasJargonTerm(accountId, groupId, term): Promise<boolean> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT 1 FROM wpp_jargon_terms WHERE account_id = ? AND group_id = ? AND term = ? LIMIT 1`,
+        [accountId, groupId, term],
+      );
+      return rows.length > 0;
     },
   };
 }

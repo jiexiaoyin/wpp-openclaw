@@ -24,6 +24,7 @@ export {
   getSynckey,
 } from "./messages.js";
 export { initDbPool, pingDb, initSchema, closeDb } from "./connection.js";
+export { saveJargonTerm, getJargonTerms, hasJargonTerm } from "./jargon.js";
 export { upsertAccount, getAccounts, getAccount } from "./accounts.js";
 export {
   createMysqlAdapter,

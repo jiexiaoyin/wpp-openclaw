@@ -104,6 +104,25 @@ export interface DbAdapter {
   getAccounts(): Promise<AccountRecord[]>;
   /** 单个账号状态 (按 accountId) */
   getAccount(accountId: string): Promise<AccountRecord | null>;
+
+  // ====== v1.3.76 Jargon (黑话) ======
+  /** 保存/更新黑话词条 (UPSERT, idempotent) */
+  saveJargonTerm(record: JargonTermRecord): Promise<void>;
+  /** 查群内黑话 (按 frequency 降序) */
+  getJargonTerms(accountId: string, groupId: string, limit?: number): Promise<JargonTermRecord[]>;
+  /** 查某词条是否存在 */
+  hasJargonTerm(accountId: string, groupId: string, term: string): Promise<boolean>;
+}
+
+/** v1.3.76: 群黑话词条 row (wpp_jargon_terms) */
+export interface JargonTermRecord {
+  account_id: string;
+  group_id: string;
+  term: string;
+  raw_content?: string | null;
+  meaning?: string | null;
+  is_jargon?: number;
+  frequency?: number;
 }
 
 /** wpp_messages row */
