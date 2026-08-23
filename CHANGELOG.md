@@ -4,6 +4,26 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.80] 命令体系整合 — 统一白名单 + 三功能通用处理器
+- 2026-08-23 (老板: 整合增删/开关/列表, 简化命令逻辑)
+- **命令体系 (9 个, 统一 add/del/list 或 on/off/status)**:
+  - `/user add|del|list <wxid>`: 私聊白名单 (批量, 替代旧 /adduser /deluser)
+  - `/group add|del|list <群ID>`: 群白名单 (批量, 替代旧 /addgroup /delgroup)
+  - `/blacklist add|del|list <群ID>`: 黑名单群 (新增)
+  - `/heartflow on|off|status|threshold|group`: 心流 (通用处理器)
+  - `/affection on|off|status`: 好感度 (通用处理器)
+  - `/jargon on|off|status`: 黑话 (通用处理器)
+  - `/xiaowei /genpair /pairs`: 保留
+- **重构**:
+  - `handleWhitelistCommand`: 白名单三域统一 add/del/list (批量)
+  - `handleFeatureCommand`: 三功能统一 on/off/status (+heartflow threshold/group)
+  - `updateBlacklistGroups`: 黑名单批量写回 (账号专属)
+  - `updateHeartflowGroups`: 心流群白名单联动 (add 补群聊白名单, del 不删)
+- **删除旧命令**: /adduser /deluser /addgroup /delgroup
+- **测试**: 984/984 全绿
+- **实测**: /help /user /heartflow 命令处理成功
+- **版本**: 1.3.79 → 1.3.80
+
 ## [v1.3.79] 三功能 filehelper 命令 + 账号专属配置热生效
 - 2026-08-23 (老板: 多账号配置只能放账号专属文件 + 命令热生效)
 - **filehelper 命令** (账号专属, 写 accounts/<id>.json):
