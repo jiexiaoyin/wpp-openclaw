@@ -3,8 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FILEHELPER_COMMANDS, buildHelpText } from "../src/index.js";
 
-test("命令注册表有 7 个命令", () => {
-  assert.equal(FILEHELPER_COMMANDS.length, 7);
+test("命令注册表有 10 个命令", () => {
+  assert.equal(FILEHELPER_COMMANDS.length, 10);
   const names = FILEHELPER_COMMANDS.map((c) => c.name);
   assert.ok(names.includes("/genpair"));
   assert.ok(names.includes("/pairs"));
@@ -13,6 +13,9 @@ test("命令注册表有 7 个命令", () => {
   assert.ok(names.includes("/addgroup"));
   assert.ok(names.includes("/delgroup"));
   assert.ok(names.includes("/xiaowei"), "v1.3.71 应有 /xiaowei 开关命令");
+  assert.ok(names.includes("/heartflow"), "v1.3.79 应有 /heartflow 心流开关");
+  assert.ok(names.includes("/affection"), "v1.3.79 应有 /affection 好感度开关");
+  assert.ok(names.includes("/jargon"), "v1.3.79 应有 /jargon 黑话开关");
 });
 
 test("/help 自动遍历注册表 (新增命令无需改 help)", () => {

@@ -6,16 +6,24 @@
 
 import type { WppAccountConfig } from "./types.js";
 
-export function resolveAiConfig<T extends { enabled?: boolean; model?: string; timeoutMs?: number }>(
+type AiConfigKind = "heartflow" | "jargon" | "affection";
+
+type AiConfigMap = {
+  heartflow: import("./inbound/heartflow.js").HeartflowConfig;
+  jargon: import("./inbound/jargon.js").JargonConfig;
+  affection: import("./inbound/affection.js").AffectionConfig;
+};
+
+export function resolveAiConfig<K extends AiConfigKind>(
   cfg: WppAccountConfig,
-  kind: "heartflow" | "jargon" | "affection",
-): T | undefined {
+  kind: K,
+): AiConfigMap[K] | undefined {
   const ai = cfg.ai;
-  const base = cfg[kind] as T | undefined;
+  const base = cfg[kind] as AiConfigMap[K] | undefined;
   if (!ai) return base; // 未配 ai 块 → 原样 (模块各自默认)
   const merged: { model?: string; timeoutMs?: number } = {};
   if (ai.judgeModel && !base?.model) merged.model = ai.judgeModel;
   if (ai.timeoutMs && !base?.timeoutMs) merged.timeoutMs = ai.timeoutMs;
   if (!merged.model && !merged.timeoutMs) return base; // ai 块没提供值 → 原样
-  return { ...(base ?? ({} as T)), ...merged } as T;
+  return { ...(base ?? ({} as AiConfigMap[K])), ...merged } as AiConfigMap[K];
 }

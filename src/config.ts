@@ -626,3 +626,47 @@ export async function ensureWebhookPathToken(
   log.info(`ensureWebhookPathToken: account=${accountId} generated new webhookPathToken (128-bit)`);
   return { token, ok: true };
 }
+
+/**
+ * v1.3.79 AI-COMMAND: 通用账号配置写回 (支持嵌套路径, 如 "heartflow.enabled")。
+ * 写 accounts/<accountId>.json + invalidate cache → watcher 触发热重载 → 容器更新 (即时生效)。
+ */
+export async function setAccountField(
+  accountId: string,
+  fieldPath: string,
+  value: unknown,
+): Promise<{ ok: boolean; filePath: string; reason?: string }> {
+  const dir = join(await findPluginRoot(), "accounts");
+  const filePath = join(dir, `${accountId}.json`);
+  let raw: Record<string, unknown>;
+  try {
+    const text = await readFile(filePath, "utf8");
+    raw = JSON.parse(text) as Record<string, unknown>;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    log.warn(`setAccountField: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    return { ok: false, filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+  }
+
+  // 点路径: "heartflow.enabled" → raw.heartflow.enabled = value (中间对象自动创建)
+  const parts = fieldPath.split(".");
+  let node: Record<string, unknown> = raw;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const key = parts[i]!;
+    if (typeof node[key] !== "object" || node[key] === null) node[key] = {};
+    node = node[key] as Record<string, unknown>;
+  }
+  node[parts[parts.length - 1]!] = value;
+
+  try {
+    const tmpPath = `${filePath}.tmp`;
+    await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+    await rename(tmpPath, filePath);
+  } catch (e) {
+    log.warn(`setAccountField: write ${accountId}.json failed: ${(e as Error).message}`);
+    return { ok: false, filePath, reason: "write-failed" };
+  }
+  invalidateConfigCache(accountId);
+  log.info(`setAccountField: account=${accountId} ${fieldPath}=${JSON.stringify(value)}`);
+  return { ok: true, filePath };
+}

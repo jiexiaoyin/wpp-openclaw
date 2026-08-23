@@ -32,18 +32,27 @@ import { buildSessionKey } from "./session-key.js";
 import { sendText as dispatchSendText, sendImage as dispatchSendImage } from "./dispatch/outbound.js";
 import { AGENT_TOOLS } from "./dispatch/agent-tools/index.js";
 import { getCurrentAccountId } from "./dispatch/account-context.js";
-import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, ensureWebhookPathToken } from "./config.js";
+import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, setAccountField, ensureWebhookPathToken } from "./config.js";
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig, type ResolvedGlobalConfig } from "./core/runtime-config.js";
 import type { WppTriggerConfig, WppAccountTriggerCtx } from "./inbound/triggers.js";
 import type { WppInboundMessage } from "./types.js";
 import { resolveAiConfig } from "./config-ai.js";
+import { defaultHeartflowConfig } from "./inbound/heartflow.js";
+import { defaultJargonConfig } from "./inbound/jargon.js";
+import { defaultAffectionConfig } from "./inbound/affection.js";
 import type { WppSendMessageParams, WppSendType } from "./dispatch/send-message.js";
 
 // 每账号 triggerConfig/triggerCtx 可变容器: handler 闭包持有对象引用, 热重载 update 字段即刻生效
 const runtimeTriggerConfigs = new Map<string, WppTriggerConfig>();
 const runtimeTriggerCtxs = new Map<string, WppAccountTriggerCtx>();
 const runtimeInboundHandlers = new Map<string, ReturnType<typeof createWppInboundHandler>>();
+
+// v1.3.79 AI-COMMAND: 三个新功能 (heartflow/jargon/affection) 的可变配置容器 —
+//   handler opts 持有引用, 热重载/命令更新容器属性即刻生效 (不用重建 handler)。
+const runtimeHeartflow = new Map<string, import("./inbound/heartflow.js").HeartflowConfig>();
+const runtimeJargon = new Map<string, import("./inbound/jargon.js").JargonConfig>();
+const runtimeAffection = new Map<string, import("./inbound/affection.js").AffectionConfig>();
 
 // P1 (2026-08-23): 每账号 /Msg/Sync 全局锁 — webhook sync_message 与 ws-client triggerSync
 //   并发双拉 → vendor 被同时拉两次 + 游标竞争。webhook 路径用此锁串行 (ws 有自己 syncInFlight)。
@@ -287,6 +296,92 @@ export const FILEHELPER_COMMANDS: FileHelperCommand[] = [
         : `❌ 设置失败: ${r.reason ?? "unknown"}`);
     },
   },
+  {
+    // v1.3.79 AI-COMMAND: 心流主动回复开关 (账号专属配置, 写 accounts/<id>.json + 热生效)
+    name: "/heartflow",
+    desc: "心流主动回复 on/off/status",
+    example: "/heartflow on",
+    handler: async ({ accountId, toWxid, args }) => {
+      const arg = (args[0] ?? "").toLowerCase();
+      const cfg = await loadAccountConfigAsync(accountId);
+      const hf = cfg?.heartflow ?? { enabled: false };
+      const current = Boolean(hf.enabled);
+      if (arg === "status") {
+        const th = (hf as { replyThreshold?: number }).replyThreshold ?? 0.6;
+        await sendToFileHelper(accountId, toWxid, `心流主动回复 (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}\n阈值: ${th}\n用法: /heartflow on|off /heartflow threshold <0-1>`);
+        return;
+      }
+      if (arg === "on" || arg === "off") {
+        const target = arg === "on";
+        const r = await setAccountField(accountId, "heartflow.enabled", target);
+        await sendToFileHelper(accountId, toWxid, r.ok
+          ? `✅ 心流主动回复已${target ? "开启" : "关闭"} (account=${accountId})`
+          : `❌ 设置失败: ${r.reason ?? "unknown"}`);
+        return;
+      }
+      if (arg === "threshold") {
+        const v = Number(args[1]);
+        if (!Number.isFinite(v) || v < 0 || v > 1) {
+          await sendToFileHelper(accountId, toWxid, "用法: /heartflow threshold <0-1>\n示例: /heartflow threshold 0.5 (0.6=默认, 越低越活跃)");
+          return;
+        }
+        const r = await setAccountField(accountId, "heartflow.replyThreshold", v);
+        await sendToFileHelper(accountId, toWxid, r.ok
+          ? `✅ 心流阈值已设为 ${v} (account=${accountId})`
+          : `❌ 设置失败: ${r.reason ?? "unknown"}`);
+        return;
+      }
+      await sendToFileHelper(accountId, toWxid, "用法: /heartflow on|off|status\n  或 /heartflow threshold <0-1>\n状态: " + (current ? "✅ 开启" : "❌ 关闭"));
+    },
+  },
+  {
+    // v1.3.79 AI-COMMAND: 好感度系统开关 (账号专属配置)
+    name: "/affection",
+    desc: "好感度系统 on/off/status",
+    example: "/affection on",
+    handler: async ({ accountId, toWxid, args }) => {
+      const arg = (args[0] ?? "").toLowerCase();
+      const cfg = await loadAccountConfigAsync(accountId);
+      const current = Boolean(cfg?.affection?.enabled);
+      if (arg === "status") {
+        await sendToFileHelper(accountId, toWxid, `好感度系统 (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}\n用法: /affection on|off`);
+        return;
+      }
+      if (arg === "on" || arg === "off") {
+        const target = arg === "on";
+        const r = await setAccountField(accountId, "affection.enabled", target);
+        await sendToFileHelper(accountId, toWxid, r.ok
+          ? `✅ 好感度系统已${target ? "开启" : "关闭"} (account=${accountId})`
+          : `❌ 设置失败: ${r.reason ?? "unknown"}`);
+        return;
+      }
+      await sendToFileHelper(accountId, toWxid, "用法: /affection on|off|status\n状态: " + (current ? "✅ 开启" : "❌ 关闭"));
+    },
+  },
+  {
+    // v1.3.79 AI-COMMAND: 黑话挖掘开关 (账号专属配置)
+    name: "/jargon",
+    desc: "黑话挖掘 on/off/status",
+    example: "/jargon on",
+    handler: async ({ accountId, toWxid, args }) => {
+      const arg = (args[0] ?? "").toLowerCase();
+      const cfg = await loadAccountConfigAsync(accountId);
+      const current = Boolean(cfg?.jargon?.enabled);
+      if (arg === "status") {
+        await sendToFileHelper(accountId, toWxid, `黑话挖掘 (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}\n用法: /jargon on|off`);
+        return;
+      }
+      if (arg === "on" || arg === "off") {
+        const target = arg === "on";
+        const r = await setAccountField(accountId, "jargon.enabled", target);
+        await sendToFileHelper(accountId, toWxid, r.ok
+          ? `✅ 黑话挖掘已${target ? "开启" : "关闭"} (account=${accountId})`
+          : `❌ 设置失败: ${r.reason ?? "unknown"}`);
+        return;
+      }
+      await sendToFileHelper(accountId, toWxid, "用法: /jargon on|off|status\n状态: " + (current ? "✅ 开启" : "❌ 关闭"));
+    },
+  },
 ];
 
 /** /help 自动遍历命令注册表生成 (新增命令自动出现在帮助里) */
@@ -365,13 +460,27 @@ export async function startAccountById(
   if (cfg.groupPolicy && !VALID_GROUP_POLICIES.includes(cfg.groupPolicy)) {
     throw new Error(`account.groupPolicy invalid for ${accountId}: "${cfg.groupPolicy}" (must be one of ${VALID_GROUP_POLICIES.join(",")})`);
   }
+  // v1.3.79: 创建账号专属可变配置容器 (只创建一次, triggerConfig/handler/runtime Map 共享同一对象引用)
+  //   热重载/命令更新容器 → triggers 和 handler 都立即生效, 且账号之间完全隔离
+  if (!runtimeHeartflow.has(accountId)) {
+    runtimeHeartflow.set(accountId, resolveAiConfig(cfg, "heartflow") ?? defaultHeartflowConfig());
+  }
+  if (!runtimeJargon.has(accountId)) {
+    runtimeJargon.set(accountId, resolveAiConfig(cfg, "jargon") ?? defaultJargonConfig());
+  }
+  if (!runtimeAffection.has(accountId)) {
+    runtimeAffection.set(accountId, resolveAiConfig(cfg, "affection") ?? defaultAffectionConfig());
+  }
+  const hfCfg = runtimeHeartflow.get(accountId)!;
+  const jgCfg = runtimeJargon.get(accountId)!;
+  const afCfg = runtimeAffection.get(accountId)!;
   if (!runtimeTriggerConfigs.has(accountId)) {
     runtimeTriggerConfigs.set(accountId, {
       ...defaultTriggerConfig(),
       requireAtMention: cfg.requireAtMention,
       groupPolicy: cfg.groupPolicy ?? "closed",
       groupAllowFrom: cfg.groupAllowFrom ?? [],
-      heartflow: cfg.heartflow, // v1.3.75: 心流配置 (默认 {enabled:false})
+      heartflow: hfCfg, // 共享账号专属容器引用
     });
   }
   const triggerConfig = runtimeTriggerConfigs.get(accountId)!;
@@ -389,6 +498,7 @@ export async function startAccountById(
   const triggerCtx = runtimeTriggerCtxs.get(accountId)!;
   // 首次创建, 后续复用同一实例 (ws/webhook 都喂同一 handler)
   if (!runtimeInboundHandlers.has(accountId)) {
+    // v1.3.79: hfCfg/jgCfg/afCfg 已在上面创建 (账号专属容器), handler opts 持有同一引用
     runtimeInboundHandlers.set(accountId, createWppInboundHandler({
       accountId,
       triggerConfig,
@@ -415,12 +525,13 @@ export async function startAccountById(
       },
       groupContextEnabled: cfg.groupContextEnabled === true,
       // v1.3.75 HEARTFLOW: 心流配置 + 机器人昵称 (未@群消息主动参与判断)
-      heartflow: resolveAiConfig(cfg, "heartflow"),
+      // v1.3.79: 传可变容器引用 — 热重载/命令更新容器即刻生效
+      heartflow: hfCfg,
       botNickname: cfg.nickname,
       // v1.3.76 JARGON: 黑话挖掘配置 (旁路采集 + 定时挖掘)
-      jargon: resolveAiConfig(cfg, "jargon"),
+      jargon: jgCfg,
       // v1.3.77 AFFECTION: 好感度/社交关系配置 (旁路处理)
-      affection: resolveAiConfig(cfg, "affection"),
+      affection: afCfg,
     }));
   }
   const inboundHandler = runtimeInboundHandlers.get(accountId)!;
@@ -1155,6 +1266,21 @@ export const plugin = {
         tctx.groupContextEnabled = newCfg.groupContextEnabled === true;
         if (newCfg.groupContextWindow !== undefined) tctx.groupContextWindow = newCfg.groupContextWindow;
       }
+      // v1.3.79: 更新三个新功能的可变配置容器 (handler 持有引用 → 立即生效)
+      const hf = runtimeHeartflow.get(accountId);
+      const jg = runtimeJargon.get(accountId);
+      const af = runtimeAffection.get(accountId);
+      // 泛型: target 可变对象, 逐键覆盖 (handler 持有同一引用 → 立即生效)
+      const applyMutable = <T extends object>(target: T | undefined, src: T | undefined): void => {
+        if (!target || !src) return;
+        for (const k of Object.keys(src) as (keyof T)[]) {
+          const v = (src as Record<string, unknown>)[k as string];
+          if (v !== undefined) (target as Record<string, unknown>)[k as string] = v;
+        }
+      };
+      applyMutable(hf, resolveAiConfig(newCfg, "heartflow") ?? defaultHeartflowConfig());
+      applyMutable(jg, resolveAiConfig(newCfg, "jargon") ?? defaultJargonConfig());
+      applyMutable(af, resolveAiConfig(newCfg, "affection") ?? defaultAffectionConfig());
       log.info(`hot-reload: account ${accountId} runtime config updated`);
     });
   },
