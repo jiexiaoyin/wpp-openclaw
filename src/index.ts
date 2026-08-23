@@ -32,7 +32,7 @@ import { buildSessionKey } from "./session-key.js";
 import { sendText as dispatchSendText, sendImage as dispatchSendImage } from "./dispatch/outbound.js";
 import { AGENT_TOOLS } from "./dispatch/agent-tools/index.js";
 import { getCurrentAccountId } from "./dispatch/account-context.js";
-import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, setAccountField, ensureWebhookPathToken } from "./config.js";
+import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, setAccountField, updateHeartflowGroups, updateBlacklistGroups, ensureWebhookPathToken } from "./config.js";
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig, type ResolvedGlobalConfig } from "./core/runtime-config.js";
 import type { WppTriggerConfig, WppAccountTriggerCtx } from "./inbound/triggers.js";
@@ -208,67 +208,28 @@ export const FILEHELPER_COMMANDS: FileHelperCommand[] = [
     },
   },
   {
-    name: "/adduser",
-    desc: "授权私聊白名单",
-    example: "/adduser wxid_abc123",
+    // v1.3.80 WHITELIST-UNIFY: 私聊白名单统一 (add/del/list, 批量)
+    name: "/user",
+    desc: "私聊白名单 add/del/list",
+    example: "/user add wxid_abc123 wxid_xyz",
     handler: async ({ accountId, toWxid, args }) => {
-      const target = args[0]?.trim();
-      if (!target) {
-        await sendToFileHelper(accountId, toWxid, "用法: /adduser <wxid>\n示例: /adduser wxid_abc123");
-        return;
-      }
-      const r = await appendAllowFrom(accountId, target);
-      await sendToFileHelper(accountId, toWxid, r.ok
-        ? `✅ 已授权私聊白名单: ${target}\n当前私聊白名单 (${r.allowFrom.length}): ${r.allowFrom.join(", ")}`
-        : `❌ 添加失败: ${r.reason ?? "unknown"}`);
+      await handleWhitelistCommand("user", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
     },
   },
   {
-    name: "/deluser",
-    desc: "移除私聊白名单",
-    example: "/deluser wxid_abc123",
+    name: "/group",
+    desc: "群白名单 add/del/list",
+    example: "/group add xxxxxxxx@chatroom",
     handler: async ({ accountId, toWxid, args }) => {
-      const target = args[0]?.trim();
-      if (!target) {
-        await sendToFileHelper(accountId, toWxid, "用法: /deluser <wxid>\n示例: /deluser wxid_abc123");
-        return;
-      }
-      const r = await removeAllowFrom(accountId, target);
-      await sendToFileHelper(accountId, toWxid, r.ok
-        ? `✅ 已移除私聊白名单: ${target}\n当前私聊白名单 (${r.allowFrom.length}): ${r.allowFrom.join(", ") || "(空)"}`
-        : `❌ 移除失败: ${r.reason ?? "unknown"}`);
+      await handleWhitelistCommand("group", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
     },
   },
   {
-    name: "/addgroup",
-    desc: "授权群聊白名单",
-    example: "/addgroup xxxxxxxx@chatroom",
+    name: "/blacklist",
+    desc: "黑名单群 add/del/list",
+    example: "/blacklist add xxxxxxxx@chatroom",
     handler: async ({ accountId, toWxid, args }) => {
-      const target = args[0]?.trim();
-      if (!target) {
-        await sendToFileHelper(accountId, toWxid, "用法: /addgroup <群ID>\n示例: /addgroup xxxxxxxx@chatroom");
-        return;
-      }
-      const r = await appendGroupAllowFrom(accountId, target);
-      await sendToFileHelper(accountId, toWxid, r.ok
-        ? `✅ 已授权群聊白名单: ${target}\n当前群聊白名单 (${r.groupAllowFrom.length}): ${r.groupAllowFrom.join(", ")}`
-        : `❌ 添加失败: ${r.reason ?? "unknown"}`);
-    },
-  },
-  {
-    name: "/delgroup",
-    desc: "移除群聊白名单",
-    example: "/delgroup xxxxxxxx@chatroom",
-    handler: async ({ accountId, toWxid, args }) => {
-      const target = args[0]?.trim();
-      if (!target) {
-        await sendToFileHelper(accountId, toWxid, "用法: /delgroup <群ID>\n示例: /delgroup xxxxxxxx@chatroom");
-        return;
-      }
-      const r = await removeGroupAllowFrom(accountId, target);
-      await sendToFileHelper(accountId, toWxid, r.ok
-        ? `✅ 已移除群聊白名单: ${target}\n当前群聊白名单 (${r.groupAllowFrom.length}): ${r.groupAllowFrom.join(", ") || "(空)"}`
-        : `❌ 移除失败: ${r.reason ?? "unknown"}`);
+      await handleWhitelistCommand("blacklist", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
     },
   },
   {
@@ -297,92 +258,186 @@ export const FILEHELPER_COMMANDS: FileHelperCommand[] = [
     },
   },
   {
-    // v1.3.79 AI-COMMAND: 心流主动回复开关 (账号专属配置, 写 accounts/<id>.json + 热生效)
+    // v1.3.79-80 AI-COMMAND: 三功能统一命令 (通用处理器 handleFeatureCommand)
     name: "/heartflow",
-    desc: "心流主动回复 on/off/status",
+    desc: "心流 on/off/status/threshold/group",
     example: "/heartflow on",
     handler: async ({ accountId, toWxid, args }) => {
-      const arg = (args[0] ?? "").toLowerCase();
-      const cfg = await loadAccountConfigAsync(accountId);
-      const hf = cfg?.heartflow ?? { enabled: false };
-      const current = Boolean(hf.enabled);
-      if (arg === "status") {
-        const th = (hf as { replyThreshold?: number }).replyThreshold ?? 0.6;
-        await sendToFileHelper(accountId, toWxid, `心流主动回复 (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}\n阈值: ${th}\n用法: /heartflow on|off /heartflow threshold <0-1>`);
-        return;
-      }
-      if (arg === "on" || arg === "off") {
-        const target = arg === "on";
-        const r = await setAccountField(accountId, "heartflow.enabled", target);
-        await sendToFileHelper(accountId, toWxid, r.ok
-          ? `✅ 心流主动回复已${target ? "开启" : "关闭"} (account=${accountId})`
-          : `❌ 设置失败: ${r.reason ?? "unknown"}`);
-        return;
-      }
-      if (arg === "threshold") {
-        const v = Number(args[1]);
-        if (!Number.isFinite(v) || v < 0 || v > 1) {
-          await sendToFileHelper(accountId, toWxid, "用法: /heartflow threshold <0-1>\n示例: /heartflow threshold 0.5 (0.6=默认, 越低越活跃)");
-          return;
-        }
-        const r = await setAccountField(accountId, "heartflow.replyThreshold", v);
-        await sendToFileHelper(accountId, toWxid, r.ok
-          ? `✅ 心流阈值已设为 ${v} (account=${accountId})`
-          : `❌ 设置失败: ${r.reason ?? "unknown"}`);
-        return;
-      }
-      await sendToFileHelper(accountId, toWxid, "用法: /heartflow on|off|status\n  或 /heartflow threshold <0-1>\n状态: " + (current ? "✅ 开启" : "❌ 关闭"));
+      await handleFeatureCommand("heartflow", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
     },
   },
   {
-    // v1.3.79 AI-COMMAND: 好感度系统开关 (账号专属配置)
     name: "/affection",
-    desc: "好感度系统 on/off/status",
+    desc: "好感度 on/off/status",
     example: "/affection on",
     handler: async ({ accountId, toWxid, args }) => {
-      const arg = (args[0] ?? "").toLowerCase();
-      const cfg = await loadAccountConfigAsync(accountId);
-      const current = Boolean(cfg?.affection?.enabled);
-      if (arg === "status") {
-        await sendToFileHelper(accountId, toWxid, `好感度系统 (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}\n用法: /affection on|off`);
-        return;
-      }
-      if (arg === "on" || arg === "off") {
-        const target = arg === "on";
-        const r = await setAccountField(accountId, "affection.enabled", target);
-        await sendToFileHelper(accountId, toWxid, r.ok
-          ? `✅ 好感度系统已${target ? "开启" : "关闭"} (account=${accountId})`
-          : `❌ 设置失败: ${r.reason ?? "unknown"}`);
-        return;
-      }
-      await sendToFileHelper(accountId, toWxid, "用法: /affection on|off|status\n状态: " + (current ? "✅ 开启" : "❌ 关闭"));
+      await handleFeatureCommand("affection", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
     },
   },
   {
-    // v1.3.79 AI-COMMAND: 黑话挖掘开关 (账号专属配置)
     name: "/jargon",
-    desc: "黑话挖掘 on/off/status",
+    desc: "黑话 on/off/status",
     example: "/jargon on",
     handler: async ({ accountId, toWxid, args }) => {
-      const arg = (args[0] ?? "").toLowerCase();
-      const cfg = await loadAccountConfigAsync(accountId);
-      const current = Boolean(cfg?.jargon?.enabled);
-      if (arg === "status") {
-        await sendToFileHelper(accountId, toWxid, `黑话挖掘 (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}\n用法: /jargon on|off`);
-        return;
-      }
-      if (arg === "on" || arg === "off") {
-        const target = arg === "on";
-        const r = await setAccountField(accountId, "jargon.enabled", target);
-        await sendToFileHelper(accountId, toWxid, r.ok
-          ? `✅ 黑话挖掘已${target ? "开启" : "关闭"} (account=${accountId})`
-          : `❌ 设置失败: ${r.reason ?? "unknown"}`);
-        return;
-      }
-      await sendToFileHelper(accountId, toWxid, "用法: /jargon on|off|status\n状态: " + (current ? "✅ 开启" : "❌ 关闭"));
+      await handleFeatureCommand("jargon", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
     },
   },
 ];
+
+/**
+ * v1.3.80 FEATURE-UNIFY: 三功能 (heartflow/affection/jargon) 统一命令处理器。
+ * 通用: on/off/status; heartflow 特有: threshold + group add|del|list。
+ * 返回 handled=true 表示命令已处理 (不分发给其它命令)。
+ */
+type FeatureName = "heartflow" | "affection" | "jargon";
+
+async function handleFeatureCommand(
+  feature: FeatureName,
+  args: string[],
+  send: (text: string) => Promise<void>,
+  accountId: string,
+): Promise<boolean> {
+  const arg = (args[0] ?? "").toLowerCase();
+  const cfg = await loadAccountConfigAsync(accountId);
+  const fc = cfg?.[feature] as Record<string, unknown> | undefined;
+  const current = Boolean(fc?.enabled);
+  const label = feature === "heartflow" ? "心流主动回复" : feature === "affection" ? "好感度系统" : "黑话挖掘";
+
+  // status: 显示当前状态 (+ heartflow 额外显示阈值/群白名单)
+  if (arg === "status") {
+    let extra = "";
+    if (feature === "heartflow") {
+      const th = typeof fc?.replyThreshold === "number" ? fc.replyThreshold : 0.6;
+      const wl = Array.isArray(fc?.whitelistGroups) ? (fc.whitelistGroups as string[]).length : 0;
+      extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个`;
+    }
+    await send(`${label} (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}${extra}\n用法: /${feature} on|off|status`);
+    return true;
+  }
+
+  // on/off: 开关
+  if (arg === "on" || arg === "off") {
+    const target = arg === "on";
+    const r = await setAccountField(accountId, `${feature}.enabled`, target);
+    await send(r.ok
+      ? `✅ ${label}已${target ? "开启" : "关闭"} (account=${accountId})`
+      : `❌ 设置失败: ${r.reason ?? "unknown"}`);
+    return true;
+  }
+
+  // heartflow 特有: threshold
+  if (feature === "heartflow" && arg === "threshold") {
+    const v = Number(args[1]);
+    if (!Number.isFinite(v) || v < 0 || v > 1) {
+      await send("用法: /heartflow threshold <0-1>\n示例: /heartflow threshold 0.5 (0.6=默认, 越低越活跃)");
+      return true;
+    }
+    const r = await setAccountField(accountId, "heartflow.replyThreshold", v);
+    await send(r.ok
+      ? `✅ 心流阈值已设为 ${v} (account=${accountId})`
+      : `❌ 设置失败: ${r.reason ?? "unknown"}`);
+    return true;
+  }
+
+  // heartflow 特有: group add|del|list (add 联动群聊白名单, del 只删心流)
+  if (feature === "heartflow" && arg === "group") {
+    const sub = (args[1] ?? "").toLowerCase();
+    const targets = args.slice(2).map((s) => s.trim()).filter(Boolean);
+    const wl = Array.isArray(fc?.whitelistGroups) ? (fc.whitelistGroups as string[]) : [];
+    if (sub === "list" || (sub === "" && targets.length === 0)) {
+      await send(`心流群白名单 (${wl.length}):\n` + (wl.length ? wl.map((g) => `- ${g}`).join("\n") : "(空)"));
+      return true;
+    }
+    if ((sub === "add" || sub === "del") && targets.length) {
+      for (const t of targets) {
+        await updateHeartflowGroups(accountId, sub as "add" | "del", t);
+      }
+      const cfg2 = await loadAccountConfigAsync(accountId);
+      const wl2 = (cfg2?.heartflow?.whitelistGroups as string[] | undefined) ?? [];
+      const gal = cfg2?.groupAllowFrom ?? [];
+      await send(`✅ 心流群白名单已${sub === "add" ? "添加" : "移除"}: ${targets.join(", ")}\n当前心流群 (${wl2.length}): ${wl2.join(", ") || "(空)"}\n(add 自动补群聊白名单; del 不删群聊白名单, 当前群聊白名单 ${gal.length} 个)`);
+      return true;
+    }
+    await send("用法: /heartflow group add <群ID> [群ID...]\n  或 /heartflow group del <群ID> [群ID...]\n  或 /heartflow group list");
+    return true;
+  }
+
+  // 未知 action: 提示用法
+  const extra = feature === "heartflow" ? "\n  或 /heartflow threshold <0-1>\n  或 /heartflow group add|del|list <群ID>" : "";
+  await send(`用法: /${feature} on|off|status${extra}\n状态: ${current ? "✅ 开启" : "❌ 关闭"}`);
+  return true;
+}
+
+/**
+ * v1.3.80 WHITELIST-UNIFY: 白名单统一处理器 (私聊 /user, 群 /group, 黑名单 /blacklist)。
+ * 通用 add/del/list, 支持批量。
+ */
+type WhitelistDomain = "user" | "group" | "blacklist";
+
+async function handleWhitelistCommand(
+  domain: WhitelistDomain,
+  args: string[],
+  send: (text: string) => Promise<void>,
+  accountId: string,
+): Promise<void> {
+  const action = (args[0] ?? "").toLowerCase();
+  const targets = args.slice(1).map((s) => s.trim()).filter(Boolean);
+  const label = domain === "user" ? "私聊白名单" : domain === "group" ? "群白名单" : "黑名单群";
+
+  const cfg = await loadAccountConfigAsync(accountId);
+
+  // list (或缺 action 无目标): 查看当前列表
+  if (action === "list" || (action === "" && targets.length === 0)) {
+    let list: string[];
+    if (domain === "user") list = (cfg?.allowFrom ?? []).slice();
+    else if (domain === "group") list = (cfg?.groupAllowFrom ?? []).slice();
+    else list = (cfg?.blacklistGroups ?? []).slice();
+    await send(`📋 ${label} (${list.length}):\n` + (list.length ? list.map((x) => `- ${x}`).join("\n") : "(空)"));
+    return;
+  }
+
+  // add: 批量增加
+  if (action === "add" && targets.length) {
+    let added: string[] = [];
+    if (domain === "user") {
+      const cur = (cfg?.allowFrom ?? []).slice();
+      added = targets.filter((t) => !cur.includes(t));
+      for (const t of targets) await appendAllowFrom(accountId, t);
+    } else if (domain === "group") {
+      const cur = (cfg?.groupAllowFrom ?? []).slice();
+      added = targets.filter((t) => !cur.includes(t));
+      for (const t of targets) await appendGroupAllowFrom(accountId, t);
+    } else {
+      const cur = (cfg?.blacklistGroups ?? []).slice();
+      added = targets.filter((t) => !cur.includes(t));
+      await updateBlacklistGroups(accountId, "add", targets);
+    }
+    await send(`✅ 已加入${label}: ${added.join(", ") || "(均已存在)"}`);
+    return;
+  }
+
+  // del: 批量删除
+  if (action === "del" && targets.length) {
+    let removed: string[] = [];
+    if (domain === "user") {
+      const cur = (cfg?.allowFrom ?? []).slice();
+      removed = targets.filter((t) => cur.includes(t));
+      for (const t of removed) await removeAllowFrom(accountId, t);
+    } else if (domain === "group") {
+      const cur = (cfg?.groupAllowFrom ?? []).slice();
+      removed = targets.filter((t) => cur.includes(t));
+      for (const t of removed) await removeGroupAllowFrom(accountId, t);
+    } else {
+      const cur = (cfg?.blacklistGroups ?? []).slice();
+      removed = targets.filter((t) => cur.includes(t));
+      await updateBlacklistGroups(accountId, "del", targets);
+    }
+    await send(`✅ 已移出${label}: ${removed.join(", ") || "(无)"}`);
+    return;
+  }
+
+  await send(`用法: /${domain} add <ID> [ID...] | /${domain} del <ID> [ID...] | /${domain} list`);
+}
 
 /** /help 自动遍历命令注册表生成 (新增命令自动出现在帮助里) */
 export function buildHelpText(): string {

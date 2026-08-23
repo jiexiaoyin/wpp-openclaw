@@ -670,3 +670,100 @@ export async function setAccountField(
   log.info(`setAccountField: account=${accountId} ${fieldPath}=${JSON.stringify(value)}`);
   return { ok: true, filePath };
 }
+
+/**
+ * v1.3.80 HEARTFLOW-GROUP: 心流群白名单 + 群聊白名单联动 (原子写回, 防竞态)。
+ *
+ * 老板规则:
+ *   - add: 加心流白名单 → 若群不在群聊白名单 (groupAllowFrom) → 自动加入 (保证能触发)
+ *   - del: 移除心流白名单 → 只从 heartflow.whitelistGroups 移除, 不动 groupAllowFrom (保留群普通回复能力)
+ *
+ * 返回 { ok, whitelistGroups, groupAllowFrom, reason? }
+ */
+export async function updateHeartflowGroups(
+  accountId: string,
+  action: "add" | "del",
+  chatroomId: string,
+): Promise<{ ok: boolean; whitelistGroups: string[]; groupAllowFrom: string[]; reason?: string }> {
+  const dir = join(await findPluginRoot(), "accounts");
+  const filePath = join(dir, `${accountId}.json`);
+  let raw: Record<string, unknown>;
+  try {
+    const text = await readFile(filePath, "utf8");
+    raw = JSON.parse(text) as Record<string, unknown>;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    log.warn(`updateHeartflowGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    return { ok: false, whitelistGroups: [], groupAllowFrom: [], reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+  }
+
+  // heartflow 对象 (不存在则默认 {enabled:false})
+  const hfRaw = (raw.heartflow as Record<string, unknown> | undefined) ?? {};
+  let wl: string[] = Array.isArray(hfRaw.whitelistGroups) ? (hfRaw.whitelistGroups as string[]) : [];
+  let gal: string[] = Array.isArray(raw.groupAllowFrom) ? (raw.groupAllowFrom as string[]) : [];
+
+  if (action === "add") {
+    if (!wl.includes(chatroomId)) wl = [...wl, chatroomId];
+    // 群不在群聊白名单 → 自动加入 (保证心流群能触发)
+    if (!gal.includes(chatroomId)) gal = [...gal, chatroomId];
+  } else if (action === "del") {
+    wl = wl.filter((g) => g !== chatroomId);
+    // 不动 groupAllowFrom (老板: 删除心流能力不连带删除群聊白名单)
+  }
+
+  hfRaw.whitelistGroups = wl;
+  raw.heartflow = hfRaw;
+  raw.groupAllowFrom = gal;
+
+  try {
+    const tmpPath = `${filePath}.tmp`;
+    await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+    await rename(tmpPath, filePath);
+  } catch (e) {
+    log.warn(`updateHeartflowGroups: write ${accountId}.json failed: ${(e as Error).message}`);
+    return { ok: false, whitelistGroups: wl, groupAllowFrom: gal, reason: "write-failed" };
+  }
+  invalidateConfigCache(accountId);
+  log.info(`updateHeartflowGroups: account=${accountId} ${action} ${chatroomId} (wl=${wl.length}, gal=${gal.length})`);
+  return { ok: true, whitelistGroups: wl, groupAllowFrom: gal };
+}
+
+/**
+ * v1.3.80 WHITELIST-UNIFY: 黑名单群批量增删 (账号专属)。
+ * add/del 支持批量; 返回 { ok, blacklist, reason? }
+ */
+export async function updateBlacklistGroups(
+  accountId: string,
+  action: "add" | "del",
+  targets: string[],
+): Promise<{ ok: boolean; blacklist: string[]; reason?: string }> {
+  const dir = join(await findPluginRoot(), "accounts");
+  const filePath = join(dir, `${accountId}.json`);
+  let raw: Record<string, unknown>;
+  try {
+    const text = await readFile(filePath, "utf8");
+    raw = JSON.parse(text) as Record<string, unknown>;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    log.warn(`updateBlacklistGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    return { ok: false, blacklist: [], reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+  }
+  let bl: string[] = Array.isArray(raw.blacklistGroups) ? (raw.blacklistGroups as string[]) : [];
+  if (action === "add") {
+    for (const t of targets) if (!bl.includes(t)) bl = [...bl, t];
+  } else if (action === "del") {
+    bl = bl.filter((g) => !targets.includes(g));
+  }
+  raw.blacklistGroups = bl;
+  try {
+    const tmpPath = `${filePath}.tmp`;
+    await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+    await rename(tmpPath, filePath);
+  } catch (e) {
+    log.warn(`updateBlacklistGroups: write ${accountId}.json failed: ${(e as Error).message}`);
+    return { ok: false, blacklist: bl, reason: "write-failed" };
+  }
+  invalidateConfigCache(accountId);
+  log.info(`updateBlacklistGroups: account=${accountId} ${action} ${targets.length} (bl=${bl.length})`);
+  return { ok: true, blacklist: bl };
+}

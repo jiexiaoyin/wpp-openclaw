@@ -55,5 +55,13 @@
   "friendCirclePublishAllowFrom": [
     "q139198824",
     "wxid_eezdbu1ytws422"
-  ]
+  ],
+  "heartflow": {
+    "enabled": true,
+    "whitelistGroups": [
+      "44971342037@chatroom",
+      "19908568237@chatroom",
+      "53889526119@chatroom"
+    ]
+  }
 }
