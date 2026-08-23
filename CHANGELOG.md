@@ -4,6 +4,20 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.3.79] 三功能 filehelper 命令 + 账号专属配置热生效
+- 2026-08-23 (老板: 多账号配置只能放账号专属文件 + 命令热生效)
+- **filehelper 命令** (账号专属, 写 accounts/<id>.json):
+  - `/heartflow on|off|status|threshold <0-1>`: 心流开关+阈值
+  - `/affection on|off|status`: 好感度开关
+  - `/jargon on|off|status`: 黑话开关
+- **配置热生效**: `runtimeHeartflow/Jargon/Affection` 账号专属容器,
+  triggerConfig/handler 共享同一引用, 热重载更新容器即刻生效
+- **setAccountField**: 通用账号配置写回 (嵌套路径, 写 accounts/<id>.json)
+- **多账号隔离**: 命令只改当前账号 accounts/<id>.json (架构原则)
+- **测试**: 981/981 全绿 (命令注册表 10 个)
+- **实测**: /heartflow on → 写账号配置 → hot-reload changed=heartflow → 容器更新
+- **版本**: 1.3.78 → 1.3.79
+
 ## [v1.3.78] 完整审阅修复 — 6 P0 + 7 P1
 - 2026-08-23 (5 维度审阅: 安全/正确性/健壮性/代码质量/新功能 → 全部修复)
 - **P0 安全**:
