@@ -107,7 +107,8 @@ export interface AffectionConfig {
 
 export function defaultAffectionConfig(): AffectionConfig {
   return {
-    enabled: false,
+    // v1.5.2 老板 23:30 拍板 "启用" + 8-23 01:00 Explicit Preference
+    enabled: true,
     maxUserAffection: 100,
     maxTotalAffection: 500,
     affectionDecayRate: 0.3,
