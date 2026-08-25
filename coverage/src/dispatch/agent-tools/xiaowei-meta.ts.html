@@ -1,0 +1,610 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for src/dispatch/agent-tools/xiaowei-meta.ts</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../../prettify.css" />
+    <link rel="stylesheet" href="../../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../../index.html">All files</a> / <a href="index.html">src/dispatch/agent-tools</a> xiaowei-meta.ts</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">87.42% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>153/175</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">100% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>1/1</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">4.54% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>1/22</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">87.42% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>153/175</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line high'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a>
+<a name='L121'></a><a href='#L121'>121</a>
+<a name='L122'></a><a href='#L122'>122</a>
+<a name='L123'></a><a href='#L123'>123</a>
+<a name='L124'></a><a href='#L124'>124</a>
+<a name='L125'></a><a href='#L125'>125</a>
+<a name='L126'></a><a href='#L126'>126</a>
+<a name='L127'></a><a href='#L127'>127</a>
+<a name='L128'></a><a href='#L128'>128</a>
+<a name='L129'></a><a href='#L129'>129</a>
+<a name='L130'></a><a href='#L130'>130</a>
+<a name='L131'></a><a href='#L131'>131</a>
+<a name='L132'></a><a href='#L132'>132</a>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a>
+<a name='L135'></a><a href='#L135'>135</a>
+<a name='L136'></a><a href='#L136'>136</a>
+<a name='L137'></a><a href='#L137'>137</a>
+<a name='L138'></a><a href='#L138'>138</a>
+<a name='L139'></a><a href='#L139'>139</a>
+<a name='L140'></a><a href='#L140'>140</a>
+<a name='L141'></a><a href='#L141'>141</a>
+<a name='L142'></a><a href='#L142'>142</a>
+<a name='L143'></a><a href='#L143'>143</a>
+<a name='L144'></a><a href='#L144'>144</a>
+<a name='L145'></a><a href='#L145'>145</a>
+<a name='L146'></a><a href='#L146'>146</a>
+<a name='L147'></a><a href='#L147'>147</a>
+<a name='L148'></a><a href='#L148'>148</a>
+<a name='L149'></a><a href='#L149'>149</a>
+<a name='L150'></a><a href='#L150'>150</a>
+<a name='L151'></a><a href='#L151'>151</a>
+<a name='L152'></a><a href='#L152'>152</a>
+<a name='L153'></a><a href='#L153'>153</a>
+<a name='L154'></a><a href='#L154'>154</a>
+<a name='L155'></a><a href='#L155'>155</a>
+<a name='L156'></a><a href='#L156'>156</a>
+<a name='L157'></a><a href='#L157'>157</a>
+<a name='L158'></a><a href='#L158'>158</a>
+<a name='L159'></a><a href='#L159'>159</a>
+<a name='L160'></a><a href='#L160'>160</a>
+<a name='L161'></a><a href='#L161'>161</a>
+<a name='L162'></a><a href='#L162'>162</a>
+<a name='L163'></a><a href='#L163'>163</a>
+<a name='L164'></a><a href='#L164'>164</a>
+<a name='L165'></a><a href='#L165'>165</a>
+<a name='L166'></a><a href='#L166'>166</a>
+<a name='L167'></a><a href='#L167'>167</a>
+<a name='L168'></a><a href='#L168'>168</a>
+<a name='L169'></a><a href='#L169'>169</a>
+<a name='L170'></a><a href='#L170'>170</a>
+<a name='L171'></a><a href='#L171'>171</a>
+<a name='L172'></a><a href='#L172'>172</a>
+<a name='L173'></a><a href='#L173'>173</a>
+<a name='L174'></a><a href='#L174'>174</a>
+<a name='L175'></a><a href='#L175'>175</a>
+<a name='L176'></a><a href='#L176'>176</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">// src/dispatch/agent-tools/xiaowei-meta.ts - XiaoWei tag (小微 AI 智能体)
+// v1.3.69 预开发 (老板拍板: 预开发但不启用); v1.3.71 起工具已进 AGENT_TOOLS_META
+//
+// ⚠️ 默认禁用 (v1.3.71 起实现方式): 工具在 AGENT_TOOLS_META (AI 可见), 但执行前检查 xiaoweiEnabled
+//   (getXiaoWei 里 `!state.config.xiaoweiEnabled` 抛"未启用") — 默认 false 关闭, /xiaowei on 开启
+//   关闭时 AI 调用 → 报"小微智能体未启用 (xiaoweiEnabled=false), 用 /xiaowei on 开启"
+//   开启 (老板拍板后 /xiaowei on) → 正常调用, 需先确认 vendor 小微已开通 (Permission)
+//
+// 小微智能体调用流程:
+//   createSession → events_url (SSE) → sendMessage → 回答经 Events 流返回 (text.delta/message/completed)
+//   注意: SSE 事件流是长连接, AI 工具直接调用会阻塞, 需封装为"发消息后轮询/收集"模式
+&nbsp;
+import { Type } from "typebox";
+import type { ToolMeta } from "./_shared.js";
+import { makeWppXiaoWei } from "../../send/xiaowei.js";
+import { getDefaultAccountRegistry } from "../../account-state.js";
+import { getCurrentAccountId } from "../account-context.js";
+&nbsp;
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >function getXiaoWei() {</span></span>
+<span class="cstat-no" title="statement not covered" >  const state = getDefaultAccountRegistry().get(getCurrentAccountId() ?? "default");</span>
+<span class="cstat-no" title="statement not covered" >  if (!state) throw new Error(`account not found: ${getCurrentAccountId() ?? "default"}`);</span>
+<span class="cstat-no" title="statement not covered" >  // v1.3.71: 小微能力开关 (默认关闭; /xiaowei on|off 命令控制, 配置 xiaoweiEnabled 持久化)</span>
+<span class="cstat-no" title="statement not covered" >  if (!state.config.xiaoweiEnabled) {</span>
+<span class="cstat-no" title="statement not covered" >    throw new Error("小微智能体未启用 (xiaoweiEnabled=false), 用 /xiaowei on 开启");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  return makeWppXiaoWei({</span>
+<span class="cstat-no" title="statement not covered" >    baseUrl: state.config.apiBaseUrl,</span>
+<span class="cstat-no" title="statement not covered" >    tokenKey: state.config.tokenKey,</span>
+<span class="cstat-no" title="statement not covered" >    authcode: state.authcode,</span>
+<span class="cstat-no" title="statement not covered" >    accountId: getCurrentAccountId() ?? "default",</span>
+<span class="cstat-no" title="statement not covered" >  });</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+&nbsp;
+export const XIAO_WEI_META: ToolMeta = {
+  // ===== 会话 =====
+  xiaoWeiCreateSession: [
+    "创建小微 AI 会话 (返回 events_url 供订阅 SSE 事件流). clientRequestId=去重标识, roomId=房间, welcomeText=欢迎语.",
+    Type.Object({
+      clientRequestId: Type.Optional(Type.String()),
+      roomId: Type.Optional(Type.String()),
+      welcomeText: Type.Optional(Type.String()),
+    }),
+    (<span class="fstat-no" title="function not covered" >opts: { clientRequestId?: string; roomId?: string; welcomeText?: string }) =&gt;</span>
+<span class="cstat-no" title="statement not covered" >      getXiaoWei().createSession({</span>
+<span class="cstat-no" title="statement not covered" >        clientRequestId: opts.clientRequestId,</span>
+<span class="cstat-no" title="statement not covered" >        roomId: opts.roomId,</span>
+<span class="cstat-no" title="statement not covered" >        welcomeText: opts.welcomeText,</span>
+<span class="cstat-no" title="statement not covered" >      }),</span>
+  ],
+  xiaoWeiGetSession: [
+    "获取小微会话状态 (当前消息/房间/最后事件序号).",
+    Type.Object({ sessionId: Type.String() }),
+    (<span class="fstat-no" title="function not covered" >sessionId: string) =&gt; getXiaoWei().getSession(sessionId),</span>
+  ],
+  xiaoWeiSendMessage: [
+    "向小微会话发送消息 (text 必填; 回答经 Events 事件流返回). context 可传文章/链接/图片引用.",
+    Type.Object({
+      sessionId: Type.String(),
+      text: Type.String(),
+      context: Type.Optional(Type.Array(Type.Unknown())),
+    }),
+<span class="fstat-no" title="function not covered" >    (sessionId: string, text: string, context?: unknown[]) =&gt;</span>
+<span class="cstat-no" title="statement not covered" >      getXiaoWei().sendMessage(sessionId, text, context ?? []),</span>
+  ],
+  xiaoWeiCancel: [
+    "取消小微当前回答 (事件流返回 cancelled, 会话恢复 ready).",
+    Type.Object({ sessionId: Type.String() }),
+    (<span class="fstat-no" title="function not covered" >sessionId: string) =&gt; getXiaoWei().cancel(sessionId),</span>
+  ],
+  xiaoWeiRegenerate: [
+    "重新生成小微回答 (messageId=要重生成的回答消息 ID).",
+    Type.Object({ sessionId: Type.String(), messageId: Type.String() }),
+<span class="fstat-no" title="function not covered" >    (sessionId: string, messageId: string) =&gt; getXiaoWei().regenerate(sessionId, messageId),</span>
+  ],
+  xiaoWeiSwitchRoom: [
+    "切换小微会话房间 (会话 ready 时).",
+    Type.Object({ sessionId: Type.String(), roomId: Type.String() }),
+<span class="fstat-no" title="function not covered" >    (sessionId: string, roomId: string) =&gt; getXiaoWei().switchRoom(sessionId, roomId),</span>
+  ],
+  xiaoWeiEvents: [
+    "订阅小微会话 SSE 事件流 (afterSequence=断线续传用). 返回 text/event-stream 原始流.",
+    Type.Object({
+      sessionId: Type.String(),
+      afterSequence: Type.Optional(Type.Number()),
+    }),
+<span class="fstat-no" title="function not covered" >    (sessionId: string, afterSequence?: number) =&gt;</span>
+<span class="cstat-no" title="statement not covered" >      getXiaoWei().events(sessionId, afterSequence),</span>
+  ],
+&nbsp;
+  // ===== 记忆 =====
+  xiaoWeiHistoryList: [
+    "读取小微记忆列表 (scrollType=加载方向 0 最新).",
+    Type.Object({ scrollType: Type.Optional(Type.Number()) }),
+    (<span class="fstat-no" title="function not covered" >scrollType?: number) =&gt; getXiaoWei().historyList(scrollType ?? 0),</span>
+  ],
+  xiaoWeiHistoryFill: [
+    "补录问答卡片到小微记忆 (items 结构化卡片数组).",
+    Type.Object({
+      items: Type.Array(Type.Unknown()),
+      operationType: Type.Optional(Type.Number()),
+    }),
+<span class="fstat-no" title="function not covered" >    (items: unknown[], operationType?: number) =&gt; getXiaoWei().historyFill(items, operationType ?? 0),</span>
+  ],
+  xiaoWeiHistoryDelete: [
+    "删除小微记忆 (deleteItemLists 按会话分组).",
+    Type.Object({ deleteItemLists: Type.Array(Type.Unknown()) }),
+    (<span class="fstat-no" title="function not covered" >deleteItemLists: unknown[]) =&gt; getXiaoWei().historyDelete(deleteItemLists),</span>
+  ],
+&nbsp;
+  // ===== 邀请 =====
+  xiaoWeiInvite: [
+    "邀请好友使用小微 (wxids 1..100 个).",
+    Type.Object({ wxids: Type.Array(Type.String()) }),
+    (<span class="fstat-no" title="function not covered" >wxids: string[]) =&gt; getXiaoWei().invite(wxids),</span>
+  ],
+  xiaoWeiInviteCandidates: [
+    "可邀请使用小微的好友列表 (可邀请/已获资格/已邀请).",
+    Type.Object({}),
+<span class="fstat-no" title="function not covered" >    () =&gt; getXiaoWei().inviteCandidates(),</span>
+  ],
+  xiaoWeiInviteInfo: [
+    "小微邀请额度 (总额/已用/剩余).",
+    Type.Object({}),
+<span class="fstat-no" title="function not covered" >    () =&gt; getXiaoWei().inviteInfo(),</span>
+  ],
+&nbsp;
+  // ===== 红点 =====
+  xiaoWeiRedDotsQuery: [
+    "查询小微红点 (类型/负载/时间戳/reddotId).",
+    Type.Object({}),
+<span class="fstat-no" title="function not covered" >    () =&gt; getXiaoWei().redDotsQuery(),</span>
+  ],
+  xiaoWeiRedDotsRead: [
+    "标记小微红点已读 (reddotId 来自 Query, lastReadTimestamp=最后读取时间戳).",
+    Type.Object({ reddotId: Type.Number(), lastReadTimestamp: Type.Number() }),
+<span class="fstat-no" title="function not covered" >    (reddotId: number, lastReadTimestamp: number) =&gt; getXiaoWei().redDotsRead(reddotId, lastReadTimestamp),</span>
+  ],
+&nbsp;
+  // ===== 卡片 =====
+  xiaoWeiCardUsers: [
+    "小微卡片用户列表 (cardType 卡片类型, pageContext 分页).",
+    Type.Object({
+      cardType: Type.Number(),
+      pageContext: Type.Optional(Type.String()),
+    }),
+<span class="fstat-no" title="function not covered" >    (cardType: number, pageContext?: string) =&gt; getXiaoWei().cardUsers(cardType, pageContext ?? ""),</span>
+  ],
+  xiaoWeiCardScreenshotCheck: [
+    "小微截屏安全校验 (messageId + appId 必填, media 文件标识).",
+    Type.Object({
+      messageId: Type.String(),
+      appId: Type.String(),
+      media: Type.Optional(Type.Array(Type.Unknown())),
+    }),
+<span class="fstat-no" title="function not covered" >    (messageId: string, appId: string, media?: unknown[]) =&gt;</span>
+<span class="cstat-no" title="statement not covered" >      getXiaoWei().cardScreenshotCheck(messageId, appId, media ?? []),</span>
+  ],
+&nbsp;
+  // ===== 权限 / A2A / 建议 =====
+  xiaoWeiPermission: [
+    "查询当前账号是否已开通小微 (未开通则调用其它小微接口会失败).",
+    Type.Object({}),
+<span class="fstat-no" title="function not covered" >    () =&gt; getXiaoWei().permission(),</span>
+  ],
+  xiaoWeiA2aList: [
+    "小微多智能体 (A2A) 对话列表.",
+    Type.Object({ limit: Type.Optional(Type.Number()) }),
+    (<span class="fstat-no" title="function not covered" >limit?: number) =&gt; getXiaoWei().a2aList(limit ?? 20),</span>
+  ],
+  xiaoWeiSuggestions: [
+    "小微推荐提示词 (shareType 分享来源, uiState 界面状态).",
+    Type.Object({}),
+<span class="fstat-no" title="function not covered" >    () =&gt; getXiaoWei().suggestions(),</span>
+  ],
+};
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-08-20T14:27:07.087Z
+            </div>
+        <script src="../../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../../sorter.js"></script>
+        <script src="../../../block-navigation.js"></script>
+    </body>
+</html>
+    

@@ -5,7 +5,9 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "setup": "node scripts/setup.js"
+    "setup": "node scripts/setup.js",
+    "test": "node --test tests/unit/*.test.mjs",
+    "test:single": "node --test"
   },
   "openclaw": {
     "extensions": [
