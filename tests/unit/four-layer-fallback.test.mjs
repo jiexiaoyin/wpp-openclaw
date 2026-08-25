@@ -83,3 +83,16 @@ test('L4 deploy dist/ 全文件 0 MiniMax-M2.5 hardcode (排除 node_modules)', 
     assert.strictEqual(hits.length, 0, `${f}.js should have 0 MiniMax-M2.5 hardcode, found ${hits.length}`);
   }
 });
+
+test('L1/L2 deepseek-v4-flash 切 fallback (B-fix 19:39 老板拍 B)', () => {
+  const d1 = JSON.parse(fs.readFileSync(`${DEPLOY}accounts/default.json`, 'utf-8'));
+  assert.strictEqual(d1.heartflow.model, 'deepseek-v4-flash', 'L1 heartflow.model must be deepseek-v4-flash');
+  assert.strictEqual(d1.affection.model, 'deepseek-v4-flash', 'L1 affection.model must be deepseek-v4-flash');
+  assert.strictEqual(d1.jargon.model, 'deepseek-v4-flash', 'L1 jargon.model must be deepseek-v4-flash');
+  const d2 = JSON.parse(fs.readFileSync(`${DEPLOY}openclaw.plugin.json`, 'utf-8'));
+  const sc = d2.channelConfigs.wechatpadpro.schema.properties;
+  for (const k of ['heartflow', 'affection', 'jargon']) {
+    assert.strictEqual(sc[k].properties.model.default, 'deepseek-v4-flash', `L2 schema.${k}.model.default must be deepseek-v4-flash`);
+    assert.ok(sc[k].properties.model.enum.includes('deepseek-v4-flash'), `L2 schema.${k}.model.enum must include deepseek-v4-flash`);
+  }
+});

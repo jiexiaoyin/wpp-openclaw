@@ -1,0 +1,93 @@
+{
+  "_comment": "WeChatPadPro 单账号 demo (default). 后续多账号按 accounts/<id>.json 拆分 (B 方案). 所有 token/authcode 留空从 env vars 读. 2026-08-05 21:00 dev 阶段加 agent 字段 (老板审阅: 缺专用 agent 绑定). v1.1.12 2026-08-08 接总立 P0 (autoSetWebhook): 加 webhookPublicUrl + autoSetWebhook 字段, path 带 accountId, plugin 启动自动调 vendor /Webhook/Set.",
+  "enabled": true,
+  "tokenKey": "",
+  "tokenKeyEnv": "WECHATPRO_TOKEN_KEY",
+  "apiBaseUrl": "https://wx.juhe.chat",
+  "wsUrl": "wss://wx.juhe.chat/ws/sync",
+  "authcode": "",
+  "authcodeEnv": "WECHATPRO_AUTHCODE",
+  "webhookHost": "127.0.0.1",
+  "webhookPort": 4398,
+  "webhookPath": "/wechatpadpro/default/webhook",
+  "webhookPathToken": "035a9e17e8de373b7c115314",
+  "webhookPublicUrl": "",
+  "webhookPublicUrlEnv": "WECHATPRO_WEBHOOK_PUBLIC_URL",
+  "autoSetWebhook": true,
+  "setWebhookRetries": 3,
+  "webhookSecret": "",
+  "_webhookSecretNote": "v1.1.10 21:36 老板拍: signatureRequired 改回 permissive (src/core/signature.ts). secret 留空跳过验签, 让 vendor 不签的 push 能进. 等 vendor 真提供签名时再填 secret + 重新改 strict.",
+  "allowFrom": [
+    "q139198824",
+    "jsnjzhou",
+    "zhuqixia520520"
+  ],
+  "groupPolicy": "allowlist",
+  "groupAllowFrom": [
+    "57737516566@chatroom",
+    "53977339882@chatroom",
+    "44971342037@chatroom",
+    "19908568237@chatroom",
+    "53889526119@chatroom",
+    "45575237076@chatroom",
+    "21354014635@chatroom"
+  ],
+  "selfWxid": "wxid_eezdbu1ytws422",
+  "nickname": "益融小助理",
+  "requireAtMention": true,
+  "debounceMs": 1500,
+  "agent": "wpp-wechat",
+  "_v1.2.0_note": "2026-08-09 MCP 增强: mcpEnabled=false (vendor realtime 未开通, 避免白耗 5s connect; vendor 开通 realtime 后改 true 即用文件 CDN 下载)",
+  "mcpEnabled": false,
+  "_p0_pollution_fix_note": "2026-08-08 16:05 紧急加固: 仅 wxid_dbdmq8riblxo12 直聊可触发; 群聊关闭; plugin disabled in openclaw.json 等待 code-level 白名单修复",
+  "_v1.1.17_note": "2026-08-08 17:10 P0-J 安全加固: webhookHost 0.0.0.0 → 127.0.0.1 (nginx 反代 wx.juhe.chat → 127.0.0.1:4398 不受影响, 但消除全网卡暴露)",
+  "webhookBusinessPath": "/wechatpadpro/default/webhook/business",
+  "webhookSecretEnv": "WECHATPRO_WEBHOOK_SECRET",
+  "adminUsers": [
+    "q139198824",
+    "wxid_eezdbu1ytws422"
+  ],
+  "blacklistGroups": [],
+  "chatroomDebug": false,
+  "dmPairingEnabled": false,
+  "groupContextEnabled": true,
+  "friendCirclePublishEnabled": true,
+  "friendCirclePublishAllowFrom": [
+    "q139198824",
+    "wxid_eezdbu1ytws422"
+  ],
+  "heartflow": {
+    "enabled": true,
+    "model": "deepseek-v4-flash",
+    "_model_note": "v1.4.0 11:34 老板拍 B+: 心流轻量化升级 (4 层兜底 chain: account cfg → schema default → hardcode M2.5)",
+    "whitelistGroups": [
+      "44971342037@chatroom",
+      "19908568237@chatroom",
+      "53889526119@chatroom",
+      "21354014635@chatroom"
+    ],
+    "replyThreshold": 0.6,
+    "minReplyIntervalSec": 0,
+    "minJudgeIntervalSec": 0,
+    "maxRetries": 1,
+    "timeoutMs": 5000
+  },
+  "affection": {
+    "enabled": false,
+    "model": "deepseek-v4-flash",
+    "_model_note": "v1.4.0 11:34 同上 (按 7-01 老板偏好保留 enabled=false 默认)",
+    "timeoutMs": 5000,
+    "maxRetries": 1,
+    "replyThreshold": 0.6,
+    "minReplyIntervalSec": 0,
+    "minJudgeIntervalSec": 0
+  },
+  "jargon": {
+    "enabled": false,
+    "model": "deepseek-v4-flash",
+    "_model_note": "v1.4.0 12:28 老板拍板 B: 消除 plugin hardcode, schema default → cfg chain (按 7-01 偏好 enabled=false 不动)",
+    "timeoutMs": 5000,
+    "maxRetries": 1,
+    "minJudgeIntervalSec": 0
+  }
+}
