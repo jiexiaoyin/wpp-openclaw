@@ -48,12 +48,15 @@ export async function handleWebhookPayload(
   const msg = payloadToInboundMessage(accountId, payload);
   if (!msg) return null;
 
-  const result = await enrichAndSaveMessage(msg);
+  const state = getDefaultAccountRegistry().get(accountId);
+  // v1.5.2 B-fix (2026-08-25 22:28 老板拍 A): 从 state.config.heartflow 取 cfg 传给 enrichAndSaveMessage
+  //   (修复 v1.5.0 B 方案 cfg 链未接 accounts.cfg bug, 让 webhook 路径也能触发心流独立 trigger)
+  const cfg = state?.config?.heartflow;
+  const result = await enrichAndSaveMessage(msg, cfg);
   if (!result.saved) {
     log.warn(`handleWebhookPayload persist failed: ${result.error}`);
   }
 
-  const state = getDefaultAccountRegistry().get(accountId);
   if (!state) return msg;
 
   // v1.1.39 SUNNOY-COMMANDS: 命令白名单检查 (sunnoy/wecom commands.js 范式)
