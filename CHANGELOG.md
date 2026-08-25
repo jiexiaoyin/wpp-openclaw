@@ -1817,3 +1817,22 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 老板之前部署的版本, 因 manifest 缺 id 爆网关 status=78, 已撤回 (`/data/wechatpadpro-removed-20260804-104900/`).
 完整 v0.1.0 PoC 后由 v1.0.0 (Phase G 完工) + v1.0.1 (audit 修复) 取代.
+
+## v1.5.0 B-fix (2026-08-25 20:06) - 3 层分层架构
+
+**老板拍板 B (3 层分层架构): 解耦 AI 主动观察 (heartflow) 与 AI 被动响应 (@bot)**
+
+### 改动 (4 文件 +110 行)
+- src/inbound/heartflow.ts: +tryIndependentTrigger() +IndependentTriggerOpts/Result +independentTrigger 配置
+- src/inbound/enrich.ts: +tryHeartflowAfterEnrich() +fire-and-forget 异步触发
+- openclaw.plugin.json: schema.heartflow.independentTrigger 字段 (default=false)
+- accounts/default.json: deploy heartflow.independentTrigger=true
+- tests/unit/independent-trigger.test.mjs: NEW 10 测试
+
+### 测试
+- npm test: 39/39 PASS (10 NEW + 29 OLD)
+
+### 部署状态
+- dev master commit: 待 push
+- deploy: dist/inbound/{heartflow,enrich}.js 已 esbuild 编译
+- gateway restart: **等老板拍板** (按 2026-08-04 10:52 铁律)
