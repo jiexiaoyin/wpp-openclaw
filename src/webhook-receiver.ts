@@ -123,6 +123,11 @@ export class WechatpadproWebhookServer implements WppWebhookServer {
           const rawBody = Buffer.concat(chunks);
 
           // signature 验证: HMAC-SHA256 (等 vendor 公开算法)
+          // v1.5.1 P2-fix (2026-08-25 21:30 老板拍 A): 加固防再犯
+          //   vendor (wx.juhe.chat) 当前不发 signature header
+          //   secret 配了 → 强制 verify → vendor 不发 signature → 401 → 0 入库 (P0 bug)
+          //   secret 不配 → 跳过 verify → webhook 正常入库 (按 v1.1.10 permissive 设计)
+          //   启用 HMAC 条件: vendor 公开签名算法 + env WECHATPRO_WEBHOOK_SECRET=真值
           if (signatureRequired(this.secret)) {
             const sig = extractSignatureHeader(req.headers as Record<string, string | string[] | undefined>);
             if (!verifyHmacSha256(rawBody, sig, this.secret!)) {
@@ -137,7 +142,7 @@ export class WechatpadproWebhookServer implements WppWebhookServer {
             }
             log.debug(`webhook signature ok: path=${matchPath}`);
           }
-          // secret 没配 → 接受 (vendor 当前不签)
+          // secret 没配 → 接受 (vendor 当前不签, 按 v1.1.10 permissive 设计)
 
           // Parse + dispatch
           // v1.3.18 F6 fix: 用 parseJsonText 预引号化 16+ 位大整数 (msg_id/new_msg_id 防丢精度)

@@ -1818,6 +1818,45 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 老板之前部署的版本, 因 manifest 缺 id 爆网关 status=78, 已撤回 (`/data/wechatpadpro-removed-20260804-104900/`).
 完整 v0.1.0 PoC 后由 v1.0.0 (Phase G 完工) + v1.0.1 (audit 修复) 取代.
 
+## v1.5.2 (2026-08-25 22:38 老板拍"逐一确认并完整修复")
+
+### 修复内容
+- **P0 修复**: dev vs deploy 不一致 — 编译 `dispatch/intent-llm.ts + dispatcher.ts` → deploy dist/dispatch/ (v1.5.0 P2-fix 拋错模式没编译, deploy 端仍是 v1.4.0 旧版 hardcode fallback "MiniMax-M2.7-highspeed")
+- **P1 修复**: CHANGELOG 补 v1.5.1 (HMAC env 回滚到 v1.1.10 permissive) + v1.5.2 (enrichBatch cfg 链修复) 章节
+- **P1 修复**: 推 v1.5.2 tag (累积 v1.5.1 + v1.5.2 + 本次 dev/deploy 同步)
+- **P1 修复**: version 升 1.5.2 (package.json + openclaw.plugin.json + src/core/constants.ts 3 处对齐)
+
+### 关联版本 (累积)
+- **v1.5.1** (2026-08-25 21:30 老板拍"请帮我完整修复"): HMAC env 位置错修复 — 删错位置 env (/root/.config/environment.d/wechatpadpro.conf), 写真位置 env (/root/.openclaw/gateway.systemd.env); signature.ts + webhook-receiver.ts 加 v1.5.1 P2-fix 注释; tests/unit/hmac-fix-v1.5.1.test.mjs 8 个新测试 (62/62 PASS)
+- **v1.5.2 B-fix** (2026-08-25 22:28 老板拍 A): enrichBatch cfg 链未接 accounts.cfg bug 修复 — enrich.ts enrichAndSaveMessage/enrichBatch 增加 cfg 参数, inbound/index.ts handleWebhookPayload 传 cfg, handler.ts enrichBatch 传 opts.heartflow; 5 文件编译 + 62/62 PASS
+
+### 文件改动
+- `src/dispatch/intent-llm.ts` — 已在 v1.5.0 P2-fix 改拋错模式 (dev)
+- `src/dispatch/dispatcher.ts` — 已在 v1.5.0 P2-fix 改拋错模式 (dev)
+- `dist/dispatch/intent-llm.js` — 本次编译 (deploy 同步)
+- `dist/dispatch/dispatcher.js` — 本次编译 (deploy 同步)
+- `package.json` — version 1.5.0 → 1.5.2
+- `openclaw.plugin.json` — version 1.5.0 → 1.5.2
+- `src/core/constants.ts` — PLUGIN_VERSION "1.5.0" → "1.5.2"
+- `dist/core/constants.js` — 编译 deploy
+- `CHANGELOG.md` — 补 v1.5.2 章节
+
+### 测试
+- `npm test`: 62/62 PASS ✅
+- 8 测试文件 (62 cases): affection/deploy-integrity/four-layer-fallback/heartflow/hmac-fix-v1.5.1/independent-trigger/p2-cleanup/triggers
+
+### 发布
+- git tag v1.5.2 (替代没推的 v1.5.1 tag, v1.5.2 是累积修复)
+- git push origin master
+- GitHub: jiexiaoyin/wpp-openclaw master HEAD update
+
+### 报告
+- 完整审阅报告: `/root/audit-reports/2026-08/wechatpadpro-openclaw/full-audit-v1.5.x-2026-08-25.md` (18.4 KB)
+- 完整修复报告: `/root/audit-reports/2026-08/wechatpadpro-openclaw/complete-fix-v1.5.2-2026-08-25.md` (待写)
+- 备份: `/data/wpp-v1.5.2-complete-fix-20260825-2240/`
+
+---
+
 ## v1.5.0 B-fix (2026-08-25 20:06) - 3 层分层架构
 
 **老板拍板 B (3 层分层架构): 解耦 AI 主动观察 (heartflow) 与 AI 被动响应 (@bot)**

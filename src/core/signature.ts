@@ -90,6 +90,14 @@ export function verifyHmacSha256(
  *   - secret 已配 → 返 true (强制 verify, caller 调 verifySignature 验)
  *   - secret 未配 → 返 false (skip 整个 verify 步骤)
  *
+ * v1.5.1 P2-fix (2026-08-25 21:30 老板拍 A): 加固防再犯
+ *   教训: 2026-08-25 P2-1 修复时, AI 错误激活 HMAC (配了 WECHATPRO_WEBHOOK_SECRET env)
+ *         导致 vendor (wx.juhe.chat) 推送无 signature header → plugin 401 拒绝 → 0 入库
+ *         (历史曾发生: v1.1.1 strict 永远 true → 老板 2026-08-05 拍板改 permissive)
+ *   设计: secret 配了才验签, 没配就 skip (vendor 不发 signature 必须 skip)
+ *   启用 HMAC 条件: vendor 公开签名算法 + env WECHATPRO_WEBHOOK_SECRET=真值
+ *   fail-safe: vendor 不支持签名时 (当前), 业务方必须不配 WECHATPRO_WEBHOOK_SECRET env
+ *
  * 历史:
  *   - v1.0.1: 返 !!secret (permissive, 跟 github webhook 行为一致)
  *   - v1.1.1: 改 strict 永远 true (没 secret 也强制 verify) — 这版跟 vendor 不兼容
