@@ -510,3 +510,115 @@ export async function ensureWebhookPathToken(accountId) {
     log.info(`ensureWebhookPathToken: account=${accountId} generated new webhookPathToken (128-bit)`);
     return { token, ok: true };
 }
+export async function setAccountField(accountId, fieldPath, value) {
+    const dir = join(await findPluginRoot(), "accounts");
+    const filePath = join(dir, `${accountId}.json`);
+    let raw;
+    try {
+        const text = await readFile(filePath, "utf8");
+        raw = JSON.parse(text);
+    }
+    catch (e) {
+        const err = e;
+        log.warn(`setAccountField: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        return { ok: false, filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+    }
+    const parts = fieldPath.split(".");
+    let node = raw;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const key = parts[i];
+        if (typeof node[key] !== "object" || node[key] === null)
+            node[key] = {};
+        node = node[key];
+    }
+    node[parts[parts.length - 1]] = value;
+    try {
+        const tmpPath = `${filePath}.tmp`;
+        await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+        await rename(tmpPath, filePath);
+    }
+    catch (e) {
+        log.warn(`setAccountField: write ${accountId}.json failed: ${e.message}`);
+        return { ok: false, filePath, reason: "write-failed" };
+    }
+    invalidateConfigCache(accountId);
+    log.info(`setAccountField: account=${accountId} ${fieldPath}=${JSON.stringify(value)}`);
+    return { ok: true, filePath };
+}
+export async function updateHeartflowGroups(accountId, action, chatroomId) {
+    const dir = join(await findPluginRoot(), "accounts");
+    const filePath = join(dir, `${accountId}.json`);
+    let raw;
+    try {
+        const text = await readFile(filePath, "utf8");
+        raw = JSON.parse(text);
+    }
+    catch (e) {
+        const err = e;
+        log.warn(`updateHeartflowGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        return { ok: false, whitelistGroups: [], groupAllowFrom: [], reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+    }
+    const hfRaw = raw.heartflow ?? {};
+    let wl = Array.isArray(hfRaw.whitelistGroups) ? hfRaw.whitelistGroups : [];
+    let gal = Array.isArray(raw.groupAllowFrom) ? raw.groupAllowFrom : [];
+    if (action === "add") {
+        if (!wl.includes(chatroomId))
+            wl = [...wl, chatroomId];
+        if (!gal.includes(chatroomId))
+            gal = [...gal, chatroomId];
+    }
+    else if (action === "del") {
+        wl = wl.filter((g) => g !== chatroomId);
+    }
+    hfRaw.whitelistGroups = wl;
+    raw.heartflow = hfRaw;
+    raw.groupAllowFrom = gal;
+    try {
+        const tmpPath = `${filePath}.tmp`;
+        await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+        await rename(tmpPath, filePath);
+    }
+    catch (e) {
+        log.warn(`updateHeartflowGroups: write ${accountId}.json failed: ${e.message}`);
+        return { ok: false, whitelistGroups: wl, groupAllowFrom: gal, reason: "write-failed" };
+    }
+    invalidateConfigCache(accountId);
+    log.info(`updateHeartflowGroups: account=${accountId} ${action} ${chatroomId} (wl=${wl.length}, gal=${gal.length})`);
+    return { ok: true, whitelistGroups: wl, groupAllowFrom: gal };
+}
+export async function updateBlacklistGroups(accountId, action, targets) {
+    const dir = join(await findPluginRoot(), "accounts");
+    const filePath = join(dir, `${accountId}.json`);
+    let raw;
+    try {
+        const text = await readFile(filePath, "utf8");
+        raw = JSON.parse(text);
+    }
+    catch (e) {
+        const err = e;
+        log.warn(`updateBlacklistGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        return { ok: false, blacklist: [], reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
+    }
+    let bl = Array.isArray(raw.blacklistGroups) ? raw.blacklistGroups : [];
+    if (action === "add") {
+        for (const t of targets)
+            if (!bl.includes(t))
+                bl = [...bl, t];
+    }
+    else if (action === "del") {
+        bl = bl.filter((g) => !targets.includes(g));
+    }
+    raw.blacklistGroups = bl;
+    try {
+        const tmpPath = `${filePath}.tmp`;
+        await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
+        await rename(tmpPath, filePath);
+    }
+    catch (e) {
+        log.warn(`updateBlacklistGroups: write ${accountId}.json failed: ${e.message}`);
+        return { ok: false, blacklist: bl, reason: "write-failed" };
+    }
+    invalidateConfigCache(accountId);
+    log.info(`updateBlacklistGroups: account=${accountId} ${action} ${targets.length} (bl=${bl.length})`);
+    return { ok: true, blacklist: bl };
+}

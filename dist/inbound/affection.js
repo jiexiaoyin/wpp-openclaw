@@ -40,8 +40,8 @@ export function defaultAffectionConfig() {
         maxUserAffection: 100,
         maxTotalAffection: 500,
         affectionDecayRate: 0.3,
-        model: "MiniMax-M2.5",
-        timeoutMs: 5000,
+        model: undefined,
+        timeoutMs: 15000,
         llmClassify: false,
     };
 }
@@ -153,12 +153,18 @@ export async function classifyInteractionWithLlm(message, senderName, cfg, opts)
                 "x-api-key": opts.apiKey,
             },
             body: JSON.stringify({
-                model: cfg.model ?? "MiniMax-M2.5",
+                model: (() => {
+                    const m = cfg.model;
+                    if (!m) {
+                        throw new Error("[WPP AFFECTION] cfg.model unresolved. v1.4.0 12:09 老板拍板: 必须从 schema default 或 accounts/<id>.json:affection.model 提供. plugin 不再 hardcode fallback");
+                    }
+                    return m;
+                })(),
                 max_tokens: 50,
                 temperature: 0,
                 messages: [{ role: "user", content: buildClassifyPrompt(message, senderName) }],
             }),
-            signal: AbortSignal.timeout(cfg.timeoutMs ?? 5000),
+            signal: AbortSignal.timeout(cfg.timeoutMs ?? 15000),
         });
         if (!resp.ok)
             return undefined;

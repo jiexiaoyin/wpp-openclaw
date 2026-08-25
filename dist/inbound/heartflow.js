@@ -3,8 +3,8 @@ import { safeFetch } from "../util/safe-fetch.js";
 export function defaultHeartflowConfig() {
     return {
         enabled: false,
-        model: "MiniMax-M2.5",
-        timeoutMs: 5000,
+        model: undefined,
+        timeoutMs: 15000,
         replyThreshold: 0.6,
         energyDecayRate: 0.1,
         energyRecoveryRate: 0.02,
@@ -272,8 +272,11 @@ export async function judgeHeartflow(input, cfg, opts) {
         return null;
     }
     const baseUrl = (opts.baseUrl ?? "https://api.minimaxi.com/anthropic").replace(/\/$/, "");
-    const model = cfg.model ?? "MiniMax-M2.5";
-    const timeoutMs = cfg.timeoutMs ?? 5000;
+    const model = cfg.model;
+    if (!model) {
+        throw new Error("[WPP HEARTFLOW] cfg.model unresolved. v1.4.0 12:09 老板拍板: 必须从 schema default (openclaw.plugin.json channelConfigs.wechatpadpro.schema.properties.heartflow.properties.model.default) 或 accounts/<id>.json:heartflow.model 提供. plugin 不再 hardcode fallback. 参见 https://docs.openclaw.ai");
+    }
+    const timeoutMs = cfg.timeoutMs ?? 15000;
     const maxTokens = 300;
     const maxRetries = Math.max(0, cfg.maxRetries ?? 2);
     const prompt = buildHeartflowPrompt(input, cfg);
