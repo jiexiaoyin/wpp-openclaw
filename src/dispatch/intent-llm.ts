@@ -168,7 +168,11 @@ export async function decideIntentWithLlm(
     return null;
   }
   const baseUrl = (opts.baseUrl ?? "https://api.minimaxi.com/anthropic").replace(/\/$/, "");
-  const model = opts.model ?? /* v1.4.0 P0-fix 19:31 hardcode 消除, 走 schema default 链 (heartflow/affection/jargon 模式) */ process.env.WPP_DEFAULT_INTENT_MODEL ?? "MiniMax-M2.7-highspeed";
+  // v1.5.0 P2-fix 20:41 老板拍 A: 4 项 P2 全收口 - 3 处 intent-llm/dispatcher hardcode 消除
+  //   v1.4.0 心流消除 hardcode 时漏了这里, 现在补上
+  //   链: opts.model (从 accounts cfg 注入) → schema default (openclaw.plugin.json llmIntentModel.default)
+  //   缺失抛错 (跟 heartflow.ts:475 同样的设计哲学)
+  const model = opts.model ?? (() => { throw new Error("[WPP v1.5.0 P2-fix] intent-llm model unresolved. 必须从 accounts cfg (accounts/<id>.json:llmIntentModel) 或 schema default (openclaw.plugin.json channelConfigs.wechatpadpro.schema.properties.llmIntentModel.default) 提供. plugin 不再 hardcode fallback. 参见 https://docs.openclaw.ai"); })();
   const timeoutMs = opts.timeoutMs ?? 5000;
   const maxTokens = opts.maxTokens ?? 200;
 

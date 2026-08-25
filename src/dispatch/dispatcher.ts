@@ -162,9 +162,15 @@ function resolveLlmIntentEnabled(msg: WppInboundMessage): boolean {
 }
 function resolveLlmModel(msg: WppInboundMessage): string {
   try {
-    return getDefaultAccountRegistry().get(msg.accountId)?.config.llmIntentModel ?? /* v1.4.0 P0-fix 19:31 hardcode 消除 */ "MiniMax-M2.7-highspeed";
-  } catch {
-    return /* v1.4.0 P0-fix 19:31 hardcode 消除 */ "MiniMax-M2.7-highspeed";
+    const cfgModel = getDefaultAccountRegistry().get(msg.accountId)?.config.llmIntentModel;
+    if (cfgModel) return cfgModel;
+    // v1.5.0 P2-fix 20:41 老板拍 A: dispatcher.ts:165 hardcode 消除
+    //   v1.4.0 心流消除 hardcode 时漏了这里, 现在补上
+    //   accounts cfg 缺失 → 拋错 (跟 heartflow.ts:475 一致设计哲学, 不再 hardcode fallback)
+    throw new Error("[WPP v1.5.0 P2-fix] llmIntentModel unresolved. 必须从 accounts cfg (accounts/<id>.json:llmIntentModel) 提供. plugin 不再 hardcode fallback. 参见 https://docs.openclaw.ai");
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("[WPP v1.5.0 P2-fix]")) throw e;
+    throw new Error(`[WPP v1.5.0 P2-fix] resolveLlmModel failed: ${e instanceof Error ? e.message : String(e)}. 必须从 accounts cfg 提供 llmIntentModel. plugin 不再 hardcode fallback.`);
   }
 }
 function resolveLlmTimeoutMs(msg: WppInboundMessage): number {

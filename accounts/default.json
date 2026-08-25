@@ -91,5 +91,8 @@
     "timeoutMs": 5000,
     "maxRetries": 1,
     "minJudgeIntervalSec": 0
-  }
+  },
+  "llmIntentEnabled": true,
+  "llmIntentModel": "deepseek-v4-flash",
+  "llmIntentTimeoutMs": 5000
 }
