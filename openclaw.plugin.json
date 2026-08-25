@@ -1,21 +1,52 @@
 {
   "name": "wechatpadpro",
   "id": "wechatpadpro",
-  "version": "1.4.0",
+  "version": "1.3.80",
   "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 313 paths API 覆盖 (新 vendor v2026.08.18.1); v1.3.75 HEARTFLOW 心流主动回复 (未@群消息小模型5维打分自动参与); v1.3.76 JARGON 群黑话挖掘 (自主学习, AI 可查群黑话含义); v1.3.77 AFFECTION 好感度/社交关系系统 (交互分类→好感度+情绪注入回复风格) + AI-UNIFY 统一判断模型配置; v1.3.78 完整审阅加固 (webhook token 强制 / 群白名单 fail-closed / WS v1 解析 / 去重账号隔离 / 心流冷却 / jargon 计数 / affection 去单字误判 / WS 长退避 / synckey 崩溃 / DB 重试 / sync 锁); v1.3.79 三功能 filehelper 命令 (/heartflow /affection /jargon 开关) + 账号专属配置热生效.",
   "channelId": "wechatpadpro",
   "channelName": "WeChatPadPro (微信 Pad 协议)",
   "kind": "plugin",
   "configUiHints": {
-    "tokenKey": { "label": "WeChatPadPro TokenKey", "sensitive": true, "help": "vendor 后台获取; 也可用 WECHATPRO_TOKEN_KEY env" },
-    "authcode": { "label": "授权码 authcode", "sensitive": true, "help": "vendor 启动时生成; 也可用 WECHATPRO_AUTHCODE env" },
-    "apiBaseUrl": { "label": "API Base URL", "placeholder": "https://YOUR_VENDOR_HOST", "help": "vendor HTTP API 地址" },
-    "wsUrl": { "label": "WebSocket URL", "placeholder": "wss://YOUR_VENDOR_HOST/ws/sync", "help": "vendor WS 推送地址" },
-    "allowFrom": { "label": "私聊白名单 (逗号分隔)", "help": "空 = 拒绝所有 DM (fail-closed)" },
-    "groupPolicy": { "label": "群聊策略", "help": "open/disabled/allowlist/closed" },
-    "groupAllowFrom": { "label": "群白名单 (逗号分隔, @chatroom)", "help": "groupPolicy=allowlist 时用" },
-    "agent": { "label": "OpenClaw agent id", "help": "绑定 agent (如 wpp-wechat), 禁止 main" },
-    "webhookPort": { "label": "webhook 端口", "help": "默认 4398 (多账号共享)" }
+    "tokenKey": {
+      "label": "WeChatPadPro TokenKey",
+      "sensitive": true,
+      "help": "vendor 后台获取; 也可用 WECHATPRO_TOKEN_KEY env"
+    },
+    "authcode": {
+      "label": "授权码 authcode",
+      "sensitive": true,
+      "help": "vendor 启动时生成; 也可用 WECHATPRO_AUTHCODE env"
+    },
+    "apiBaseUrl": {
+      "label": "API Base URL",
+      "placeholder": "https://wx.juhe.chat",
+      "help": "vendor HTTP API 地址"
+    },
+    "wsUrl": {
+      "label": "WebSocket URL",
+      "placeholder": "wss://wx.juhe.chat/ws/sync",
+      "help": "vendor WS 推送地址"
+    },
+    "allowFrom": {
+      "label": "私聊白名单 (逗号分隔)",
+      "help": "空 = 拒绝所有 DM (fail-closed)"
+    },
+    "groupPolicy": {
+      "label": "群聊策略",
+      "help": "open/disabled/allowlist/closed"
+    },
+    "groupAllowFrom": {
+      "label": "群白名单 (逗号分隔, @chatroom)",
+      "help": "groupPolicy=allowlist 时用"
+    },
+    "agent": {
+      "label": "OpenClaw agent id",
+      "help": "绑定 agent (如 wpp-wechat), 禁止 main"
+    },
+    "webhookPort": {
+      "label": "webhook 端口",
+      "help": "默认 4398 (多账号共享)"
+    }
   },
   "channels": [
     "wechatpadpro"
@@ -24,7 +55,7 @@
   "channelConfigs": {
     "wechatpadpro": {
       "label": "WeChatPadPro",
-      "description": "WeChatPadPro 微信 Pad 协议 HTTP API 适配 (vendor: vendor.cloud vendorapi). 部署在 YOUR_DEPLOY_PATH 反代 https://YOUR_VENDOR_HOST/api/.",
+      "description": "WeChatPadPro 微信 Pad 协议 HTTP API 适配 (vendor: knowhub.cloud adminmaxapi). 部署在 /opt/1panel/docker/compose/WechatPadPro/, 反代 https://wx.juhe.chat/api/.",
       "schema": {
         "type": "object",
         "additionalProperties": true,
@@ -35,15 +66,15 @@
           },
           "tokenKey": {
             "type": "string",
-            "description": "WeChatPadPro vendor 鉴权 TokenKey (从 vendor 后台 YOUR_VENDOR_HOST 拿)"
+            "description": "WeChatPadPro vendor 鉴权 TokenKey (从 vendor 后台 adminmax.knowhub.cloud 拿)"
           },
           "apiBaseUrl": {
             "type": "string",
-            "description": "WeChatPadPro HTTP API base URL (公网反代: https://YOUR_VENDOR_HOST)"
+            "description": "WeChatPadPro HTTP API base URL (公网反代: https://wx.juhe.chat)"
           },
           "wsUrl": {
             "type": "string",
-            "description": "WebSocket URL (公网反代: wss://YOUR_VENDOR_HOST/ws/sync)"
+            "description": "WebSocket URL (公网反代: wss://wx.juhe.chat/ws/sync)"
           },
           "authcode": {
             "type": "string",
@@ -272,41 +303,186 @@
             "type": "object",
             "description": "v1.3.75 HEARTFLOW: 群聊主动回复 (心流机制, 未@群消息小模型5维打分自动参与)。enabled=false (默认) 关闭; 显式 true 启用",
             "properties": {
-              "enabled": { "type": "boolean", "description": "总开关 (默认 false)" },
-              "model": { "type": "string", "default": "MiniMax-M2.7-highspeed", "enum": ["MiniMax-M2.5", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"], "description": "判断小模型 (v1.4.0 11:34 fallback chain: account cfg → schema default M2.7-highspeed → hardcode M2.5)" },
-              "replyThreshold": { "type": "number", "description": "回复阈值 0-1 (默认 0.6)" },
-              "energyDecayRate": { "type": "number", "description": "回复后精力衰减 (默认 0.1)" },
-              "energyRecoveryRate": { "type": "number", "description": "不回复恢复 (默认 0.02)" },
-              "contextMessagesCount": { "type": "number", "description": "判断上下文条数 (默认 5)" },
-              "minReplyIntervalSec": { "type": "number", "description": "最小回复间隔秒 (默认 0)" },
-              "whitelistGroups": { "type": "array", "items": { "type": "string" }, "description": "群白名单 (空=全部)" },
-              "includeReasoning": { "type": "boolean", "description": "判断时输出 reasoning (默认 false 省 token)" },
-              "maxRetries": { "type": "number", "description": "判断重试 (默认 2)" },
-              "timeoutMs": { "type": "number", "description": "判断超时毫秒 (默认 5000)" }
+              "enabled": {
+                "type": "boolean",
+                "description": "总开关 (默认 false)"
+              },
+              "model": {
+                "type": "string",
+                "default": "deepseek-v4-flash",
+                "enum": [
+                  "MiniMax-M2.5",
+                  "MiniMax-M2.7",
+                  "MiniMax-M2.7-highspeed",
+                  "deepseek-v4-flash"
+                ],
+                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-v4-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
+              },
+              "replyThreshold": {
+                "type": "number",
+                "description": "回复阈值 0-1 (默认 0.6)",
+                "default": 0.6
+              },
+              "energyDecayRate": {
+                "type": "number",
+                "description": "回复后精力衰减 (默认 0.1)"
+              },
+              "energyRecoveryRate": {
+                "type": "number",
+                "description": "不回复恢复 (默认 0.02)"
+              },
+              "contextMessagesCount": {
+                "type": "number",
+                "description": "判断上下文条数 (默认 5)"
+              },
+              "minReplyIntervalSec": {
+                "type": "number",
+                "description": "最小回复间隔秒 (默认 0)",
+                "default": 0
+              },
+              "whitelistGroups": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "群白名单 (空=全部)"
+              },
+              "includeReasoning": {
+                "type": "boolean",
+                "description": "判断时输出 reasoning (默认 false 省 token)"
+              },
+              "maxRetries": {
+                "type": "number",
+                "description": "判断重试 (默认 1; v1.4.0 P0-fix 19:24 maxRetries fallback 2→1 跟 defaultHeartflowConfig 对齐)",
+                "default": 1
+              },
+              "timeoutMs": {
+                "type": "number",
+                "description": "判断超时毫秒 (默认 5000; v1.4.0 14:55 老板拍 C 方案 5000×2=10秒总)",
+                "default": 5000
+              },
+              "minJudgeIntervalSec": {
+                "type": "number",
+                "default": 0,
+                "description": "LLM judge 频率闸最小间隔秒 (默认 0; v1.4.0 P0-fix 19:24)"
+              }
             }
           },
           "jargon": {
             "type": "object",
             "description": "v1.3.76 JARGON: 群黑话挖掘 (自主学习, 旁路采集+定时挖掘)。enabled=false (默认) 关闭; 显式 true 启用。AI 可查 query_jargon 理解群黑话",
             "properties": {
-              "enabled": { "type": "boolean", "description": "总开关 (默认 false)" },
-              "model": { "type": "string", "default": "MiniMax-M2.7-highspeed", "enum": ["MiniMax-M2.5", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"], "description": "挖掘模型 (v1.4.0 12:28 老板拍板 B: 消除 plugin hardcode, fallback chain: account cfg → schema default M2.7-highspeed → hardcode 已禁用, 缺失抛错)" },
-              "mineIntervalSec": { "type": "number", "description": "挖掘间隔秒 (默认 60)" },
-              "minMessages": { "type": "number", "description": "每次挖掘最少新增消息数 (默认 10)" },
-              "maxCandidatesPerGroup": { "type": "number", "description": "每群候选上限 (默认 50)" },
-              "whitelistGroups": { "type": "array", "items": { "type": "string" }, "description": "群白名单 (空=全部)" }
+              "enabled": {
+                "type": "boolean",
+                "description": "总开关 (默认 false)"
+              },
+              "model": {
+                "type": "string",
+                "default": "deepseek-v4-flash",
+                "enum": [
+                  "MiniMax-M2.5",
+                  "MiniMax-M2.7",
+                  "MiniMax-M2.7-highspeed",
+                  "deepseek-v4-flash"
+                ],
+                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-v4-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
+              },
+              "mineIntervalSec": {
+                "type": "number",
+                "description": "挖掘间隔秒 (默认 60)"
+              },
+              "minMessages": {
+                "type": "number",
+                "description": "每次挖掘最少新增消息数 (默认 10)"
+              },
+              "maxCandidatesPerGroup": {
+                "type": "number",
+                "description": "每群候选上限 (默认 50)"
+              },
+              "whitelistGroups": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "群白名单 (空=全部)"
+              },
+              "timeoutMs": {
+                "type": "number",
+                "default": 5000,
+                "description": "LLM 单次超时毫秒 (默认 5000; v1.4.0 P0-fix 19:30 全对齐 5000)"
+              },
+              "maxRetries": {
+                "type": "number",
+                "default": 1,
+                "description": "LLM 重试 (默认 1; jargon 单次调用, fallback 兼容)"
+              },
+              "minJudgeIntervalSec": {
+                "type": "number",
+                "default": 0,
+                "description": "LLM judge 频率闸最小间隔秒 (默认 0; v1.4.0 P0-fix 19:30 补 schema default)"
+              }
             }
           },
           "affection": {
             "type": "object",
             "description": "v1.3.77 AFFECTION: 好感度/社交关系系统。enabled=false (默认) 关闭; 显式 true 启用。交互分类→好感度增减+情绪状态→情绪注入回复风格",
             "properties": {
-              "enabled": { "type": "boolean", "description": "总开关 (默认 false)" },
-              "model": { "type": "string", "default": "MiniMax-M2.7-highspeed", "enum": ["MiniMax-M2.5", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"], "description": "LLM 分类模型 (v1.4.0 11:34 fallback chain: account cfg → schema default M2.7-highspeed → hardcode M2.5)" },
-              "maxUserAffection": { "type": "number", "description": "单用户好感度上限 (默认 100)" },
-              "maxTotalAffection": { "type": "number", "description": "群总好感度上限 (默认 500)" },
-              "affectionDecayRate": { "type": "number", "description": "重分配衰减率 (默认 0.3)" },
-              "llmClassify": { "type": "boolean", "description": "用 LLM 增强交互分类 (默认 false 纯规则)" }
+              "enabled": {
+                "type": "boolean",
+                "description": "总开关 (默认 false)"
+              },
+              "model": {
+                "type": "string",
+                "default": "deepseek-v4-flash",
+                "enum": [
+                  "MiniMax-M2.5",
+                  "MiniMax-M2.7",
+                  "MiniMax-M2.7-highspeed",
+                  "deepseek-v4-flash"
+                ],
+                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-v4-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
+              },
+              "maxUserAffection": {
+                "type": "number",
+                "description": "单用户好感度上限 (默认 100)"
+              },
+              "maxTotalAffection": {
+                "type": "number",
+                "description": "群总好感度上限 (默认 500)"
+              },
+              "affectionDecayRate": {
+                "type": "number",
+                "description": "重分配衰减率 (默认 0.3)"
+              },
+              "llmClassify": {
+                "type": "boolean",
+                "description": "用 LLM 增强交互分类 (默认 false 纯规则)"
+              },
+              "timeoutMs": {
+                "type": "number",
+                "default": 5000,
+                "description": "LLM 单次超时毫秒 (默认 5000; v1.4.0 P0-fix 19:30 全对齐 5000)"
+              },
+              "maxRetries": {
+                "type": "number",
+                "default": 1,
+                "description": "LLM 重试 (默认 1; affection 单次调用, fallback 兼容)"
+              },
+              "replyThreshold": {
+                "type": "number",
+                "default": 0.6,
+                "description": "好感度阈值 (默认 0.6; v1.4.0 P0-fix 19:30 补 schema default)"
+              },
+              "minReplyIntervalSec": {
+                "type": "number",
+                "default": 0,
+                "description": "最小回复间隔秒 (默认 0; v1.4.0 P0-fix 19:30 补 schema default)"
+              },
+              "minJudgeIntervalSec": {
+                "type": "number",
+                "default": 0,
+                "description": "LLM judge 频率闸最小间隔秒 (默认 0; v1.4.0 P0-fix 19:30 补 schema default)"
+              }
             }
           },
           "dmPairingEnabled": {
@@ -358,11 +534,11 @@
         },
         "apiBaseUrl": {
           "label": "API Base",
-          "placeholder": "https://YOUR_VENDOR_HOST"
+          "placeholder": "https://wx.juhe.chat"
         },
         "wsUrl": {
           "label": "WebSocket URL",
-          "placeholder": "wss://YOUR_VENDOR_HOST/ws/sync"
+          "placeholder": "wss://wx.juhe.chat/ws/sync"
         },
         "authcode": {
           "label": "授权码 (扫码登录后回填)",
@@ -390,7 +566,7 @@
         },
         "nickname": {
           "label": "Bot 昵称",
-          "placeholder": "YourBot"
+          "placeholder": "益融小助理"
         },
         "groupPolicy": {
           "label": "群聊策略",
