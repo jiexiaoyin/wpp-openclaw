@@ -14,13 +14,19 @@ import { buildSessionKey } from "./session-key.js";
 import { sendText as dispatchSendText, sendImage as dispatchSendImage } from "./dispatch/outbound.js";
 import { AGENT_TOOLS } from "./dispatch/agent-tools/index.js";
 import { getCurrentAccountId } from "./dispatch/account-context.js";
-import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, ensureWebhookPathToken } from "./config.js";
+import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, setAccountField, updateHeartflowGroups, updateBlacklistGroups, ensureWebhookPathToken } from "./config.js";
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig } from "./core/runtime-config.js";
 import { resolveAiConfig } from "./config-ai.js";
+import { defaultHeartflowConfig } from "./inbound/heartflow.js";
+import { defaultJargonConfig } from "./inbound/jargon.js";
+import { defaultAffectionConfig } from "./inbound/affection.js";
 const runtimeTriggerConfigs = new Map();
 const runtimeTriggerCtxs = new Map();
 const runtimeInboundHandlers = new Map();
+const runtimeHeartflow = new Map();
+const runtimeJargon = new Map();
+const runtimeAffection = new Map();
 const accountSyncLocks = new Map();
 let sharedWebhookServer = null;
 let sharedWebhookServerPort = null;
@@ -114,67 +120,27 @@ export const FILEHELPER_COMMANDS = [
         },
     },
     {
-        name: "/adduser",
-        desc: "授权私聊白名单",
-        example: "/adduser wxid_abc123",
+        name: "/user",
+        desc: "私聊白名单 add/del/list",
+        example: "/user add wxid_abc123 wxid_xyz",
         handler: async ({ accountId, toWxid, args }) => {
-            const target = args[0]?.trim();
-            if (!target) {
-                await sendToFileHelper(accountId, toWxid, "用法: /adduser <wxid>\n示例: /adduser wxid_abc123");
-                return;
-            }
-            const r = await appendAllowFrom(accountId, target);
-            await sendToFileHelper(accountId, toWxid, r.ok
-                ? `✅ 已授权私聊白名单: ${target}\n当前私聊白名单 (${r.allowFrom.length}): ${r.allowFrom.join(", ")}`
-                : `❌ 添加失败: ${r.reason ?? "unknown"}`);
+            await handleWhitelistCommand("user", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
         },
     },
     {
-        name: "/deluser",
-        desc: "移除私聊白名单",
-        example: "/deluser wxid_abc123",
+        name: "/group",
+        desc: "群白名单 add/del/list",
+        example: "/group add xxxxxxxx@chatroom",
         handler: async ({ accountId, toWxid, args }) => {
-            const target = args[0]?.trim();
-            if (!target) {
-                await sendToFileHelper(accountId, toWxid, "用法: /deluser <wxid>\n示例: /deluser wxid_abc123");
-                return;
-            }
-            const r = await removeAllowFrom(accountId, target);
-            await sendToFileHelper(accountId, toWxid, r.ok
-                ? `✅ 已移除私聊白名单: ${target}\n当前私聊白名单 (${r.allowFrom.length}): ${r.allowFrom.join(", ") || "(空)"}`
-                : `❌ 移除失败: ${r.reason ?? "unknown"}`);
+            await handleWhitelistCommand("group", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
         },
     },
     {
-        name: "/addgroup",
-        desc: "授权群聊白名单",
-        example: "/addgroup xxxxxxxx@chatroom",
+        name: "/blacklist",
+        desc: "黑名单群 add/del/list",
+        example: "/blacklist add xxxxxxxx@chatroom",
         handler: async ({ accountId, toWxid, args }) => {
-            const target = args[0]?.trim();
-            if (!target) {
-                await sendToFileHelper(accountId, toWxid, "用法: /addgroup <群ID>\n示例: /addgroup xxxxxxxx@chatroom");
-                return;
-            }
-            const r = await appendGroupAllowFrom(accountId, target);
-            await sendToFileHelper(accountId, toWxid, r.ok
-                ? `✅ 已授权群聊白名单: ${target}\n当前群聊白名单 (${r.groupAllowFrom.length}): ${r.groupAllowFrom.join(", ")}`
-                : `❌ 添加失败: ${r.reason ?? "unknown"}`);
-        },
-    },
-    {
-        name: "/delgroup",
-        desc: "移除群聊白名单",
-        example: "/delgroup xxxxxxxx@chatroom",
-        handler: async ({ accountId, toWxid, args }) => {
-            const target = args[0]?.trim();
-            if (!target) {
-                await sendToFileHelper(accountId, toWxid, "用法: /delgroup <群ID>\n示例: /delgroup xxxxxxxx@chatroom");
-                return;
-            }
-            const r = await removeGroupAllowFrom(accountId, target);
-            await sendToFileHelper(accountId, toWxid, r.ok
-                ? `✅ 已移除群聊白名单: ${target}\n当前群聊白名单 (${r.groupAllowFrom.length}): ${r.groupAllowFrom.join(", ") || "(空)"}`
-                : `❌ 移除失败: ${r.reason ?? "unknown"}`);
+            await handleWhitelistCommand("blacklist", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
         },
     },
     {
@@ -200,7 +166,154 @@ export const FILEHELPER_COMMANDS = [
                 : `❌ 设置失败: ${r.reason ?? "unknown"}`);
         },
     },
+    {
+        name: "/heartflow",
+        desc: "心流 on/off/status/threshold/group",
+        example: "/heartflow on",
+        handler: async ({ accountId, toWxid, args }) => {
+            await handleFeatureCommand("heartflow", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
+        },
+    },
+    {
+        name: "/affection",
+        desc: "好感度 on/off/status",
+        example: "/affection on",
+        handler: async ({ accountId, toWxid, args }) => {
+            await handleFeatureCommand("affection", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
+        },
+    },
+    {
+        name: "/jargon",
+        desc: "黑话 on/off/status",
+        example: "/jargon on",
+        handler: async ({ accountId, toWxid, args }) => {
+            await handleFeatureCommand("jargon", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
+        },
+    },
 ];
+async function handleFeatureCommand(feature, args, send, accountId) {
+    const arg = (args[0] ?? "").toLowerCase();
+    const cfg = await loadAccountConfigAsync(accountId);
+    const fc = cfg?.[feature];
+    const current = Boolean(fc?.enabled);
+    const label = feature === "heartflow" ? "心流主动回复" : feature === "affection" ? "好感度系统" : "黑话挖掘";
+    if (arg === "status") {
+        let extra = "";
+        if (feature === "heartflow") {
+            const th = typeof fc?.replyThreshold === "number" ? fc.replyThreshold : 0.6;
+            const wl = Array.isArray(fc?.whitelistGroups) ? fc.whitelistGroups.length : 0;
+            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个`;
+        }
+        await send(`${label} (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}${extra}\n用法: /${feature} on|off|status`);
+        return true;
+    }
+    if (arg === "on" || arg === "off") {
+        const target = arg === "on";
+        const r = await setAccountField(accountId, `${feature}.enabled`, target);
+        await send(r.ok
+            ? `✅ ${label}已${target ? "开启" : "关闭"} (account=${accountId})`
+            : `❌ 设置失败: ${r.reason ?? "unknown"}`);
+        return true;
+    }
+    if (feature === "heartflow" && arg === "threshold") {
+        const v = Number(args[1]);
+        if (!Number.isFinite(v) || v < 0 || v > 1) {
+            await send("用法: /heartflow threshold <0-1>\n示例: /heartflow threshold 0.5 (0.6=默认, 越低越活跃)");
+            return true;
+        }
+        const r = await setAccountField(accountId, "heartflow.replyThreshold", v);
+        await send(r.ok
+            ? `✅ 心流阈值已设为 ${v} (account=${accountId})`
+            : `❌ 设置失败: ${r.reason ?? "unknown"}`);
+        return true;
+    }
+    if (feature === "heartflow" && arg === "group") {
+        const sub = (args[1] ?? "").toLowerCase();
+        const targets = args.slice(2).map((s) => s.trim()).filter(Boolean);
+        const wl = Array.isArray(fc?.whitelistGroups) ? fc.whitelistGroups : [];
+        if (sub === "list" || (sub === "" && targets.length === 0)) {
+            await send(`心流群白名单 (${wl.length}):\n` + (wl.length ? wl.map((g) => `- ${g}`).join("\n") : "(空)"));
+            return true;
+        }
+        if ((sub === "add" || sub === "del") && targets.length) {
+            for (const t of targets) {
+                await updateHeartflowGroups(accountId, sub, t);
+            }
+            const cfg2 = await loadAccountConfigAsync(accountId);
+            const wl2 = cfg2?.heartflow?.whitelistGroups ?? [];
+            const gal = cfg2?.groupAllowFrom ?? [];
+            await send(`✅ 心流群白名单已${sub === "add" ? "添加" : "移除"}: ${targets.join(", ")}\n当前心流群 (${wl2.length}): ${wl2.join(", ") || "(空)"}\n(add 自动补群聊白名单; del 不删群聊白名单, 当前群聊白名单 ${gal.length} 个)`);
+            return true;
+        }
+        await send("用法: /heartflow group add <群ID> [群ID...]\n  或 /heartflow group del <群ID> [群ID...]\n  或 /heartflow group list");
+        return true;
+    }
+    const extra = feature === "heartflow" ? "\n  或 /heartflow threshold <0-1>\n  或 /heartflow group add|del|list <群ID>" : "";
+    await send(`用法: /${feature} on|off|status${extra}\n状态: ${current ? "✅ 开启" : "❌ 关闭"}`);
+    return true;
+}
+async function handleWhitelistCommand(domain, args, send, accountId) {
+    const action = (args[0] ?? "").toLowerCase();
+    const targets = args.slice(1).map((s) => s.trim()).filter(Boolean);
+    const label = domain === "user" ? "私聊白名单" : domain === "group" ? "群白名单" : "黑名单群";
+    const cfg = await loadAccountConfigAsync(accountId);
+    if (action === "list" || (action === "" && targets.length === 0)) {
+        let list;
+        if (domain === "user")
+            list = (cfg?.allowFrom ?? []).slice();
+        else if (domain === "group")
+            list = (cfg?.groupAllowFrom ?? []).slice();
+        else
+            list = (cfg?.blacklistGroups ?? []).slice();
+        await send(`📋 ${label} (${list.length}):\n` + (list.length ? list.map((x) => `- ${x}`).join("\n") : "(空)"));
+        return;
+    }
+    if (action === "add" && targets.length) {
+        let added = [];
+        if (domain === "user") {
+            const cur = (cfg?.allowFrom ?? []).slice();
+            added = targets.filter((t) => !cur.includes(t));
+            for (const t of targets)
+                await appendAllowFrom(accountId, t);
+        }
+        else if (domain === "group") {
+            const cur = (cfg?.groupAllowFrom ?? []).slice();
+            added = targets.filter((t) => !cur.includes(t));
+            for (const t of targets)
+                await appendGroupAllowFrom(accountId, t);
+        }
+        else {
+            const cur = (cfg?.blacklistGroups ?? []).slice();
+            added = targets.filter((t) => !cur.includes(t));
+            await updateBlacklistGroups(accountId, "add", targets);
+        }
+        await send(`✅ 已加入${label}: ${added.join(", ") || "(均已存在)"}`);
+        return;
+    }
+    if (action === "del" && targets.length) {
+        let removed = [];
+        if (domain === "user") {
+            const cur = (cfg?.allowFrom ?? []).slice();
+            removed = targets.filter((t) => cur.includes(t));
+            for (const t of removed)
+                await removeAllowFrom(accountId, t);
+        }
+        else if (domain === "group") {
+            const cur = (cfg?.groupAllowFrom ?? []).slice();
+            removed = targets.filter((t) => cur.includes(t));
+            for (const t of removed)
+                await removeGroupAllowFrom(accountId, t);
+        }
+        else {
+            const cur = (cfg?.blacklistGroups ?? []).slice();
+            removed = targets.filter((t) => cur.includes(t));
+            await updateBlacklistGroups(accountId, "del", targets);
+        }
+        await send(`✅ 已移出${label}: ${removed.join(", ") || "(无)"}`);
+        return;
+    }
+    await send(`用法: /${domain} add <ID> [ID...] | /${domain} del <ID> [ID...] | /${domain} list`);
+}
 export function buildHelpText() {
     const lines = ["📋 可用命令 (在文件传输助手操作):", ""];
     for (const c of FILEHELPER_COMMANDS) {
@@ -251,13 +364,25 @@ export async function startAccountById(accountId, _agentId = "main") {
     if (cfg.groupPolicy && !VALID_GROUP_POLICIES.includes(cfg.groupPolicy)) {
         throw new Error(`account.groupPolicy invalid for ${accountId}: "${cfg.groupPolicy}" (must be one of ${VALID_GROUP_POLICIES.join(",")})`);
     }
+    if (!runtimeHeartflow.has(accountId)) {
+        runtimeHeartflow.set(accountId, resolveAiConfig(cfg, "heartflow") ?? defaultHeartflowConfig());
+    }
+    if (!runtimeJargon.has(accountId)) {
+        runtimeJargon.set(accountId, resolveAiConfig(cfg, "jargon") ?? defaultJargonConfig());
+    }
+    if (!runtimeAffection.has(accountId)) {
+        runtimeAffection.set(accountId, resolveAiConfig(cfg, "affection") ?? defaultAffectionConfig());
+    }
+    const hfCfg = runtimeHeartflow.get(accountId);
+    const jgCfg = runtimeJargon.get(accountId);
+    const afCfg = runtimeAffection.get(accountId);
     if (!runtimeTriggerConfigs.has(accountId)) {
         runtimeTriggerConfigs.set(accountId, {
             ...defaultTriggerConfig(),
             requireAtMention: cfg.requireAtMention,
             groupPolicy: cfg.groupPolicy ?? "closed",
             groupAllowFrom: cfg.groupAllowFrom ?? [],
-            heartflow: cfg.heartflow,
+            heartflow: hfCfg,
         });
     }
     const triggerConfig = runtimeTriggerConfigs.get(accountId);
@@ -297,10 +422,10 @@ export async function startAccountById(accountId, _agentId = "main") {
                 await handleFileHelperCommand(accountId, msg, command);
             },
             groupContextEnabled: cfg.groupContextEnabled === true,
-            heartflow: resolveAiConfig(cfg, "heartflow"),
+            heartflow: hfCfg,
             botNickname: cfg.nickname,
-            jargon: resolveAiConfig(cfg, "jargon"),
-            affection: resolveAiConfig(cfg, "affection"),
+            jargon: jgCfg,
+            affection: afCfg,
         }));
     }
     const inboundHandler = runtimeInboundHandlers.get(accountId);
@@ -796,6 +921,21 @@ export const plugin = {
                 if (newCfg.groupContextWindow !== undefined)
                     tctx.groupContextWindow = newCfg.groupContextWindow;
             }
+            const hf = runtimeHeartflow.get(accountId);
+            const jg = runtimeJargon.get(accountId);
+            const af = runtimeAffection.get(accountId);
+            const applyMutable = (target, src) => {
+                if (!target || !src)
+                    return;
+                for (const k of Object.keys(src)) {
+                    const v = src[k];
+                    if (v !== undefined)
+                        target[k] = v;
+                }
+            };
+            applyMutable(hf, resolveAiConfig(newCfg, "heartflow") ?? defaultHeartflowConfig());
+            applyMutable(jg, resolveAiConfig(newCfg, "jargon") ?? defaultJargonConfig());
+            applyMutable(af, resolveAiConfig(newCfg, "affection") ?? defaultAffectionConfig());
             log.info(`hot-reload: account ${accountId} runtime config updated`);
         });
     },
