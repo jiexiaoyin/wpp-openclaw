@@ -4,6 +4,26 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.4.0] 心流机制修复 + 4 层兜底链配置化 + 消除 plugin model hardcode
+- 2026-08-25 (老板: 修复心流 3 次重试死循环 + 兜底默认从 cfg 链动态读取, 缺失抛错)
+- **bug fix (09:38 老板拍 C 方案)**:
+  - heartflow.ts + affection.ts: timeoutMs 5000 → 15000 (实测 M2.5 4.2s, 5s 窗口必失败 + 3 次重试死循环)
+- **feat (11:34 老板拍 B+ 方案)**:
+  - openclaw.plugin.json: channelConfigs.wechatpadpro.schema.properties.{heartflow,affection,jargon}.properties.model 加 default + enum (MiniMax-M2.7-highspeed)
+  - accounts/default.json: 配 heartflow.model + affection.model + jargon.model = MiniMax-M2.7-highspeed
+- **refactor (12:09/12:28 老板拍板 B)**:
+  - heartflow.ts/affection.ts/jargon.ts: 删除 `model: "MiniMax-M2.5"` hardcode, 改 `cfg.model ?? throw new Error(...)` 替代 silent fallback
+  - 4 层兜底链: account cfg → schema default → .ts hardcode (已禁用) → OpenClaw 框架 agent config
+  - JSDoc: 清理 "默认 MiniMax-M2.5" 描述 (12:21)
+- **设计哲学 (12:10 Explicit Preference)**:
+  - 兜底默认 = wpp channel 对应账号 agent 使用的模型 (MiniMax-M2.7-highspeed)
+  - plugin 内不 hardcode, 必须从 cfg 链动态读取
+  - 缺失立即抛错 (按 6-21 偏好"可回溯", 优于 silent fallback)
+- **测试**: 984/984 全绿 (沿用 v1.3.80 测试基线)
+- **实测**: deploy 端 jargon.js + heartflow.js + affection.js `MiniMax-M2.5` hardcode = 0, accounts/default.json 模型字段生效, gateway PID 3765826 active
+- **版本**: 1.3.80 → 1.4.0 (MINOR bump per SemVer: 新功能 plugin 内部兜底链配置化)
+- **commit**: 359c301 (v1.4.0: 心流机制修复 + 4 层兜底链配置化 + 消除 plugin model hardcode)
+
 ## [v1.3.80] 命令体系整合 — 统一白名单 + 三功能通用处理器
 - 2026-08-23 (老板: 整合增删/开关/列表, 简化命令逻辑)
 - **命令体系 (9 个, 统一 add/del/list 或 on/off/status)**:
