@@ -26,11 +26,11 @@ test('P2-1.1: HMAC secret 已生成 + 持久化到 credentials', () => {
   assert.strictEqual(stats.mode & 0o777, 0o600, '文件权限必须 600');
 });
 
-test('P2-1.2: EnvironmentFile 已写入', () => {
-  const envFile = '/root/.config/environment.d/wechatpadpro.conf';
-  assert.ok(fs.existsSync(envFile), 'EnvironmentFile 必须存在');
+test('P2-1.2 (v1.5.1): env 不写 WECHATPRO_WEBHOOK_SECRET (vendor 不发 signature, v1.1.10 permissive)', () => {
+  const envFile = '/root/.openclaw/gateway.systemd.env';
   const content = fs.readFileSync(envFile, 'utf-8');
-  assert.match(content, /^WECHATPRO_WEBHOOK_SECRET=\w{64}/m, 'env var 必须 64 字符 hex');
+  assert.doesNotMatch(content, /^WECHATPRO_WEBHOOK_SECRET=\w+/m, 'env 不应有 WECHATPRO_WEBHOOK_SECRET (vendor 不发 signature, 按 v1.1.10 permissive)');
+  // 未来 vendor 公开签名时, 配 WECHATPRO_WEBHOOK_SECRET=64hex 即可启用 HMAC
 });
 
 // ===== P2-2: 3 处 hardcode 消除 =====
@@ -113,22 +113,22 @@ test('P2-3.4: enrich.ts import 改用 heartflow-trigger', () => {
 });
 
 // ===== P2-4: plugin.json version 对齐 =====
-test('P2-4.1: dev openclaw.plugin.json version = 1.5.0', () => {
+test('P2-4.1: dev openclaw.plugin.json version = 1.5.2', () => {
   const d = JSON.parse(fs.readFileSync(`${ROOT}/openclaw.plugin.json`, 'utf-8'));
-  assert.strictEqual(d.version, '1.5.0', 'dev openclaw.plugin.json.version 必须 1.5.0');
+  assert.strictEqual(d.version, '1.5.2', 'dev openclaw.plugin.json.version 必须 1.5.2');
 });
 
-test('P2-4.2: deploy openclaw.plugin.json version = 1.5.0', () => {
+test('P2-4.2: deploy openclaw.plugin.json version = 1.5.2', () => {
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}/openclaw.plugin.json`, 'utf-8'));
-  assert.strictEqual(d.version, '1.5.0', 'deploy openclaw.plugin.json.version 必须 1.5.0');
+  assert.strictEqual(d.version, '1.5.2', 'deploy openclaw.plugin.json.version 必须 1.5.2');
 });
 
-test('P2-4.3: package.json version = 1.5.0', () => {
+test('P2-4.3: package.json version = 1.5.2', () => {
   const d = JSON.parse(fs.readFileSync(`${ROOT}/package.json`, 'utf-8'));
-  assert.strictEqual(d.version, '1.5.0');
+  assert.strictEqual(d.version, '1.5.2');
 });
 
-test('P2-4.4: PLUGIN_VERSION 常量 = 1.5.0', () => {
+test('P2-4.4: PLUGIN_VERSION 常量 = 1.5.2', () => {
   const src = fs.readFileSync(`${DEPLOY}/dist/core/constants.js`, 'utf-8');
-  assert.match(src, /PLUGIN_VERSION = "1\.5\.0"/, 'PLUGIN_VERSION 常量必须 1.5.0');
+  assert.match(src, /PLUGIN_VERSION = "1\.5\.2"/, 'PLUGIN_VERSION 常量必须 1.5.2');
 });

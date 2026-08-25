@@ -20,9 +20,16 @@ export interface EnrichResult {
 /**
  * Persist inbound message to wpp_messages. Idempotent — same msgId can call twice safely.
  * 关键: 不抛, 吞错返 saved:false (silent killer 永久救回靠 caller log)
+ *
+ * v1.5.2 B-fix (2026-08-25 22:28 老板拍 A):
+ *   增加可选 cfg 参数, 末尾 fire-and-forget 调 tryHeartflowAfterEnrich
+ *   (webhook 路径只调 enrichAndSaveMessage, 不调 enrichBatch, 所以单独触发)
+ *   cfg 应来自 accounts.cfg (inbound/index.ts handleWebhookPayload 取 state.config.heartflow)
+ *   不传 cfg → 跳过触发 (向后兼容, 默认 enrichBatch 已独立 fire-and-forget)
  */
 export async function enrichAndSaveMessage(
   msg: WppInboundMessage,
+  cfg?: HeartflowConfig,
 ): Promise<EnrichResult> {
   try {
     await saveMessage({
@@ -41,6 +48,14 @@ export async function enrichAndSaveMessage(
       from_wxid: msg.fromWxid,
       ts: msg.ts,
     });
+
+    // v1.5.2 B-fix: enrichAndSaveMessage 末尾 fire-and-forget 调 tryHeartflowAfterEnrich
+    //   (webhook 路径只调 enrichAndSaveMessage, 不调 enrichBatch, 所以单独触发)
+    //   复用 tryHeartflowAfterEnrich 函数 (已含 cfg + apiKey + whitelist + gate 检查)
+    if (cfg && msg.peerKind === "group" && msg.chatroomId) {
+      void tryHeartflowAfterEnrich(msg, cfg);
+    }
+
     return { saved: true };
   } catch (e) {
     log.warn(`enrichAndSaveMessage failed: ${formatErr(e)}`, {
@@ -56,6 +71,10 @@ export async function enrichAndSaveMessage(
  * 设计: 解耦 AI 主动观察 (heartflow) 与 AI 被动响应 (@bot)
  *   - 老路径: handler.js shouldTrigger via="heartflow" → judge (受 requireAtMention 限制, 群聊非 @ 永远到不了)
  *   - 新路径: enrichBatch 写库后, 调 tryIndependentTrigger 独立入口 (不受 requireAtMention 限制, 仅看 whitelistGroups + heartflow gate)
+ *
+ * v1.5.2 B-fix (2026-08-25 22:28 老板拍 A):
+ *   cfg 不再用 defaultHeartflowConfig + WPP_HEARTFLOW_CONFIG env (env 从来没设过 → cfg.independentTrigger=false → 0 次触发)
+ *   改用 caller 传入的 cfg (来自 accounts.cfg 链), 不传则 fallback 到 defaultHeartflowConfig (向后兼容)
  *
  * 异步: fire-and-forget, 不阻塞 enrichBatch 返回 (enrichBatch 不等 judge 完成)
  * 安全: try/catch 全包, 失败仅 log warn 不抛
@@ -103,15 +122,21 @@ async function tryHeartflowAfterEnrich(
   }
 }
 
-/** 多个消息批量保存 */
-export async function enrichBatch(batch: WppInboundMessage[]): Promise<{
+/** 多个消息批量保存
+ *
+ * v1.5.2 B-fix: 增加可选 cfg 参数, caller 传 accounts.cfg.heartflow → 不再依赖 WPP_HEARTFLOW_CONFIG env
+ */
+export async function enrichBatch(
+  batch: WppInboundMessage[],
+  cfg?: HeartflowConfig,
+): Promise<{
   saved: number;
   failed: number;
 }> {
   // P3-2 (2026-08-13 外部审计): 历史跟踪入库 — 每条消息独立落库 (不同 msg_id, INSERT...ON DUPLICATE 幂等),
   //   相互独立无数据依赖 → 顺序 await 改 Promise.all 并发 (enrichAndSaveMessage 内部吞错永不 reject,
   //   一条失败不阻塞其余 + 计数语义与原串行一致)
-  const results = await Promise.all(batch.map((msg) => enrichAndSaveMessage(msg)));
+  const results = await Promise.all(batch.map((msg) => enrichAndSaveMessage(msg, cfg)));
   let saved = 0;
   let failed = 0;
   for (const r of results) {
@@ -121,20 +146,15 @@ export async function enrichBatch(batch: WppInboundMessage[]): Promise<{
   log.info(`enrichBatch: ${saved} saved, ${failed} failed (size=${batch.length})`);
 
   // v1.5.0 B-fix 20:06: enrichBatch 写库后, fire-and-forget 异步触发心流独立 trigger
-  //   - 不阻塞 enrichBatch 返回
-  //   - 失败仅 log warn, 不影响主入库流程
-  //   - 心流配置从 process.env.WPP_HEARTFLOW_CONFIG 读 (运行时注入, 默认用 defaultHeartflowConfig + 模型 fallback)
-  void (async () => {
-    const cfg: HeartflowConfig = {
-      ...defaultHeartflowConfig(),
-      // 从 env 读取心流 cfg (P1-follow: 后续会迁移到 accounts cfg 链; 当前 v1.5.0 B-fix 用 env 注入保持向后兼容)
-      ...(process.env.WPP_HEARTFLOW_CONFIG ? JSON.parse(process.env.WPP_HEARTFLOW_CONFIG) : {}),
-    };
-    for (const msg of batch) {
-      if (msg.peerKind !== "group") continue;
-      void tryHeartflowAfterEnrich(msg, cfg);
-    }
-  })();
+  // v1.5.2 B-fix: cfg 优先 caller 传入, fallback 到 defaultHeartflowConfig + WPP_HEARTFLOW_CONFIG env (向后兼容)
+  const effectiveCfg: HeartflowConfig = cfg ?? {
+    ...defaultHeartflowConfig(),
+    ...(process.env.WPP_HEARTFLOW_CONFIG ? JSON.parse(process.env.WPP_HEARTFLOW_CONFIG) : {}),
+  };
+  for (const msg of batch) {
+    if (msg.peerKind !== "group") continue;
+    void tryHeartflowAfterEnrich(msg, effectiveCfg);
+  }
 
   return { saved, failed };
 }
