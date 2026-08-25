@@ -76,7 +76,7 @@
     "_independentTrigger_note": "v1.5.0 B-fix 20:06 老板拍板 B (3 层分层架构): enrichBatch 写库后, 异步触发心流独立 trigger, 绕过 requireAtMention 限制. 老板原 query 19:51: 非@消息也想进入会话. 默认 dev=false (保持现有兼容), deploy=true (老板实测)"
   },
   "affection": {
-    "enabled": false,
+    "enabled": true,
     "model": "deepseek-v4-flash",
     "_model_note": "v1.4.0 11:34 同上 (按 7-01 老板偏好保留 enabled=false 默认)",
     "timeoutMs": 5000,

@@ -434,7 +434,8 @@
             "properties": {
               "enabled": {
                 "type": "boolean",
-                "description": "总开关 (默认 false)"
+                "description": "总开关 (默认 true, v1.5.2 老板 23:30 启用, 按 8-23 01:00 Explicit Preference)",
+                "default": true
               },
               "model": {
                 "type": "string",
