@@ -273,7 +273,7 @@
             "description": "v1.3.75 HEARTFLOW: 群聊主动回复 (心流机制, 未@群消息小模型5维打分自动参与)。enabled=false (默认) 关闭; 显式 true 启用",
             "properties": {
               "enabled": { "type": "boolean", "description": "总开关 (默认 false)" },
-              "model": { "type": "string", "description": "判断小模型 (默认 MiniMax-M2.5)" },
+              "model": { "type": "string", "default": "MiniMax-M2.7-highspeed", "enum": ["MiniMax-M2.5", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"], "description": "判断小模型 (v1.4.0 11:34 fallback chain: account cfg → schema default M2.7-highspeed → hardcode M2.5)" },
               "replyThreshold": { "type": "number", "description": "回复阈值 0-1 (默认 0.6)" },
               "energyDecayRate": { "type": "number", "description": "回复后精力衰减 (默认 0.1)" },
               "energyRecoveryRate": { "type": "number", "description": "不回复恢复 (默认 0.02)" },
@@ -290,7 +290,7 @@
             "description": "v1.3.76 JARGON: 群黑话挖掘 (自主学习, 旁路采集+定时挖掘)。enabled=false (默认) 关闭; 显式 true 启用。AI 可查 query_jargon 理解群黑话",
             "properties": {
               "enabled": { "type": "boolean", "description": "总开关 (默认 false)" },
-              "model": { "type": "string", "description": "挖掘模型 (默认 MiniMax-M2.5)" },
+              "model": { "type": "string", "default": "MiniMax-M2.7-highspeed", "enum": ["MiniMax-M2.5", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"], "description": "挖掘模型 (v1.4.0 12:28 老板拍板 B: 消除 plugin hardcode, fallback chain: account cfg → schema default M2.7-highspeed → hardcode 已禁用, 缺失抛错)" },
               "mineIntervalSec": { "type": "number", "description": "挖掘间隔秒 (默认 60)" },
               "minMessages": { "type": "number", "description": "每次挖掘最少新增消息数 (默认 10)" },
               "maxCandidatesPerGroup": { "type": "number", "description": "每群候选上限 (默认 50)" },
@@ -302,6 +302,7 @@
             "description": "v1.3.77 AFFECTION: 好感度/社交关系系统。enabled=false (默认) 关闭; 显式 true 启用。交互分类→好感度增减+情绪状态→情绪注入回复风格",
             "properties": {
               "enabled": { "type": "boolean", "description": "总开关 (默认 false)" },
+              "model": { "type": "string", "default": "MiniMax-M2.7-highspeed", "enum": ["MiniMax-M2.5", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"], "description": "LLM 分类模型 (v1.4.0 11:34 fallback chain: account cfg → schema default M2.7-highspeed → hardcode M2.5)" },
               "maxUserAffection": { "type": "number", "description": "单用户好感度上限 (默认 100)" },
               "maxTotalAffection": { "type": "number", "description": "群总好感度上限 (默认 500)" },
               "affectionDecayRate": { "type": "number", "description": "重分配衰减率 (默认 0.3)" },

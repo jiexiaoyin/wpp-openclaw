@@ -34,7 +34,7 @@ import { safeFetch } from "../util/safe-fetch.js";
 export interface HeartflowConfig {
   /** 总开关 (默认 false) */
   enabled: boolean;
-  /** 判断小模型 (MiniMax model id, 默认 "MiniMax-M2.5" 快+便宜) */
+  /** 判断小模型. v1.4.0 12:21 老板拍板 B: 消除 hardcode, model 必须从 schema default (openclaw.plugin.json channelConfigs.wechatpadpro.schema.properties.heartflow.properties.model) 或 accounts cfg 链提供, 缺失抛错 (heartflow.ts:475) */
   model?: string;
   /** 判断超时毫秒 (默认 5000) */
   timeoutMs?: number;
@@ -69,8 +69,10 @@ export interface HeartflowConfig {
 export function defaultHeartflowConfig(): HeartflowConfig {
   return {
     enabled: false,
-    model: "MiniMax-M2.5",
-    timeoutMs: 5000,
+    // v1.4.0 12:09 老板拍板: 消除 plugin hardcode. model 由 schema default (openclaw.plugin.json) + accounts cfg 链提供.
+    // 万一两层都未配置 → 运行时 cfg.model 抛错 (heartflow.ts:475)
+    model: undefined as unknown as string,  // placeholder,运行时由 cfg.model 提供;类型占位仅为兼容 HeartflowConfig.model?: string
+    timeoutMs: 15000, // v1.4.0 09:38 老板拍 C 方案: timeout 5000→15000 (实测 M2.5 4.2s, 5s 窗口过紧, 3 次重试必失败)
     replyThreshold: 0.6,
     energyDecayRate: 0.1,
     energyRecoveryRate: 0.02,
@@ -471,8 +473,14 @@ export async function judgeHeartflow(
     return null;
   }
   const baseUrl = (opts.baseUrl ?? "https://api.minimaxi.com/anthropic").replace(/\/$/, "");
-  const model = cfg.model ?? "MiniMax-M2.5";
-  const timeoutMs = cfg.timeoutMs ?? 5000;
+  // v1.4.0 12:09 老板拍板: 消除 plugin hardcode, model 必须从 cfg 链 (schema default → accounts cfg) 提供, 缺失立即报错
+  const model = cfg.model;
+  if (!model) {
+    throw new Error(
+      "[WPP HEARTFLOW] cfg.model unresolved. v1.4.0 12:09 老板拍板: 必须从 schema default (openclaw.plugin.json channelConfigs.wechatpadpro.schema.properties.heartflow.properties.model.default) 或 accounts/<id>.json:heartflow.model 提供. plugin 不再 hardcode fallback. 参见 https://docs.openclaw.ai"
+    );
+  }
+  const timeoutMs = cfg.timeoutMs ?? 15000; // v1.4.0 09:38 与 defaultHeartflowConfig 对齐
   const maxTokens = 300;
   const maxRetries = Math.max(0, cfg.maxRetries ?? 2);
 

@@ -97,7 +97,7 @@ export interface AffectionConfig {
   maxTotalAffection?: number;
   /** 重分配衰减率 (默认 0.3) */
   affectionDecayRate?: number;
-  /** LLM 分类模型 (默认 MiniMax-M2.5) */
+  /** LLM 分类模型. v1.4.0 12:21 老板拍板 B: 消除 hardcode, model 必须从 schema default (openclaw.plugin.json channelConfigs.wechatpadpro.schema.properties.affection.properties.model) 或 accounts cfg 链提供, 缺失抛错 (affection.ts:271) */
   model?: string;
   /** LLM 超时毫秒 (默认 5000) */
   timeoutMs?: number;
@@ -111,8 +111,11 @@ export function defaultAffectionConfig(): AffectionConfig {
     maxUserAffection: 100,
     maxTotalAffection: 500,
     affectionDecayRate: 0.3,
-    model: "MiniMax-M2.5",
-    timeoutMs: 5000,
+    // v1.4.0 12:09 老板拍板: 消除 plugin hardcode. model 由 schema default (openclaw.plugin.json) + accounts cfg 链提供.
+    // 万一两层都未配置 → 运行时 cfg.model 抛错 (affection.ts:271)
+    model: undefined as unknown as string,  // placeholder,运行时由 cfg.model 提供;类型占位仅为兼容 AffectionConfig.model?: string
+    timeoutMs: 15000, // v1.4.0 09:38 老板拍 C 方案: 与 heartflow 同步, 防同样 3 次重试失败
+    // v1.4.0 09:38 备注: llmClassify 仍默认 false (老板 8-23 偏好: 默认值不动)
     llmClassify: false,
   };
 }
@@ -266,12 +269,21 @@ export async function classifyInteractionWithLlm(
         "x-api-key": opts.apiKey,
       },
       body: JSON.stringify({
-        model: cfg.model ?? "MiniMax-M2.5",
+        // v1.4.0 12:09 老板拍板: 消除 plugin hardcode, model 必须从 cfg 链提供, 缺失立即报错
+        model: (() => {
+          const m = cfg.model;
+          if (!m) {
+            throw new Error(
+              "[WPP AFFECTION] cfg.model unresolved. v1.4.0 12:09 老板拍板: 必须从 schema default 或 accounts/<id>.json:affection.model 提供. plugin 不再 hardcode fallback"
+            );
+          }
+          return m;
+        })(),
         max_tokens: 50,
         temperature: 0,
         messages: [{ role: "user", content: buildClassifyPrompt(message, senderName) }],
       }),
-      signal: AbortSignal.timeout(cfg.timeoutMs ?? 5000),
+      signal: AbortSignal.timeout(cfg.timeoutMs ?? 15000), // v1.4.0 09:38 与 defaultAffectionConfig 对齐
     });
     if (!resp.ok) return undefined;
     const json = (await resp.json()) as { content?: Array<{ type?: string; text?: string }> };

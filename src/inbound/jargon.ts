@@ -366,7 +366,8 @@ export interface JargonConfig {
 export function defaultJargonConfig(): JargonConfig {
   return {
     enabled: false,
-    model: "MiniMax-M2.5",
+    // v1.4.0 12:28 老板拍板 B: 消除 plugin hardcode, model 由 schema default (openclaw.plugin.json) + accounts cfg 链提供
+    model: undefined as unknown as string,  // placeholder,运行时由 cfg.model 提供;缺失抛错 (jargon.ts:543)
     timeoutMs: 5000,
     mineIntervalSec: 60,
     minMessages: 10,
@@ -539,7 +540,13 @@ async function jargonLlm(
 ): Promise<JargonLlmResult | null> {
   if (!opts.apiKey) return null;
   const baseUrl = (opts.baseUrl ?? "https://api.minimaxi.com/anthropic").replace(/\/$/, "");
-  const model = cfg.model ?? "MiniMax-M2.5";
+  // v1.4.0 12:28 老板拍板 B: 消除 plugin hardcode, model 必须从 cfg 链 (schema default → accounts cfg) 提供, 缺失立即报错
+  const model = cfg.model;
+  if (!model) {
+    throw new Error(
+      "[WPP JARGON] cfg.model unresolved. v1.4.0 12:28 老板拍板: 必须从 schema default (openclaw.plugin.json channelConfigs.wechatpadpro.schema.properties.jargon.properties.model.default) 或 accounts/<id>.json:jargon.model 提供. plugin 不再 hardcode fallback"
+    );
+  }
   const timeoutMs = cfg.timeoutMs ?? 5000;
   try {
     const resp = await safeFetch(`${baseUrl}/v1/messages`, {

@@ -58,10 +58,22 @@
   ],
   "heartflow": {
     "enabled": true,
+    "model": "MiniMax-M2.7-highspeed",
+    "_model_note": "v1.4.0 11:34 老板拍 B+: 心流轻量化升级 (4 层兜底 chain: account cfg → schema default → hardcode M2.5)",
     "whitelistGroups": [
       "44971342037@chatroom",
       "19908568237@chatroom",
       "53889526119@chatroom"
     ]
+  },
+  "affection": {
+    "enabled": false,
+    "model": "MiniMax-M2.7-highspeed",
+    "_model_note": "v1.4.0 11:34 同上 (按 7-01 老板偏好保留 enabled=false 默认)"
+  },
+  "jargon": {
+    "enabled": false,
+    "model": "MiniMax-M2.7-highspeed",
+    "_model_note": "v1.4.0 12:28 老板拍板 B: 消除 plugin hardcode, schema default → cfg chain (按 7-01 偏好 enabled=false 不动)"
   }
 }
