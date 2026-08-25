@@ -24,10 +24,10 @@ test('L1 deploy accounts cfg timeoutMs=5000', () => {
   assert.strictEqual(d.jargon.timeoutMs, 5000);
 });
 
-test('L1 heartflow.whitelistGroups = 4 群 (益融管理/全员/华为/移动)', () => {
+test('L1 heartflow.whitelistGroups = 5 群 (益融管理/全员/华为/移动 + 调试群)', () => {
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}accounts/default.json`, 'utf-8'));
   const list = d.heartflow.whitelistGroups;
-  assert.strictEqual(list.length, 4, `whitelistGroups must have 4 groups, got ${list.length}`);
+  assert.strictEqual(list.length, 5, `whitelistGroups must have 5 groups (老板 23:09 加调试群 57737516566@chatroom), got ${list.length}`);
   assert.ok(list.includes('53889526119@chatroom'), '益融管理群');
   assert.ok(list.includes('44971342037@chatroom'), '益融全员群');
   assert.ok(list.includes('19908568237@chatroom'), '益融华为群');
