@@ -4,6 +4,12 @@
 import { logObj as log, formatErr } from "../core/logger.js";
 import { saveMessage } from "../db.js";
 import type { WppInboundMessage } from "../types.js";
+import {
+  tryIndependentTrigger,
+  defaultHeartflowConfig,
+  type HeartflowConfig,
+  type IndependentTriggerResult,
+} from "./heartflow.js";
 
 export interface EnrichResult {
   saved: boolean;
@@ -44,6 +50,59 @@ export async function enrichAndSaveMessage(
   }
 }
 
+/**
+ * v1.5.0 B-fix 20:06 老板拍板 B: enrichBatch 写库后, 异步触发心流独立 trigger
+ *
+ * 设计: 解耦 AI 主动观察 (heartflow) 与 AI 被动响应 (@bot)
+ *   - 老路径: handler.js shouldTrigger via="heartflow" → judge (受 requireAtMention 限制, 群聊非 @ 永远到不了)
+ *   - 新路径: enrichBatch 写库后, 调 tryIndependentTrigger 独立入口 (不受 requireAtMention 限制, 仅看 whitelistGroups + heartflow gate)
+ *
+ * 异步: fire-and-forget, 不阻塞 enrichBatch 返回 (enrichBatch 不等 judge 完成)
+ * 安全: try/catch 全包, 失败仅 log warn 不抛
+ *
+ * @param msg  刚入库的消息
+ * @param cfg  heartflow 配置 (来自 accounts cfg 链)
+ */
+async function tryHeartflowAfterEnrich(
+  msg: WppInboundMessage,
+  cfg: HeartflowConfig,
+): Promise<void> {
+  // 仅群消息触发
+  if (msg.peerKind !== "group" || !msg.chatroomId) return;
+  // 心流关闭或 independentTrigger 未开 → 跳过
+  if (!cfg.enabled || !cfg.independentTrigger) return;
+  // 不触发 bot 自己发的消息 (避免自我循环)
+  // 注: msg.direction 已是 inbound (outbound 由 send 路径产出, 不走 enrichAndSaveMessage)
+  // 提取 API key
+  const apiKey = process.env.MINIMAX_API_KEY ?? "";
+  if (!apiKey) {
+    log.warn("[WPP HEARTFLOW] enrich trigger skipped: missing MINIMAX_API_KEY");
+    return;
+  }
+  try {
+    const result: IndependentTriggerResult = await tryIndependentTrigger(
+      {
+        chatId: msg.chatroomId,
+        content: msg.content ?? "",
+        senderName: msg.fromNickname ?? msg.fromWxid ?? "未知",
+        senderWxid: msg.fromWxid ?? "",
+        botWxid: undefined,
+        apiKey,
+        baseUrl: "https://api.minimaxi.com/anthropic",
+      },
+      cfg,
+    );
+    log.info(
+      `[WPP HEARTFLOW] independent trigger result: triggered=${result.triggered} reason="${result.reason}" chatId=${msg.chatroomId}`,
+    );
+  } catch (err) {
+    log.warn(`[WPP HEARTFLOW] independent trigger threw: ${formatErr(err)}`, {
+      msgId: msg.msgId,
+      chatId: msg.chatroomId,
+    });
+  }
+}
+
 /** 多个消息批量保存 */
 export async function enrichBatch(batch: WppInboundMessage[]): Promise<{
   saved: number;
@@ -60,5 +119,22 @@ export async function enrichBatch(batch: WppInboundMessage[]): Promise<{
     else failed++;
   }
   log.info(`enrichBatch: ${saved} saved, ${failed} failed (size=${batch.length})`);
+
+  // v1.5.0 B-fix 20:06: enrichBatch 写库后, fire-and-forget 异步触发心流独立 trigger
+  //   - 不阻塞 enrichBatch 返回
+  //   - 失败仅 log warn, 不影响主入库流程
+  //   - 心流配置从 process.env.WPP_HEARTFLOW_CONFIG 读 (运行时注入, 默认用 defaultHeartflowConfig + 模型 fallback)
+  void (async () => {
+    const cfg: HeartflowConfig = {
+      ...defaultHeartflowConfig(),
+      // 从 env 读取心流 cfg (P1-follow: 后续会迁移到 accounts cfg 链; 当前 v1.5.0 B-fix 用 env 注入保持向后兼容)
+      ...(process.env.WPP_HEARTFLOW_CONFIG ? JSON.parse(process.env.WPP_HEARTFLOW_CONFIG) : {}),
+    };
+    for (const msg of batch) {
+      if (msg.peerKind !== "group") continue;
+      void tryHeartflowAfterEnrich(msg, cfg);
+    }
+  })();
+
   return { saved, failed };
 }
