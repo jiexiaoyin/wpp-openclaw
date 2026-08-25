@@ -1836,3 +1836,38 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 - dev master commit: 待 push
 - deploy: dist/inbound/{heartflow,enrich}.js 已 esbuild 编译
 - gateway restart: **等老板拍板** (按 2026-08-04 10:52 铁律)
+
+## v1.5.0 P2-fix (2026-08-25 20:41) - 4 项 P2 全收口 (老板拍 A)
+
+**触发**: 老板 20:41 拍板 A 并尽可能提升分数
+
+**4 项 P2 全收口**:
+
+### P2-1: HMAC webhook 验签 env 注入
+- 生成 32 字节随机 secret (64 hex) → `/root/.openclaw/credentials/wechatpadpro-webhook-secret.json` (chmod 600)
+- 注入到 `/root/.config/environment.d/wechatpadpro.conf` (按 8-07 铁律 #3)
+- `WECHATPRO_WEBHOOK_SECRET=08198a7c...` 64 字符
+
+### P2-2: 3 处 intent-llm / dispatcher hardcode 消除
+- `dispatch/intent-llm.ts:171` "MiniMax-M2.7-highspeed" → 拋错 (跟 heartflow.ts:475 一致设计哲学)
+- `dispatch/dispatcher.ts:165-167` resolveLlmModel → 拋错, accounts cfg 缺失立即报错
+- schema `llmIntentModel.default` = `deepseek-v4-flash` + enum 加 deepseek-v4-flash
+- accounts cfg `llmIntentEnabled/Model/TimeoutMs` 显式声明
+
+### P2-3: enrich.js 拆分 (1.3MB → 2.8KB)
+- 新建 `src/inbound/heartflow-trigger.ts` 桥接文件 (只 export tryIndependentTrigger)
+- enrich.ts import 改用 heartflow-trigger (不直接 import heartflow)
+- esbuild 改为 `--bundle=false` 模式, 让 plugin loader 用 ES module 解析 cross-file imports
+- dist 总大小: 3.4MB → 2.1MB
+
+### P2-4: plugin.json version 对齐 v1.5.0
+- package.json: 1.4.0 → 1.5.0
+- openclaw.plugin.json: 1.3.80 → 1.5.0 (dev + deploy)
+- src/core/constants.ts: PLUGIN_VERSION = "1.5.0"
+
+**测试**: 39 → **54 tests** (新增 15 P2-fix 测试)
+- npm test: **54/54 PASS**
+
+**部署**: deploy 端 4 P2 全部已 cp, gateway restart 等老板拍板 (按 8-04 10:52 铁律)
+
+**备份**: /data/wpp-p2-cleanup-20260825-2041/ (135M)
