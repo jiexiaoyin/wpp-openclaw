@@ -1,0 +1,8 @@
+# v1.4.1 (2026-08-25): dev-only 路径不入 git
+src/src/                # 历史残留 (P0-3 已清, 此条防再出现)
+dist-release/           # build-release.sh 临时产物
+release/                # build-release.sh 临时产物
+coverage/               # 测试覆盖率报告
+
+# dev 工具/脚本
+build-release.sh.deploy # dev-only deploy wrapper (如有)
