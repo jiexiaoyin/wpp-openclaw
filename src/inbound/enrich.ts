@@ -9,7 +9,7 @@ import {
   defaultHeartflowConfig,
   type HeartflowConfig,
   type IndependentTriggerResult,
-} from "./heartflow.js";
+} from "./heartflow-trigger.js";
 
 export interface EnrichResult {
   saved: boolean;
