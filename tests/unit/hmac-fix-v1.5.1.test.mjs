@@ -62,11 +62,11 @@ test('HMAC-fix 6: signatureRequired 函数 (permissive 模式)', () => {
 });
 
 test('HMAC-fix 7: 端到端 - vendor 不发 signature 时正常入库', () => {
-  // 验证 plugin 当前配置: secret 为空 + whitelistGroups 4 群
+  // 验证 plugin 当前配置: secret 为空 + whitelistGroups 5 群 (23:09 加调试群)
   // vendor 推送 webhook 无 signature → signatureRequired('') === false → 跳过 verify → 入库
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}/accounts/default.json`, 'utf-8'));
   assert.ok(!d.webhookSecret, 'accounts webhookSecret 必须为空 (permissive)');
-  assert.strictEqual(d.heartflow.whitelistGroups.length, 4, 'whitelistGroups 4 群');
+  assert.strictEqual(d.heartflow.whitelistGroups.length, 5, 'whitelistGroups 5 群 (老板 23:09 加调试群 57737516566@chatroom)');
   assert.strictEqual(d.heartflow.independentTrigger, true, 'independentTrigger 必须 true (B 方案核心)');
 });
 
