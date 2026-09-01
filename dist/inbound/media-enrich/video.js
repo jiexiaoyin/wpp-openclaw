@@ -1,3 +1,5 @@
+// src/inbound/media-enrich/video.ts - 视频消息 enrich (v0 XML + v1 download_context 分片)
+// 从 media-enrich.ts v1.3.26 拆分 (2026-08-10, P3-2): 仅搬运, 不优化
 import { logObj as log, formatErr } from "../../core/logger.js";
 import { parseVideoXml } from "./xml.js";
 import { loadOssConfig, uploadToOss, downloadByEndpoint, buildOssKey } from "./shared.js";
@@ -5,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+/** 视频消息 (msgType=43) 下载 + OSS */
 export async function enrichVideoMessage(ctx, xml) {
     const parsed = parseVideoXml(xml);
     if (!parsed)
@@ -14,6 +17,7 @@ export async function enrichVideoMessage(ctx, xml) {
         return { mediaUrl: null, mediaSize: null, error: "oss credentials missing" };
     let tmpPath = null;
     try {
+        // vendor 端点无 Cdn 前缀 (错调 /Tools/CdnDownloadVideo 会 404)
         const b64 = await downloadByEndpoint(ctx, "/Tools/DownloadVideo", parsed.aesKey, parsed.fileNo);
         const buf = Buffer.from(b64, "base64");
         const ext = parsed.md5 ? "mp4" : "mp4";
@@ -34,9 +38,10 @@ export async function enrichVideoMessage(ctx, xml) {
             try {
                 fs.unlinkSync(tmpPath);
             }
-            catch { }
+            catch { /* ignore */ }
     }
 }
+/** 从 raw_payload 提取新版视频 download_context (kind=video + video.download_context) */
 export function isV1SchemaVideo(raw) {
     if (!raw || typeof raw !== "object")
         return { isV1: false };
@@ -56,6 +61,7 @@ export function isV1SchemaVideo(raw) {
         },
     };
 }
+/** 用新版 DownloadVideo 下载视频 → OSS。失败返回 error (调用方降级)。 */
 export async function enrichVideoMessageFromV1(ctx, videoCtx) {
     const oss = loadOssConfig();
     if (!oss)
@@ -66,9 +72,10 @@ export async function enrichVideoMessageFromV1(ctx, videoCtx) {
         const chunks = [];
         let totalLen = videoCtx.dataLen;
         let startPos = 0;
-        const CHUNK = 1048576;
+        const CHUNK = 1048576; // 1MB 每段 (与 download_context.section 一致)
         while (startPos < totalLen) {
             const sectionLen = Math.min(CHUNK, totalLen - startPos);
+            // 单段 1MB < 200MB cap → 用普通 safeFetch (这段走 host 白名单 + 协议校验就够)
             const safeMod = await import("../../util/safe-fetch.js");
             const resp = await safeMod.safeFetch(url, {
                 method: "POST",
@@ -100,10 +107,12 @@ export async function enrichVideoMessageFromV1(ctx, videoCtx) {
             }
             chunks.push(chunk);
             startPos += chunk.length;
+            // 终止条件: 已拉到 totalLen (不要用 chunk.length < sectionLen — 每段固定 61440, 会提前 break)
             if (startPos >= totalLen)
                 break;
             if (chunk.length === 0)
-                break;
+                break; // 无进展
+            //   但若段 < 1MB (vendor 异常), 200 段其实只防 ~50MB; 改成按 totalBytes 严格 200MB)
             const totalBytes = chunks.reduce((s, c) => s + c.length, 0);
             const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
             if (totalBytes > MAX_VIDEO_BYTES) {
@@ -131,6 +140,7 @@ export async function enrichVideoMessageFromV1(ctx, videoCtx) {
             try {
                 fs.unlinkSync(tmpPath);
             }
-            catch { }
+            catch { /* ignore */ }
     }
 }
+//# sourceMappingURL=video.js.map

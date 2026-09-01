@@ -11,6 +11,7 @@ import {
   type WppAccountTriggerCtx,
 } from "./triggers.js";
 import { enrichBatch } from "./enrich.js";
+import { resolveJudgeCreds } from "../llm-judge.js";
 import { parseQuoteXml, extractReferencedFromReplyContext, extractReferencedFromApp } from "./parser/quote.js";
 import { captureQuoteSvrid } from "./quote-svrid.js";
 import { extractPairCode } from "../pairing-store.js";
@@ -518,7 +519,7 @@ export function createWppInboundHandler(
           const msgCount = getGroupMessageCount(groupId);
           if (shouldTriggerMine(groupId, opts.jargon, Date.now(), msgCount)) {
             void mineJargonForGroup(groupId, opts.jargon, {
-              apiKey: process.env.MINIMAX_API_KEY ?? "",
+              ...resolveJudgeCreds(),
             }).catch((e) => warn(`[WPP JARGON] mine failed (non-fatal): ${formatErr(e)}`));
           }
         }
@@ -542,7 +543,7 @@ export function createWppInboundHandler(
             content,
             m.fromNickname ?? "",
             opts.affection,
-            { apiKey: process.env.MINIMAX_API_KEY ?? "" },
+            { ...resolveJudgeCreds() },
             Date.now(),
           ).catch(() => { /* 好感度处理失败不阻塞 */ });
         }
@@ -612,7 +613,7 @@ export function createWppInboundHandler(
                 },
                 hfCfg,
                 {
-                  apiKey: process.env.MINIMAX_API_KEY ?? "",
+                  ...resolveJudgeCreds(),
                 },
               );
               // P1: 无论结果, 标记已 judge (频率闸生效)
