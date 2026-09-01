@@ -133,6 +133,7 @@ export interface IntentLlmOptions {
   model?: string; // default MiniMax-M2.7-highspeed (v1.4.0 12:09 B+ 方案 schema default 链路)
   timeoutMs?: number; // default 5000
   maxTokens?: number; // default 200
+  format?: "openai" | "anthropic"; // v1.6.0: DeepSeek (openai) | MiniMax (anthropic)
 }
 
 /** 解析 LLM 响应文本 → IntentDecision (剥 ```json 围栏 + 校验) */
@@ -202,6 +203,40 @@ export async function decideIntentWithLlm(
   };
 
   try {
+    const format = opts.format ?? (opts.baseUrl?.includes("deepseek") ? "openai" : "anthropic");
+    if (format === "openai") {
+      const resp = await safeFetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          temperature: 0,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!resp.ok) {
+        const err = await resp.text().catch(() => "");
+        warn(`[WPP v1.3.1 LLM-INTENT] HTTP ${resp.status}: ${err.slice(0, 200)}`);
+        return null;
+      }
+      const json = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      const text = json.choices?.[0]?.message?.content ?? "";
+      const decision = parseIntentResponse(text);
+      if (!decision) {
+        warn(`[WPP v1.3.1 LLM-INTENT] unparseable response: ${text.slice(0, 100)}`);
+        return null;
+      }
+      log.debug(`[WPP v1.3.1 LLM-INTENT] decision: ${JSON.stringify(decision)} (${input.candidates.length} candidates)`);
+      return decision;
+    }
     const resp = await safeFetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: {

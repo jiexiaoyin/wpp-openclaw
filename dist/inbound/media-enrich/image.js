@@ -1,3 +1,5 @@
+// src/inbound/media-enrich/image.ts - 图片消息 enrich (v0 XML + v1 schema + v1 CDN 完整大图)
+// 从 media-enrich.ts v1.3.26 拆分 (2026-08-10, P3-2): 仅搬运, 不优化
 import { logObj as log, formatErr } from "../../core/logger.js";
 import { parseImageXml } from "./xml.js";
 import { loadOssConfig, uploadToOss, downloadImageBase64, buildOssKey, sanitizeFilenamePart } from "./shared.js";
@@ -5,6 +7,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+/**
+ * 图片消息 enrich 主入口: 下载 → OSS 上传 → 公网 URL。
+ * 任何失败都吞错返回 { mediaUrl: null } (不阻塞消息处理), 只 log warn。
+ */
 export async function enrichImageMessage(ctx, xml) {
     const parsed = parseImageXml(xml);
     if (!parsed) {
@@ -38,10 +44,20 @@ export async function enrichImageMessage(ctx, xml) {
                 fs.unlinkSync(tmpPath);
             }
             catch {
+                /* ignore */
             }
         }
     }
 }
+/**
+ * v1 schema 图片 enrich: raw_payload kind=image, content="收到一张图片", 无 aeskey/cdnbigimgurl
+ * 用 /Tools/DownloadImg {msgId: local_id, toWxid} → 首 64KB JPEG (vendor 硬限) → ossutil → 公网 URL
+ *
+ * @param ctx WppAccountCtx (含 vendor 凭证)
+ * @param localId v1 schema 推送的 local_id (uint32, 实际是 vendor 内部 msgId)
+ * @param toWxid 接收方 wxid (私聊=bot 自己, 群聊=群 ID)
+ * @param md5 可选, 用于 OSS key 命名 (避免重复); 缺失时用 localId 哈希
+ */
 export async function enrichImageMessageFromV1(ctx, localId, toWxid, md5, dataLen) {
     if (!Number.isInteger(localId) || localId <= 0 || localId > 0xffffffff) {
         return { mediaUrl: null, mediaSize: null, error: `invalid localId: ${localId}` };
@@ -54,7 +70,9 @@ export async function enrichImageMessageFromV1(ctx, localId, toWxid, md5, dataLe
     try {
         const { postWppJson } = await import("../../api/client.js");
         const { ctxToCallOpts } = await import("../../send/factory.js");
-        const resp = await postWppJson(ctx.baseUrl, "/Tools/DownloadImg", {
+        const resp = await postWppJson(ctx.baseUrl, "/Tools/DownloadImg", 
+        // v1.3.70: 新 vendor DownloadImg 必填 snake_case (msg_id/to_wxid/data_len) + section; 旧字段 msgId/toWxid 报 INVALID_ARGUMENT
+        {
             msg_id: localId,
             to_wxid: toWxid,
             data_len: dataLen ?? 0,
@@ -92,10 +110,17 @@ export async function enrichImageMessageFromV1(ctx, localId, toWxid, md5, dataLe
                 fs.unlinkSync(tmpPath);
             }
             catch {
+                /* ignore */
             }
         }
     }
 }
+/**
+ * v1.2.5 IMAGE-CDN-DOWNLOAD: 用新版 cdn_download_contexts 走 CdnDownloadImage 完整下载大图。
+ * 新版 vendor (8/10) 推送 image.cdn_download_contexts (file_aes_key + file_no),
+ * CdnDownloadImage 返回**完整大图** (非旧 DownloadImg 的 64KB 截断)。
+ * 失败降级 → 返回 error (调用方 fallback 到 DownloadImg 64KB 或标注失败)。
+ */
 export async function enrichImageMessageFromV1Cdn(ctx, cdnCtx, md5) {
     if (!cdnCtx.fileAesKey || !cdnCtx.fileNo) {
         return { mediaUrl: null, mediaSize: null, error: "no file_aes_key/file_no in cdn_download_contexts" };
@@ -129,18 +154,25 @@ export async function enrichImageMessageFromV1Cdn(ctx, cdnCtx, md5) {
                 fs.unlinkSync(tmpPath);
             }
             catch {
+                /* ignore */
             }
         }
     }
 }
+/**
+ * 判定 v1 schema 图片 (raw_payload kind=image + local_id, 无 v0 Content/ImgBuf)
+ * v1.2.5: 新版推送带 image.cdn_download_contexts → 可走 CdnDownloadImage 完整大图 (非 64KB 截断)
+ */
 export function isV1SchemaImage(raw) {
     if (!raw || typeof raw !== "object")
         return { isV1: false };
     const r = raw;
+    // v1 schema 特征: kind === "image" + local_id (uint32 数字) + 无 v0 字段 (Content/ImgBuf)
     if (r.kind === "image" && typeof r.local_id === "number" && r.local_id > 0) {
         const isV1 = !("Content" in r) && !("ImgBuf" in r);
         if (!isV1)
             return { isV1: false };
+        // 群聊用 conversation_id (群 ID), 私聊用 recipient_id (bot 自己)
         const toWxid = typeof r.conversation_id === "string" && r.conversation_id.endsWith("@chatroom")
             ? r.conversation_id
             : typeof r.recipient_id === "string"
@@ -165,6 +197,7 @@ export function isV1SchemaImage(raw) {
             localId: r.local_id,
             md5: typeof imageObj?.md5 === "string" ? imageObj.md5 : undefined,
             toWxid,
+            // v1.3.70: 提取图片字节数 (新 vendor DownloadImg 必填 data_len) — image 对象或顶层 data_len/total_len
             dataLen: typeof imageObj?.data_len === "number"
                 ? imageObj.data_len
                 : typeof imageObj?.total_len === "number"
@@ -179,3 +212,4 @@ export function isV1SchemaImage(raw) {
     }
     return { isV1: false };
 }
+//# sourceMappingURL=image.js.map

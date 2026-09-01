@@ -1,3 +1,14 @@
+// src/dispatch/agent-tools/xiaowei-meta.ts - XiaoWei tag (小微 AI 智能体)
+// v1.3.69 预开发 (老板拍板: 预开发但不启用); v1.3.71 起工具已进 AGENT_TOOLS_META
+//
+// ⚠️ 默认禁用 (v1.3.71 起实现方式): 工具在 AGENT_TOOLS_META (AI 可见), 但执行前检查 xiaoweiEnabled
+//   (getXiaoWei 里 `!state.config.xiaoweiEnabled` 抛"未启用") — 默认 false 关闭, /xiaowei on 开启
+//   关闭时 AI 调用 → 报"小微智能体未启用 (xiaoweiEnabled=false), 用 /xiaowei on 开启"
+//   开启 (老板拍板后 /xiaowei on) → 正常调用, 需先确认 vendor 小微已开通 (Permission)
+//
+// 小微智能体调用流程:
+//   createSession → events_url (SSE) → sendMessage → 回答经 Events 流返回 (text.delta/message/completed)
+//   注意: SSE 事件流是长连接, AI 工具直接调用会阻塞, 需封装为"发消息后轮询/收集"模式
 import { Type } from "typebox";
 import { makeWppXiaoWei } from "../../send/xiaowei.js";
 import { getDefaultAccountRegistry } from "../../account-state.js";
@@ -6,6 +17,7 @@ function getXiaoWei() {
     const state = getDefaultAccountRegistry().get(getCurrentAccountId() ?? "default");
     if (!state)
         throw new Error(`account not found: ${getCurrentAccountId() ?? "default"}`);
+    // v1.3.71: 小微能力开关 (默认关闭; /xiaowei on|off 命令控制, 配置 xiaoweiEnabled 持久化)
     if (!state.config.xiaoweiEnabled) {
         throw new Error("小微智能体未启用 (xiaoweiEnabled=false), 用 /xiaowei on 开启");
     }
@@ -17,6 +29,7 @@ function getXiaoWei() {
     });
 }
 export const XIAO_WEI_META = {
+    // ===== 会话 =====
     xiaoWeiCreateSession: [
         "创建小微 AI 会话 (返回 events_url 供订阅 SSE 事件流). clientRequestId=去重标识, roomId=房间, welcomeText=欢迎语.",
         Type.Object({
@@ -67,6 +80,7 @@ export const XIAO_WEI_META = {
         }),
         (sessionId, afterSequence) => getXiaoWei().events(sessionId, afterSequence),
     ],
+    // ===== 记忆 =====
     xiaoWeiHistoryList: [
         "读取小微记忆列表 (scrollType=加载方向 0 最新).",
         Type.Object({ scrollType: Type.Optional(Type.Number()) }),
@@ -85,6 +99,7 @@ export const XIAO_WEI_META = {
         Type.Object({ deleteItemLists: Type.Array(Type.Unknown()) }),
         (deleteItemLists) => getXiaoWei().historyDelete(deleteItemLists),
     ],
+    // ===== 邀请 =====
     xiaoWeiInvite: [
         "邀请好友使用小微 (wxids 1..100 个).",
         Type.Object({ wxids: Type.Array(Type.String()) }),
@@ -100,6 +115,7 @@ export const XIAO_WEI_META = {
         Type.Object({}),
         () => getXiaoWei().inviteInfo(),
     ],
+    // ===== 红点 =====
     xiaoWeiRedDotsQuery: [
         "查询小微红点 (类型/负载/时间戳/reddotId).",
         Type.Object({}),
@@ -110,6 +126,7 @@ export const XIAO_WEI_META = {
         Type.Object({ reddotId: Type.Number(), lastReadTimestamp: Type.Number() }),
         (reddotId, lastReadTimestamp) => getXiaoWei().redDotsRead(reddotId, lastReadTimestamp),
     ],
+    // ===== 卡片 =====
     xiaoWeiCardUsers: [
         "小微卡片用户列表 (cardType 卡片类型, pageContext 分页).",
         Type.Object({
@@ -127,6 +144,7 @@ export const XIAO_WEI_META = {
         }),
         (messageId, appId, media) => getXiaoWei().cardScreenshotCheck(messageId, appId, media ?? []),
     ],
+    // ===== 权限 / A2A / 建议 =====
     xiaoWeiPermission: [
         "查询当前账号是否已开通小微 (未开通则调用其它小微接口会失败).",
         Type.Object({}),
@@ -143,3 +161,4 @@ export const XIAO_WEI_META = {
         () => getXiaoWei().suggestions(),
     ],
 };
+//# sourceMappingURL=xiaowei-meta.js.map

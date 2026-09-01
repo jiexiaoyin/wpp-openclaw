@@ -1,3 +1,4 @@
+// src/dispatch/agent-tools/favorites-meta.ts - Favor tag (收藏, 4)
 import { Type } from "typebox";
 import { makeWppFavorites } from "../../send/index.js";
 import { getDefaultAccountRegistry } from "../../account-state.js";
@@ -19,3 +20,4 @@ export const FAVORITES_META = {
     favoritesGetItem: ["获取收藏原文.", Type.Object({ favId: Type.String() }), (favId) => getFav().getFavItem(favId)],
     favoritesDel: ["删除收藏.", Type.Object({ favId: Type.String() }), (favId) => getFav().del(favId)],
 };
+//# sourceMappingURL=favorites-meta.js.map

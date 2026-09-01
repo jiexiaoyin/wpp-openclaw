@@ -1,5 +1,12 @@
+// core/logger.ts - 仿 pino 接口日志 (兼容现有 log.info 调用 + 新代码函数式 info/warn/error)
+// 范式仿 本项目/src/core/logger.ts
+// 关键: formatErr 自动保留 stack (silent killer 永久救回)
 import { PLUGIN_VERSION } from "./constants.js";
 const LOG_TAG = `[WPP v${PLUGIN_VERSION}]`;
+/**
+ * formatErr — Error 实例保留 stack; 非 Error 实例走 String()
+ * silent killer 永久救回: 之前 18+ 处只打 e.message 漏 stack, prod 难定位
+ */
 export function formatErr(err) {
     if (err instanceof Error) {
         if (err.stack)
@@ -52,9 +59,14 @@ function emit(level, msg, fields) {
         console.error(line);
     else if (level === "WARN")
         console.warn(line);
+    // eslint-disable-next-line no-console -- 中心 logger INFO/DEBUG 必需
     else
         console.log(line);
 }
+/**
+ * Normalize fields-or-error arg into Fields record.
+ * Error instances → { err: "<formatErr>" }, primitives → { value: v }
+ */
 function normalize(arg) {
     if (arg === undefined)
         return undefined;
@@ -64,6 +76,7 @@ function normalize(arg) {
         return arg;
     return { value: arg };
 }
+// ============ 函数式 (本项目 风格 — 新代码推荐) ============
 export function info(msg, fieldsOrErr) {
     emit("INFO", msg, normalize(fieldsOrErr));
 }
@@ -78,6 +91,7 @@ export function debug(msg, fields) {
         return;
     emit("DEBUG", msg, fields);
 }
+// ============ 对象式 (兼容现有 log.info/warn/error/debug 调用) ============
 function objectStyle(level) {
     return (msg, fieldsOrErr) => {
         emit(level, msg, normalize(fieldsOrErr));
@@ -89,4 +103,6 @@ export const logObj = {
     error: objectStyle("ERROR"),
     debug: objectStyle("DEBUG"),
 };
+/** 默认 export = logObj 对象 (兼容 `import log from ...; log.info(...)`) */
 export default logObj;
+//# sourceMappingURL=logger.js.map

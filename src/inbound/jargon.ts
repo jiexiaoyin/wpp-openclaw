@@ -24,7 +24,7 @@
 //   - 标准词过滤: jieba 词典频率 > 100 视为已知词 (降级用停用词+长度启发式)
 
 import { info, debug } from "../core/logger.js";
-import { safeFetch } from "../util/safe-fetch.js";
+import { callJudge, resolveJudgeCreds } from "../llm-judge.js";
 
 // ===== 常量 (对齐 Python 版) =====
 const MIN_TERM_LENGTH = 2;
@@ -526,20 +526,20 @@ export function buildComparePrompt(term: string, ctxMeaning: string, literalMean
 export interface JargonLlmOptions {
   apiKey: string;
   baseUrl?: string;
+  format?: "openai" | "anthropic";
 }
 
 interface JargonLlmResult {
   text: string;
 }
 
-/** 单次 LLM 调用 (复用 safeFetch + MiniMax anthropic API, 同 intent-llm) */
+/** 单次 LLM 调用 (统一走 llm-judge 双格式) */
 async function jargonLlm(
   prompt: string,
   cfg: JargonConfig,
   opts: JargonLlmOptions,
 ): Promise<JargonLlmResult | null> {
   if (!opts.apiKey) return null;
-  const baseUrl = (opts.baseUrl ?? "https://api.minimaxi.com/anthropic").replace(/\/$/, "");
   // v1.4.0 12:28 老板拍板 B: 消除 plugin hardcode, model 必须从 cfg 链 (schema default → accounts cfg) 提供, 缺失立即报错
   const model = cfg.model;
   if (!model) {
@@ -549,24 +549,17 @@ async function jargonLlm(
   }
   const timeoutMs = cfg.timeoutMs ?? 5000;
   try {
-    const resp = await safeFetch(`${baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "x-api-key": opts.apiKey,
+    const text = await callJudge({
+      model,
+      userPrompt: prompt,
+      maxTokens: 500,
+      timeoutMs,
+      creds: {
+        apiKey: opts.apiKey,
+        baseUrl: opts.baseUrl ?? resolveJudgeCreds().baseUrl,
+        format: opts.format ?? "anthropic",
       },
-      body: JSON.stringify({
-        model,
-        max_tokens: 500,
-        temperature: 0.3,
-        messages: [{ role: "user", content: prompt }],
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!resp.ok) return null;
-    const json = (await resp.json()) as { content?: Array<{ type?: string; text?: string }> };
-    const text = json.content?.find((b) => b.type === "text")?.text ?? "";
     return { text };
   } catch {
     return null;

@@ -2,6 +2,7 @@
 // 关键: webhook / handler 都通过本文件写 DB, 避免 webhook 自己 INSERT + handler 再 UPDATE 的重复修复模式
 
 import { logObj as log, formatErr } from "../core/logger.js";
+import { resolveJudgeCreds } from "../llm-judge.js";
 import { saveMessage } from "../db.js";
 import type { WppInboundMessage } from "../types.js";
 import {
@@ -92,10 +93,10 @@ async function tryHeartflowAfterEnrich(
   if (!cfg.enabled || !cfg.independentTrigger) return;
   // 不触发 bot 自己发的消息 (避免自我循环)
   // 注: msg.direction 已是 inbound (outbound 由 send 路径产出, 不走 enrichAndSaveMessage)
-  // 提取 API key
-  const apiKey = process.env.MINIMAX_API_KEY ?? "";
-  if (!apiKey) {
-    log.warn("[WPP HEARTFLOW] enrich trigger skipped: missing MINIMAX_API_KEY");
+  // 提取 judge 凭证 (DEEPSEEK 优先, MiniMax 兜底)
+  const creds = resolveJudgeCreds();
+  if (!creds.apiKey) {
+    log.warn("[WPP HEARTFLOW] enrich trigger skipped: missing judge API key (DEEPSEEK_API_KEY / MINIMAX_API_KEY)");
     return;
   }
   try {
@@ -106,8 +107,9 @@ async function tryHeartflowAfterEnrich(
         senderName: msg.fromNickname ?? msg.fromWxid ?? "未知",
         senderWxid: msg.fromWxid ?? "",
         botWxid: undefined,
-        apiKey,
-        baseUrl: "https://api.minimaxi.com/anthropic",
+        apiKey: creds.apiKey,
+        baseUrl: creds.baseUrl,
+        format: creds.format,
       },
       cfg,
     );

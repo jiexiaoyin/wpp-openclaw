@@ -1,3 +1,4 @@
+// src/send/index.ts - 21 个 vendor tag module 入口 (聚合 make* functions)
 import { makeWppLogin } from "./login.js";
 import { makeWppMsg } from "./msg.js";
 import { makeWppGroup } from "./group.js";
@@ -18,8 +19,16 @@ import { makeWppSayHello } from "./sayhello.js";
 import { makeWppTranslate } from "./translate.js";
 import { makeWppCustomized } from "./customized.js";
 import { makeWppWebhook } from "./webhook.js";
-import { makeWppXiaoWei } from "./xiaowei.js";
+import { makeWppXiaoWei } from "./xiaowei.js"; // v1.3.69 预开发: 小微智能体 (默认不启用)
+// 同时作为 re-export 入口 (供 misc-meta 用)
 export { makeWppLogin, makeWppMsg, makeWppGroup, makeWppFriend, makeWppUser, makeWppFinder, makeWppFriendCircle, makeWppSearch, makeWppWxapp, makeWppOfficialAccounts, makeWppTools, makeWppTenPay, makeWppFavorites, makeWppLabel, makeWppVoice, makeWppQWContact, makeWppSayHello, makeWppTranslate, makeWppCustomized, makeWppWebhook, makeWppXiaoWei, };
+/**
+ * 聚合 vendor 全部 21 tag × 236 endpoint 的入口
+ * 调用:
+ *   const api = makeWppSend({ baseUrl, tokenKey, authcode, accountId });
+ *   const r = await api.msg.sendTxt(toWxid, content);
+ *   const r2 = await api.login.getQR();
+ */
 export function makeWppSend(ctx) {
     return {
         login: makeWppLogin(ctx),
@@ -42,9 +51,10 @@ export function makeWppSend(ctx) {
         translate: makeWppTranslate(ctx),
         customized: makeWppCustomized(ctx),
         webhook: makeWppWebhook(ctx),
-        xiaoWei: makeWppXiaoWei(ctx),
+        xiaoWei: makeWppXiaoWei(ctx), // v1.3.69 预开发: 小微智能体 (默认不启用)
     };
 }
+/** 列出所有 vendor 端点 (用于 tests/api-coverage 验证 100% 覆盖) */
 export const WPP_VENDOR_ENDPOINTS = {
     login: [
         "/Login/62data",
@@ -85,6 +95,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Login/Newinit",
         "/Login/TwiceAutoAuth",
         "/Login/YPayVerificationcode",
+        // v1.3.67 新 vendor: 登录增强
         "/Login/GetLoginStatus",
         "/Login/SubmitLoginVerificationCode",
         "/Login/GetQRPadCloud",
@@ -96,6 +107,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Msg/Quote",
         "/Msg/Revoke",
         "/Msg/ShareLink",
+        // v1.3.25 SWAGGER-254: SendApp 注册 (仅登记, 群发端点勿调)
         "/Msg/SendApp",
         "/Msg/SendCDNFile",
         "/Msg/SendCDNImg",
@@ -111,6 +123,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Msg/StartAutoSync",
         "/Msg/Sync",
         "/Msg/UploadImg",
+        // v1.3.67 新 vendor API
         "/Msg/SendGroupMassMsgText",
         "/Msg/SendFile",
         "/Msg/SendAppMessage",
@@ -153,6 +166,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Friend/SendRequest",
         "/Friend/SetRemarks",
         "/Friend/Upload",
+        // v1.3.67 新 vendor API
         "/Friend/GetGHList",
     ],
     user: [
@@ -173,6 +187,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/User/UpdateProfile",
         "/User/UploadHeadImage",
         "/User/VerifyPasswd",
+        // v1.3.67 新 vendor API
         "/User/FriendVerification",
         "/User/AddMeMethods",
     ],
@@ -192,6 +207,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Finder/Search",
         "/Finder/TargetUserPage",
         "/Finder/UserPrepare",
+        // v1.3.67 新 vendor: 视频播放控制
         "/Finder/PlayVideo",
         "/Finder/PlayVideoStop",
         "/Finder/PlayVideoStatus",
@@ -209,16 +225,19 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/FriendCircle/PrivacySettings",
         "/FriendCircle/PushCommnet",
         "/FriendCircle/Upload",
+        // v1.3.25 SWAGGER-254: 新增 5 个
         "/FriendCircle/DownloadVideo",
         "/FriendCircle/MessagesRaw",
         "/FriendCircle/SetBackgroundImage",
         "/FriendCircle/UploadImage",
         "/FriendCircle/UploadImages",
         "/FriendCircle/UploadVideo",
+        // v1.3.67 新 vendor API
         "/FriendCircle/GetCollectCircle",
         "/FriendCircle/SendFavItemCircle",
         "/FriendCircle/SendOneIdCircle",
         "/FriendCircle/SetFriendCircleDays",
+        // v1.3.67 新 vendor
         "/FriendCircle/ActiveTasks",
     ],
     search: [
@@ -240,15 +259,18 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Search/Stickers",
         "/Search/Underlines",
         "/Search/WeChatIndex",
+        // v1.3.25 SWAGGER-254: 新增 5 个通用搜索
         "/Search/Capabilities",
         "/Search/Gateway",
         "/Search/Query",
         "/Search/Service/{name}",
         "/Search/Services",
+        // v1.3.67 新 vendor: 视频号深度 API
         "/Search/Channels/Detail",
         "/Search/Channels/Comments",
         "/Search/Channels/Media",
         "/Search/Channels/ResolveShare",
+        // v1.3.67 新 vendor: AI 搜索对话
         "/Search/AI/Conversation",
         "/Search/AI/FollowUp",
     ],
@@ -273,6 +295,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Wxapp/Wxapp/GetpullPay",
         "/Wxapp/Wxapp/JSGetSessionidQRcode",
         "/Wxapp/Wxapp/QrcodeAuthLogin",
+        // v1.3.67 新 vendor: 小程序 OAuth
         "/Wxapp/DeleteOauthApp",
         "/Wxapp/GetOauthList",
         "/Wxapp/JSLoginCustomized",
@@ -290,6 +313,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/OfficialAccounts/QRConnectAuthorize",
         "/OfficialAccounts/QRConnectAuthorizeConfirm",
         "/OfficialAccounts/Quit",
+        // v1.3.67 新 vendor: 公众号文章
         "/OfficialAccounts/ArticleList",
         "/OfficialAccounts/ArticleMarkdown",
         "/OfficialAccounts/ArticleRead",
@@ -310,6 +334,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Tools/ThirdAppGrant",
         "/Tools/UploadFile",
         "/Tools/setproxy",
+        // v1.3.25 SWAGGER-254: 新增 2 个 (media-enrich 已用, 补注册)
         "/Tools/DownloadFileBinary",
         "/Tools/DownloadVoiceBinary",
     ],
@@ -321,11 +346,13 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/TenPay/Qrydetailwxhb",
         "/TenPay/Receivewxhb",
         "/TenPay/SjSkdPayQCode",
+        // v1.3.25 SWAGGER-254: 新增 5 个
         "/TenPay/Collectmoney",
         "/TenPay/ConfirmPreTransferApi",
         "/TenPay/GeneratePayQCode",
         "/TenPay/GetRedPacketListApi",
         "/TenPay/WXCreateRedPacketApi",
+        // v1.3.67 新 vendor: 红包增强
         "/TenPay/OpenHongBaoWithParams",
         "/TenPay/ReceivewxhbWithoutEncryption",
     ],
@@ -336,6 +363,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Label/GetList",
         "/Label/UpdateList",
         "/Label/UpdateName",
+        // v1.3.67 新 vendor
         "/Label/GetWXFriendListByLabel",
     ],
     voice: [
@@ -345,6 +373,7 @@ export const WPP_VENDOR_ENDPOINTS = {
     ],
     qwContact: [
         "/QWContact/QWApplyAddContact",
+        // v1.3.67: 路径去重 (旧 /QWContact/QWContact/QWAddContact 已废弃)
         "/QWContact/QWAddContact",
         "/QWContact/SearchQWContact",
     ],
@@ -359,6 +388,7 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/Webhook/Set",
         "/Webhook/Test",
     ],
+    // v1.3.69 预开发: 小微智能体 (默认不启用, 仅注册端点; agent-tools 不暴露)
     xiaoWei: [
         "/XiaoWei/Cards/ScreenshotSecurityCheck",
         "/XiaoWei/Cards/Users",
@@ -382,3 +412,4 @@ export const WPP_VENDOR_ENDPOINTS = {
         "/XiaoWei/RedDots/Read",
     ],
 };
+//# sourceMappingURL=index.js.map

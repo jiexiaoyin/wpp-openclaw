@@ -1,5 +1,30 @@
+// src/inbound/jargon.ts - v1.3.76 JARGON: 群黑话挖掘 (自主学习)
+//
+// 移植自 AstrBot 插件 astrbot_plugin_self_learning (v3.6.1) 的 jargon 模块
+//   (services/jargon/jargon_statistical_filter.py + jargon_miner.py + jargon_query.py)。
+// 统计层纯 TS 移植 (jieba → n-gram 降级, 可选 @node-rs/jieba 增强), LLM 层接 MiniMax。
+//
+// 价值: 让 AI 理解群黑话 (缩写/内部梗/圈内用语), 回复更"像自己人"。
+// 与心流互补: 心流=决定"什么时候开口", 黑话=决定"开口听懂黑话"。
+//
+// 架构 (三层流水线, 降 LLM 成本 70-80%):
+//   ① 统计预筛 (零 LLM): 每消息更新词频表 → 跨群IDF + burst score + 用户集中度 → 高分候选
+//   ② LLM 批量验证: 一次调用筛掉普通词, 只留真黑话
+//   ③ LLM 三步推断: 上下文推断 vs 纯词条推断, 对比判"黑话" → 存含义
+//   ④ 查询 tool: AI 可调 query_jargon 查群黑话含义
+//
+// 统计层 (纯算法, 参考 JargonStatisticalFilter):
+//   - 每群词频表: {group_id → {term → count}}
+//   - 跨群全局词频: term → 全群 count
+//   - 用户词频: {group_id → {term → {sender_id → count}}}
+//   - 首见时间: {group_id → {term → ts}}
+//   - 上下文样例: {group_id → {term → [最多10条]}}
+//   - burst score = freq / max(age_days, 1)
+//   - 综合分 = idf*0.4 + burst*0.3 + 集中度*0.3
+//   - 标准词过滤: jieba 词典频率 > 100 视为已知词 (降级用停用词+长度启发式)
 import { info, debug } from "../core/logger.js";
-import { safeFetch } from "../util/safe-fetch.js";
+import { callJudge, resolveJudgeCreds } from "../llm-judge.js";
+// ===== 常量 (对齐 Python 版) =====
 const MIN_TERM_LENGTH = 2;
 const MIN_FREQUENCY = 5;
 const MAX_CONTEXT_EXAMPLES = 10;
@@ -7,33 +32,49 @@ const JIEBA_FREQ_THRESHOLD = 100;
 const WEIGHT_IDF = 0.4;
 const WEIGHT_BURST = 0.3;
 const WEIGHT_CONCENTRATION = 0.3;
+/** 中文 n-gram 长度 (降级分词用) */
 const NGRAM_MAX = 4;
+/** 术语年龄上限 (天数, 超过则视为稳定词降低 burst) */
 const BURST_AGE_CAP_DAYS = 14;
+// ===== 停用词表 (对齐 Python 版 _is_stopword) =====
 const STOPWORDS = new Set([
+    // 虚词/助词/语气词
     "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一", "个", "上", "也", "很",
     "到", "说", "要", "去", "你", "会", "着", "没", "看", "好", "自", "这", "他", "她", "它", "们",
     "吗", "吧", "呢", "啊", "哦", "嗯", "呀", "哈", "那", "么", "什", "啦", "噢", "嘛", "哇",
     "来", "对", "把", "让", "被", "给", "从", "还", "比", "得", "过", "可", "能", "为", "以", "而",
     "但", "或", "如", "与", "等", "及", "其", "之",
+    // 代词/指示词
     "这个", "那个", "什么", "怎么", "哪里", "这里", "那里", "自己", "大家", "我们", "你们", "他们", "她们", "谁",
     "哪个", "这些", "那些", "多少", "几个", "某个", "别人",
+    // 常见动词
     "知道", "觉得", "感觉", "可以", "应该", "需要", "已经", "开始", "然后", "因为", "所以", "虽然", "如果",
     "不是", "没有", "不会", "不能", "不要", "不用", "不行", "出来", "出去", "进来", "起来", "下去", "回来", "过来",
     "喜欢", "希望", "想要", "能够", "可能", "一定", "必须", "告诉", "问题", "时候", "东西", "事情", "地方", "方面",
+    // 时间词
     "今天", "昨天", "明天", "现在", "刚才", "以前", "以后", "时间", "上午", "下午", "晚上", "早上", "中午",
+    // 常见形容词/副词
     "真的", "确实", "其实", "当然", "特别", "非常", "一直", "还是", "而且", "只是", "只有", "所有", "一些",
     "比较", "最后", "首先", "接着", "终于", "竟然",
+    // 常见名词
     "朋友", "老师", "同学", "学生", "家里", "公司", "学校", "手机", "电脑", "工作", "生活",
+    // 网络常用但含义明确的词 (不是黑话)
     "哈哈", "哈哈哈", "呵呵", "嘻嘻", "啊啊", "嗯嗯", "谢谢", "感谢", "抱歉", "不好意思", "没关系",
     "图片", "表情", "语音", "视频", "文件", "链接",
 ]);
+// ===== 标准词过滤: 可选 jieba 增强 =====
 let _jieba = null;
 let _jiebaTried = false;
+/**
+ * 尝试加载 @node-rs/jieba (预编译, 可选增强).
+ * 加载失败 (未安装/平台不支持) → 降级 n-gram, 不影响主流程.
+ */
 function loadJieba() {
     if (_jiebaTried)
         return;
     _jiebaTried = true;
     try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const mod = require("@node-rs/jieba");
         const jb = mod.default ?? mod;
         _jieba = {
@@ -54,6 +95,7 @@ function loadJieba() {
         debug(`[WPP JARGON] @node-rs/jieba not installed, using n-gram fallback`);
     }
 }
+/** 是否标准词 (jieba 词典频率 > 阈值) */
 function isStandardVocabulary(word) {
     if (!_jieba?.freq)
         return false;
@@ -64,6 +106,11 @@ function isStandardVocabulary(word) {
         return false;
     }
 }
+// ===== 分词 (jieba 优先, n-gram 降级) =====
+/**
+ * 分词: 优先 @node-rs/jieba, 降级为"连续汉字/字母段"的 2-4 gram。
+ * 返回过滤后的 token 列表 (长度>=2, 非停用词, 非纯数字/标点, 非标准词)。
+ */
 export function tokenize(text) {
     if (!text)
         return [];
@@ -81,24 +128,27 @@ export function tokenize(text) {
         if (STOPWORDS.has(word))
             continue;
         if (/^[\d\s]+$/.test(word))
-            continue;
+            continue; // 纯数字
         if (/^[^\w一-鿿]+$/.test(word))
-            continue;
+            continue; // 纯标点
         if (isStandardVocabulary(word))
-            continue;
+            continue; // 标准词
         out.push(word);
     }
     return out;
 }
+/** 降级分词: 提取连续汉字/字母段, 生成 2-4 gram */
 function ngramTokens(text) {
     const segments = text.match(/[一-鿿]{2,}|[a-zA-Z]{2,}/g) ?? [];
     const tokens = [];
     for (const seg of segments) {
         if (/^[a-zA-Z]+$/.test(seg)) {
+            // 英文/拼音缩写: 整体作为候选 (如 "yyds" "nbcs")
             if (seg.length <= 8)
                 tokens.push(seg);
             continue;
         }
+        // 中文: 生成 2-4 gram
         for (let n = NGRAM_MAX; n >= 2; n--) {
             for (let i = 0; i + n <= seg.length; i++) {
                 tokens.push(seg.slice(i, i + n));
@@ -115,6 +165,7 @@ let stats = {
     termContexts: new Map(),
     dirtyGroups: new Set(),
 };
+/** 测试/热重载: 清空统计 */
 export function resetJargonStats() {
     stats = {
         groupTermFreq: new Map(),
@@ -125,6 +176,9 @@ export function resetJargonStats() {
         dirtyGroups: new Set(),
     };
 }
+/**
+ * 更新词频表 (每条消息调用, < 1ms)。对齐 JargonStatisticalFilter.update_from_message。
+ */
 export function updateJargonFromMessage(content, groupId, senderId) {
     if (!content || !groupId)
         return;
@@ -155,6 +209,9 @@ export function updateJargonFromMessage(content, groupId, senderId) {
     }
     stats.dirtyGroups.add(groupId);
 }
+/**
+ * 取群内 top-K 黑话候选 (按综合分排序)。对齐 JargonStatisticalFilter.get_jargon_candidates。
+ */
 export function getJargonCandidates(groupId, topK = 20, excludeTerms) {
     const groupFreq = stats.groupTermFreq.get(groupId);
     if (!groupFreq)
@@ -167,13 +224,16 @@ export function getJargonCandidates(groupId, topK = 20, excludeTerms) {
             continue;
         if (exclude.has(term))
             continue;
+        // IDF: 跨群稀有度
         let groupsContaining = 0;
         for (const gf of stats.groupTermFreq.values()) {
             if (gf.has(term))
                 groupsContaining += 1;
         }
         const idf = Math.log(numGroups / Math.max(groupsContaining, 1));
+        // Burst: 近期爆发 (freq / age_days)
         const burstScore = calcBurstScore(term, groupId);
+        // 用户集中度: 1/unique_users
         const uniqueUsers = stats.userTermFreq.get(groupId)?.get(term)?.size ?? 0;
         const concentration = 1.0 / Math.max(uniqueUsers, 1);
         const score = idf * WEIGHT_IDF + burstScore * WEIGHT_BURST + concentration * WEIGHT_CONCENTRATION;
@@ -190,6 +250,7 @@ export function getJargonCandidates(groupId, topK = 20, excludeTerms) {
     candidates.sort((a, b) => b.score - a.score);
     return candidates.slice(0, topK);
 }
+/** burst score: freq / max(age_days, 1), 年龄上限 14 天 */
 export function calcBurstScore(term, groupId) {
     const firstSeen = stats.termFirstSeen.get(groupId)?.get(term) ?? 0;
     if (firstSeen === 0)
@@ -198,6 +259,7 @@ export function calcBurstScore(term, groupId) {
     const freq = stats.groupTermFreq.get(groupId)?.get(term) ?? 0;
     return freq / ageDays;
 }
+/** 群统计摘要 */
 export function getGroupStats(groupId) {
     const groupFreq = stats.groupTermFreq.get(groupId) ?? new Map();
     let total = 0;
@@ -209,6 +271,7 @@ export function getGroupStats(groupId) {
     }
     return { totalUniqueTerms: groupFreq.size, totalOccurrences: total, termsAboveThreshold: above };
 }
+/** 清空某群统计 */
 export function resetGroupJargon(groupId) {
     stats.groupTermFreq.delete(groupId);
     stats.userTermFreq.delete(groupId);
@@ -216,22 +279,24 @@ export function resetGroupJargon(groupId) {
     stats.termContexts.delete(groupId);
     stats.dirtyGroups.delete(groupId);
 }
+// ===== 黑话硬编码过滤 (对齐 jargon_miner._should_filter_candidate) =====
 const HARD_BLOCK_RE = /[@一-鿿]|[\[\]]|https?:\/\/|[\s　]/;
 const COMMON_BLOCK = new Set([
     "哈哈", "哈哈哈", "呵呵", "嘻嘻", "啊啊", "嗯嗯", "谢谢", "感谢", "好的", "可以", "不错",
     "收到", "明白", "知道", "看看", "这个", "那个", "什么", "怎么", "真的", "确实", "其实",
 ]);
+/** 候选是否该过滤 (纯规则, 参考 jargon_miner) */
 export function shouldFilterCandidate(term) {
     if (!term)
         return true;
     if (term.length < 2 || term.length > 8)
         return true;
     if (HARD_BLOCK_RE.test(term))
-        return true;
+        return true; // 含中文/方括号/URL/空白
     if (/^[\d]+$/.test(term))
         return true;
     if (/^[a-zA-Z]{7,}$/.test(term))
-        return true;
+        return true; // 超长纯英文
     if (COMMON_BLOCK.has(term))
         return true;
     return false;
@@ -239,7 +304,8 @@ export function shouldFilterCandidate(term) {
 export function defaultJargonConfig() {
     return {
         enabled: false,
-        model: undefined,
+        // v1.4.0 12:28 老板拍板 B: 消除 plugin hardcode, model 由 schema default (openclaw.plugin.json) + accounts cfg 链提供
+        model: undefined, // placeholder,运行时由 cfg.model 提供;缺失抛错 (jargon.ts:543)
         timeoutMs: 5000,
         mineIntervalSec: 60,
         minMessages: 10,
@@ -247,9 +313,13 @@ export function defaultJargonConfig() {
         whitelistGroups: [],
     };
 }
+// ===== 消息历史缓冲 (供 LLM 挖掘看上下文) =====
 const msgHistory = new Map();
 const MSG_HISTORY_MAX = 200;
+/** P1 (2026-08-23): 每群单调递增消息计数 — shouldTriggerMine 用独立计数器,
+ *   不再用有界缓冲长度 (历史满 200 条后长度恒 200 → 新增消息数恒 0 → 挖掘永久停摆) */
 const groupMsgCounter = new Map();
+/** 记录消息 (旁路, 供 LLM 挖掘) */
 export function recordJargonMessage(groupId, senderId, content) {
     if (!content?.trim())
         return;
@@ -258,19 +328,28 @@ export function recordJargonMessage(groupId, senderId, content) {
     if (hist.length > MSG_HISTORY_MAX)
         hist = hist.slice(-MSG_HISTORY_MAX);
     msgHistory.set(groupId, hist);
+    // P1: 单调递增计数 (只增不清, 供 shouldTriggerMine 判断新增消息数)
     groupMsgCounter.set(groupId, (groupMsgCounter.get(groupId) ?? 0) + 1);
 }
+/** P1: 群累计消息数 (单调递增) */
 export function getGroupMessageCount(groupId) {
     return groupMsgCounter.get(groupId) ?? 0;
 }
+/** 取最近 N 条消息文本 */
 export function getRecentMessages(groupId, n) {
     const hist = msgHistory.get(groupId) ?? [];
     return hist.slice(-n);
 }
+/** 测试/热重载: 清空历史 */
 export function resetJargonHistory() {
     msgHistory.clear();
     groupMsgCounter.clear();
 }
+// ===== LLM Prompt (复刻 jargon_miner) =====
+/**
+ * 提取候选 prompt (参考 extract_prompt_template)。
+ * 输入一段聊天文本, 输出 JSON 数组 [{content, raw_content}]。
+ */
 export function buildExtractPrompt(chatText) {
     return `请从下面这段聊天内容中提取"黑话/俚语/网络缩写"候选项。
 
@@ -304,6 +383,10 @@ export function buildExtractPrompt(chatText) {
 现在请输出：
 ${chatText}`;
 }
+/**
+ * 批量验证 prompt (参考 validate_prompt_template)。
+ * 一次 LLM 调用把普通词筛掉, 只留真黑话。
+ */
 export function buildValidatePrompt(chatText, candidates) {
     return `下面是某群聊的对话片段和从中提取的候选词列表。
 
@@ -321,6 +404,9 @@ ${JSON.stringify(candidates)}
 
 如果没有，输出 []`;
 }
+/**
+ * 三步推断 - 第一步: 上下文推断含义 (参考 prompt_infer_with_context)。
+ */
 export function buildInferWithContextPrompt(term, context) {
     return `以下是一个群聊中出现的词条和它出现的上下文。
 
@@ -335,6 +421,9 @@ ${context}
 
 "no_info" 为 true 表示无法从上下文推断出是黑话。`;
 }
+/**
+ * 三步推断 - 第二步: 仅凭词条推断 (参考 prompt_infer_content_only)。
+ */
 export function buildInferContentOnlyPrompt(term) {
     return `词条：${term}
 
@@ -343,6 +432,10 @@ export function buildInferContentOnlyPrompt(term) {
 以 JSON 输出：
 {"meaning": "按字面/常规理解的解释"}`;
 }
+/**
+ * 三步推断 - 第三步: 对比两个推断 (参考 prompt_compare_inference)。
+ * 上下文推断 vs 纯字面推断差异大 → 是黑话。
+ */
 export function buildComparePrompt(term, ctxMeaning, literalMeaning) {
     return `词条：${term}
 
@@ -355,41 +448,35 @@ export function buildComparePrompt(term, ctxMeaning, literalMeaning) {
 
 只输出 JSON，不要解释。`;
 }
+/** 单次 LLM 调用 (统一走 llm-judge 双格式) */
 async function jargonLlm(prompt, cfg, opts) {
     if (!opts.apiKey)
         return null;
-    const baseUrl = (opts.baseUrl ?? "https://api.minimaxi.com/anthropic").replace(/\/$/, "");
+    // v1.4.0 12:28 老板拍板 B: 消除 plugin hardcode, model 必须从 cfg 链 (schema default → accounts cfg) 提供, 缺失立即报错
     const model = cfg.model;
     if (!model) {
         throw new Error("[WPP JARGON] cfg.model unresolved. v1.4.0 12:28 老板拍板: 必须从 schema default (openclaw.plugin.json channelConfigs.wechatpadpro.schema.properties.jargon.properties.model.default) 或 accounts/<id>.json:jargon.model 提供. plugin 不再 hardcode fallback");
     }
     const timeoutMs = cfg.timeoutMs ?? 5000;
     try {
-        const resp = await safeFetch(`${baseUrl}/v1/messages`, {
-            method: "POST",
-            headers: {
-                "content-type": "application/json",
-                "anthropic-version": "2023-06-01",
-                "x-api-key": opts.apiKey,
+        const text = await callJudge({
+            model,
+            userPrompt: prompt,
+            maxTokens: 500,
+            timeoutMs,
+            creds: {
+                apiKey: opts.apiKey,
+                baseUrl: opts.baseUrl ?? resolveJudgeCreds().baseUrl,
+                format: opts.format ?? "anthropic",
             },
-            body: JSON.stringify({
-                model,
-                max_tokens: 500,
-                temperature: 0.3,
-                messages: [{ role: "user", content: prompt }],
-            }),
-            signal: AbortSignal.timeout(timeoutMs),
         });
-        if (!resp.ok)
-            return null;
-        const json = (await resp.json());
-        const text = json.content?.find((b) => b.type === "text")?.text ?? "";
         return { text };
     }
     catch {
         return null;
     }
 }
+/** 从 LLM 文本提取 JSON 数组 (剥围栏) */
 export function extractStringArray(text) {
     if (!text)
         return [];
@@ -403,6 +490,7 @@ export function extractStringArray(text) {
             return arr.filter((x) => typeof x === "string");
     }
     catch {
+        // 尝试提取 [...]
         const m = s.match(/\[[\s\S]*\]/);
         if (m) {
             try {
@@ -411,11 +499,13 @@ export function extractStringArray(text) {
                     return arr.filter((x) => typeof x === "string");
             }
             catch {
+                /* ignore */
             }
         }
     }
     return [];
 }
+/** 从 LLM 文本提取 JSON 对象 */
 export function extractJsonObject(text) {
     if (!text)
         return null;
@@ -438,9 +528,13 @@ export function extractJsonObject(text) {
     }
 }
 const mineStates = new Map();
+/** 测试/热重载: 清空挖掘状态 */
 export function resetJargonMineStates() {
     mineStates.clear();
 }
+/**
+ * 是否该触发挖掘: 距上次 >= interval 且 新增消息 >= minMessages。
+ */
 export function shouldTriggerMine(groupId, cfg, nowMs, currentMsgCount) {
     const st = mineStates.get(groupId) ?? { lastTriggerTs: 0, lastMsgCount: 0 };
     const intervalMs = (cfg.mineIntervalSec ?? 60) * 1000;
@@ -454,7 +548,12 @@ export function shouldTriggerMine(groupId, cfg, nowMs, currentMsgCount) {
     mineStates.set(groupId, st);
     return true;
 }
+/**
+ * 执行一次黑话挖掘: 统计候选 → LLM 批量验证 → 三步推断 → 存储。
+ * 静默失败 (无 key/超时/坏 JSON) → 不影响主流程。
+ */
 export async function mineJargonForGroup(groupId, cfg, opts) {
+    // ① 统计候选 (零 LLM)
     const exclude = new Set();
     if (cfg.store) {
         try {
@@ -463,18 +562,21 @@ export async function mineJargonForGroup(groupId, cfg, opts) {
             }
         }
         catch {
+            /* ignore */
         }
     }
     const candidates = getJargonCandidates(groupId, cfg.maxCandidatesPerGroup ?? 50, exclude)
         .filter((c) => !shouldFilterCandidate(c.term))
-        .slice(0, 15);
+        .slice(0, 15); // 每次最多 LLM 验证 15 个 (控成本)
     if (candidates.length === 0)
         return { extracted: 0, confirmed: 0 };
     const recent = getRecentMessages(groupId, 30).join("\n");
+    // ② LLM 批量验证 (一次调用筛普通词)
     const validateRes = await jargonLlm(buildValidatePrompt(recent, candidates.map((c) => c.term)), cfg, opts);
     if (!validateRes)
         return { extracted: 0, confirmed: 0 };
     const confirmed = extractStringArray(validateRes.text);
+    // ③ 对确认的候选做含义推断 (取前 5 个, 控成本)
     let saved = 0;
     for (const term of confirmed.slice(0, 5)) {
         const ctx = candidates.find((c) => c.term === term)?.contextExamples?.[0] ?? "";
@@ -492,31 +594,38 @@ export async function mineJargonForGroup(groupId, cfg, opts) {
             }
         }
         catch {
+            /* 单个失败不影响其他 */
         }
     }
     info(`[WPP JARGON] mined group=${groupId} candidates=${candidates.length} confirmed=${confirmed.length} saved=${saved}`);
     return { extracted: candidates.length, confirmed: saved };
 }
+/** 三步推断含义 */
 async function inferJargonMeaning(term, context, cfg, opts) {
+    // 第一步: 上下文推断
     const r1 = await jargonLlm(buildInferWithContextPrompt(term, context || "（无上下文）"), cfg, opts);
     if (!r1)
         return "";
     const o1 = extractJsonObject(r1.text);
     const ctxMeaning = typeof o1?.meaning === "string" ? o1.meaning : "";
     const noInfo = o1?.no_info === true;
+    // 第二步: 纯字面推断
     const r2 = await jargonLlm(buildInferContentOnlyPrompt(term), cfg, opts);
     if (!r2)
         return ctxMeaning;
     const o2 = extractJsonObject(r2.text);
     const literalMeaning = typeof o2?.meaning === "string" ? o2.meaning : "";
+    // 第三步: 对比
     const r3 = await jargonLlm(buildComparePrompt(term, ctxMeaning, literalMeaning), cfg, opts);
     if (!r3)
         return ctxMeaning;
     const o3 = extractJsonObject(r3.text);
     if (o3?.is_similar === false) {
+        // 含义不同 → 黑话, 用上下文含义
         return ctxMeaning || `${term}（群内特有用法）`;
     }
     if (noInfo)
-        return "";
+        return ""; // 无法确定
     return ctxMeaning;
 }
+//# sourceMappingURL=jargon.js.map
