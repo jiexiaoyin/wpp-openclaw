@@ -67,6 +67,14 @@
       "21354014635@chatroom",
       "57737516566@chatroom"
     ],
+    "_whitelistNotes": {
+      "44971342037@chatroom": "✊🏻益融数码全员群",
+      "19908568237@chatroom": "益融华为群",
+      "53889526119@chatroom": "益融管理群",
+      "21354014635@chatroom": "🇨🇳移动业务对接群Ⅱ益融机友",
+      "57737516566@chatroom": "gewe 调试群"
+    },
+    "_whitelistNotes_source": "phoneerp-access-roles.json#chatroomMappings (SSOT, 2026-08-25 vendor 实测更新)",
     "replyThreshold": 0.6,
     "minReplyIntervalSec": 0,
     "minJudgeIntervalSec": 0,
