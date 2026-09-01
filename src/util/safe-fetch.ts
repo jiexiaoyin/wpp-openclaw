@@ -31,6 +31,7 @@ function getAllowedHosts(): Set<string> {
     //   裸 fetch → safeFetch, 仍拦截内网/loopback/metadata, 防 prompt 注入 → URL 操控)
     "dashscope.aliyuncs.com",     // 阿里 embedding (intent-embed)
     "api.minimaxi.com",           // MiniMax LLM (intent-llm)
+    "api.deepseek.com",           // v1.6.0 DeepSeek LLM (llm-judge: heartflow/jargon/affection/enrich/intent-llm 主路径)
     "api.siliconflow.cn",         // SiliconFlow STT (storage/stt)
   ]);
 }

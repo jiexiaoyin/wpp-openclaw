@@ -27,7 +27,7 @@
 //   - 范围 [0.1, 1.0]
 
 import { warn } from "../core/logger.js";
-import { safeFetch } from "../util/safe-fetch.js";
+import { callJudge, resolveJudgeCreds } from "../llm-judge.js";
 
 // ===== 配置接口 =====
 
@@ -349,6 +349,7 @@ export interface HeartflowJudgeInput {
 export interface HeartflowJudgeOptions {
   apiKey: string;
   baseUrl?: string;
+  format?: "openai" | "anthropic";
 }
 
 /**
@@ -478,10 +479,9 @@ export async function judgeHeartflow(
   opts: HeartflowJudgeOptions,
 ): Promise<HeartflowJudgeResult | null> {
   if (!opts.apiKey) {
-    warn("[WPP HEARTFLOW] missing MiniMax API key, skip heartflow judge");
+    warn("[WPP HEARTFLOW] missing judge API key (DEEPSEEK_API_KEY / MINIMAX_API_KEY), skip heartflow judge");
     return null;
   }
-  const baseUrl = (opts.baseUrl ?? "https://api.minimaxi.com/anthropic").replace(/\/$/, "");
   // v1.4.0 12:09 老板拍板: 消除 plugin hardcode, model 必须从 cfg 链 (schema default → accounts cfg) 提供, 缺失立即报错
   const model = cfg.model;
   if (!model) {
@@ -507,29 +507,18 @@ export async function judgeHeartflow(
           `**重要！！！请严格按照以下JSON格式回复，不要添加任何其他内容！这是第${attempt + 1}次尝试，请确保返回有效的JSON格式！**`,
         );
     try {
-      const resp = await safeFetch(`${baseUrl}/v1/messages`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "anthropic-version": "2023-06-01",
-          "x-api-key": opts.apiKey,
+      const text = await callJudge({
+        model,
+        userPrompt,
+        systemPrompt,
+        maxTokens,
+        timeoutMs,
+        creds: {
+          apiKey: opts.apiKey,
+          baseUrl: opts.baseUrl ?? resolveJudgeCreds().baseUrl,
+          format: (opts as { format?: "openai" | "anthropic" }).format ?? "anthropic",
         },
-        body: JSON.stringify({
-          model,
-          max_tokens: maxTokens,
-          temperature: 0,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userPrompt }],
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
       });
-      if (!resp.ok) {
-        const err = await resp.text().catch(() => "");
-        lastErr = `HTTP ${resp.status}: ${err.slice(0, 120)}`;
-        continue;
-      }
-      const json = (await resp.json()) as { content?: Array<{ type?: string; text?: string }> };
-      const text = json.content?.find((b) => b.type === "text")?.text ?? "";
       const result = parseHeartflowResponse(text, cfg);
       if (result) return result;
       lastErr = `unparseable: ${text.slice(0, 80)}`;
@@ -629,6 +618,8 @@ export interface IndependentTriggerOpts {
   apiKey: string;
   /** API base URL */
   baseUrl?: string;
+  /** API 格式: openai (DeepSeek) | anthropic (MiniMax) */
+  format?: "openai" | "anthropic";
 }
 
 export interface IndependentTriggerResult {
@@ -692,6 +683,7 @@ export async function tryIndependentTrigger(
       {
         apiKey: opts.apiKey,
         baseUrl: opts.baseUrl,
+        format: opts.format,
       },
     );
     // 步骤 6: 标记已 judge

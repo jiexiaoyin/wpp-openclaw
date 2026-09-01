@@ -181,7 +181,7 @@ function resolveLlmTimeoutMs(msg: WppInboundMessage): number {
   }
 }
 function resolveMinimaxApiKey(): string {
-  return process.env.MINIMAX_API_KEY ?? "";
+  return process.env.DEEPSEEK_API_KEY ?? process.env.MINIMAX_API_KEY ?? "";
 }
 
 function resolveEmbedIntentEnabled(msg: WppInboundMessage): boolean {

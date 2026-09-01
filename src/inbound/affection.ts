@@ -15,7 +15,7 @@
 //   ④ 重分配: 群总量超限按比例扣减其他用户
 //   ⑤ 情绪注入: 生成受情绪影响的 system prompt
 
-import { safeFetch } from "../util/safe-fetch.js";
+import { callJudge, resolveJudgeCreds } from "../llm-judge.js";
 
 // ===== 枚举 =====
 
@@ -197,6 +197,7 @@ export function classifyInteractionByRules(message: string): InteractionType | u
 export interface AffectionLlmOptions {
   apiKey: string;
   baseUrl?: string;
+  format?: "openai" | "anthropic";
 }
 
 /** 构造 LLM 交互分类 prompt */
@@ -260,35 +261,26 @@ export async function classifyInteractionWithLlm(
   opts: AffectionLlmOptions,
 ): Promise<InteractionType | undefined> {
   if (!opts.apiKey || !cfg.llmClassify) return undefined;
-  const baseUrl = (opts.baseUrl ?? "https://api.minimaxi.com/anthropic").replace(/\/$/, "");
   try {
-    const resp = await safeFetch(`${baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "x-api-key": opts.apiKey,
+    const text = await callJudge({
+      model: (() => {
+        const m = cfg.model;
+        if (!m) {
+          throw new Error(
+            "[WPP AFFECTION] cfg.model unresolved. v1.4.0 12:09 老板拍板: 必须从 schema default 或 accounts/<id>.json:affection.model 提供. plugin 不再 hardcode fallback"
+          );
+        }
+        return m;
+      })(),
+      userPrompt: buildClassifyPrompt(message, senderName),
+      maxTokens: 50,
+      timeoutMs: cfg.timeoutMs ?? 5000, // v1.4.0 P0-fix 19:30: L4 跟 L1/L2/L3=5000 对齐
+      creds: {
+        apiKey: opts.apiKey,
+        baseUrl: opts.baseUrl ?? resolveJudgeCreds().baseUrl,
+        format: opts.format ?? "anthropic",
       },
-      body: JSON.stringify({
-        // v1.4.0 12:09 老板拍板: 消除 plugin hardcode, model 必须从 cfg 链提供, 缺失立即报错
-        model: (() => {
-          const m = cfg.model;
-          if (!m) {
-            throw new Error(
-              "[WPP AFFECTION] cfg.model unresolved. v1.4.0 12:09 老板拍板: 必须从 schema default 或 accounts/<id>.json:affection.model 提供. plugin 不再 hardcode fallback"
-            );
-          }
-          return m;
-        })(),
-        max_tokens: 50,
-        temperature: 0,
-        messages: [{ role: "user", content: buildClassifyPrompt(message, senderName) }],
-      }),
-      signal: AbortSignal.timeout(cfg.timeoutMs ?? 5000), // v1.4.0 P0-fix 19:30: L4 跟 L1/L2/L3=5000 对齐
     });
-    if (!resp.ok) return undefined;
-    const json = (await resp.json()) as { content?: Array<{ type?: string; text?: string }> };
-    const text = json.content?.find((b) => b.type === "text")?.text ?? "";
     return parseClassifyResponse(text);
   } catch {
     return undefined;
