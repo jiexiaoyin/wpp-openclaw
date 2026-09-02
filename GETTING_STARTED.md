@@ -64,7 +64,7 @@ export WPP_SILK_DECODER_PATH="/path/to/silk/decoder"
 > 本发布包**不含服务端二进制**。服务端通过官方 Docker 镜像获取 + 官方 docker-deploy 一键部署。详细见 [vendor/README.md](./vendor/README.md)。
 
 **前置: 拿 tokenKey (客户端密钥)** — 部署 vendor 必须先有:
-1. 打开 [adminmax.knowhub.cloud/user/access-tokens](https://adminmax.knowhub.cloud/user/access-tokens) 创建客户端密钥 (只显示一次, 保存好)
+1. 打开 [cloud.wechatpadpro.com/user/access-tokens](https://cloud.wechatpadpro.com/user/access-tokens) 创建客户端密钥 (只显示一次, 保存好)
 2. 填到 `docker-deploy/config/app.conf` 的 `user_token_key` (install.sh 也会引导)
 
 ```bash
