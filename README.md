@@ -46,12 +46,12 @@ WeChatPadPro 微信 Pad 协议 → OpenClaw gateway → AI 自动回复。支持
 ## ⚡ 快速部署 (先服务端, 再插件)
 
 > **先部署服务端 (vendor), 再装插件** — 插件依赖服务端提供 HTTP API + WebSocket。本包**不含服务端二进制**, 服务端通过官方 Docker 镜像获取。
-> **凭证顺序**: 先在 [adminmax.knowhub.cloud](https://adminmax.knowhub.cloud/user/access-tokens) 拿 **tokenKey** → 部署 vendor → 登录后拿 **authcode** → 配插件。
+> **凭证顺序**: 先在 [cloud.wechatpadpro.com](https://cloud.wechatpadpro.com/user/access-tokens) 拿 **tokenKey** → 部署 vendor → 登录后拿 **authcode** → 配插件。
 
 ### 第 1 步: 拿 tokenKey (客户端密钥) + 部署服务端 (vendor)
 
 ```bash
-# 1. 拿 tokenKey: 打开 https://adminmax.knowhub.cloud/user/access-tokens 创建客户端密钥 (只显示一次, 保存好)
+# 1. 拿 tokenKey: 打开 https://cloud.wechatpadpro.com/user/access-tokens 创建客户端密钥 (只显示一次, 保存好)
 
 # 2. 拉取官方镜像 (build 20260818, 唯一适配版本)
 docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
@@ -259,7 +259,7 @@ wechatpadpro-openclaw/
 - 想用 **Hermes Agent** → [wpp-hermes](https://github.com/jiexiaoyin/wpp-hermes)
 - 想用 **AstrBot** 的多平台架构 → [astrbot-plugin-wpp](https://github.com/jiexiaoyin/astrbot-plugin-wpp)
 
-WeChatPadPro 服务端二进制本身不开放,需通过 [adminmax.knowhub.cloud](https://adminmax.knowhub.cloud) 申请 token。
+WeChatPadPro 服务端二进制本身不开放,需通过 [cloud.wechatpadpro.com](https://cloud.wechatpadpro.com) 申请 token。
 
 ## 许可证
 
