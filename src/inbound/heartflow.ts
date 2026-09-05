@@ -72,6 +72,8 @@ export interface HeartflowConfig {
    *       符合 2026-06-03 00:22 老板偏好 (@bot 才回复不变) + 2026-08-14 14:19 (模块解耦)
    */
   independentTrigger?: boolean;
+  /** v1.5.4 BUSINESS-CONTEXT: 心流 judge 的业务背景知识注入，提升运营商群等专业场景判断准确率 */
+  businessContext?: string;
 }
 
 export function defaultHeartflowConfig(): HeartflowConfig {
@@ -495,6 +497,7 @@ export async function judgeHeartflow(
 
   const prompt = buildHeartflowPrompt(input, cfg);
   const systemPrompt =
+    (cfg.businessContext ? cfg.businessContext + "\n\n" : "") +
     "你是一个专业的群聊回复决策系统，能够准确判断消息价值和回复时机。\n" +
     "你必须严格按照JSON格式返回结果，不要包含任何其他内容！请不要进行对话，只返回JSON！";
 
