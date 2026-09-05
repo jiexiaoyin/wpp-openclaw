@@ -129,6 +129,13 @@ export interface WppAccountConfig {
   embedIntentTopN?: number;
   /** v1.3.2 EMBED-INTENT: embedding 相似度阈值 (默认 0.3, 低于则 LLM 兜底) */
   embedIntentThreshold?: number;
+  /** v1.5.4 EMBED-CONFIG: embedding API key (env var 优先, 明文兜底) */
+  embeddingApiKeyEnv?: string;
+  embeddingApiKey?: string;
+  /** v1.5.4 EMBED-CONFIG: embedding 服务 base URL (默认 dashscope) */
+  embeddingBaseUrl?: string;
+  /** v1.5.4 EMBED-CONFIG: embedding 模型名 (默认 text-embedding-v4) */
+  embeddingModel?: string;
   selfWxid: string;
   nickname: string;
   requireAtMention: boolean;
