@@ -171,8 +171,21 @@ function resolveEmbedThreshold(msg) {
         return 0.3;
     }
 }
-function resolveBailianEmbeddingKey() {
-    return process.env.BAILIAN_EMBEDDING_API_KEY ?? "";
+function resolveBailianEmbeddingKey(msg) {
+    const cfg = getDefaultAccountRegistry().get(msg.accountId)?.config;
+    if (!cfg)
+        return "";
+    // env var 优先，其次明文
+    const envKey = cfg.embeddingApiKeyEnv ? process.env[cfg.embeddingApiKeyEnv] : "";
+    return envKey || cfg.embeddingApiKey || "";
+}
+function resolveEmbeddingBaseUrl(msg) {
+    const cfg = getDefaultAccountRegistry().get(msg.accountId)?.config;
+    return cfg?.embeddingBaseUrl || "https://dashscope.aliyuncs.com/compatible-mode/v1";
+}
+function resolveEmbeddingModel(msg) {
+    const cfg = getDefaultAccountRegistry().get(msg.accountId)?.config;
+    return cfg?.embeddingModel || "text-embedding-v4";
 }
 /** 读账号的 groupContextWindow 配置 (per-account, 默认 GROUP_CONTEXT_WINDOW) */
 function resolveGroupWindow(msg) {
@@ -290,7 +303,7 @@ async function buildGroupContextFromDb(msg) {
             return null;
         //   规则预筛 (已在上方 no-op 拦截) → 命令类走 LLM → 非命令 embedding 快路径 → 降级 LLM → 降级注入全部
         const llmEnabled = resolveLlmIntentEnabled(msg) && !!resolveMinimaxApiKey();
-        const embedEnabled = resolveEmbedIntentEnabled(msg) && !!resolveBailianEmbeddingKey();
+        const embedEnabled = resolveEmbedIntentEnabled(msg) && !!resolveBailianEmbeddingKey(msg);
         const triggerText = normalizeTriggerText(msg.content);
         if (llmEnabled && needsLlm(msg.content)) {
             let decision = null;
@@ -304,7 +317,9 @@ async function buildGroupContextFromDb(msg) {
             else if (embedEnabled) {
                 // 非命令 → embedding 快路径 (ms 级)
                 const relevantIds = await selectTopNByEmbedding(triggerText, msgs.map(toIntentCandidate), {
-                    apiKey: resolveBailianEmbeddingKey(),
+                    apiKey: resolveBailianEmbeddingKey(msg),
+                    baseUrl: resolveEmbeddingBaseUrl(msg),
+                    model: resolveEmbeddingModel(msg),
                     topN: resolveEmbedTopN(msg),
                     threshold: resolveEmbedThreshold(msg),
                 });
