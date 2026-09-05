@@ -19,61 +19,70 @@ function getToolsApi() {
 }
 
 export const TOOLS_META: ToolMeta = {
-  /** /Tools/DownloadImg */
+  /** /Tools/DownloadImg — swagger {to_wxid, msg_id, data_len, compress_type, section} */
   downloadImg: [
-    "下载高清图片 (从 CDN). fileId 来自消息 content xml 的 image tag.",
+    "下载图片 (分片). toWxid=会话ID, msgId=消息ID, dataLen=图片字节数.",
     Type.Object({
-      aesKey: Type.String(),
-      fileId: Type.String(),
+      toWxid: Type.String(),
+      msgId: Type.Number(),
+      dataLen: Type.Number(),
+      compressType: Type.Optional(Type.Number()),
     }),
-    (aesKey: string, fileId: string) => getToolsApi().downloadImg(aesKey, fileId),
+    (toWxid: string, msgId: number, dataLen: number, compressType?: number) =>
+      getToolsApi().downloadImg(toWxid, msgId, dataLen, compressType),
   ],
-  /** /Tools/DownloadVideo */
+  /** /Tools/DownloadVideo — swagger {to_wxid, msg_id, data_len, compress_type, section} */
   downloadVideo: [
-    "下载视频.",
+    "下载视频 (分片). toWxid=会话ID, msgId=消息ID, dataLen=视频字节数.",
     Type.Object({
-      aesKey: Type.String(),
-      fileId: Type.String(),
+      toWxid: Type.String(),
+      msgId: Type.Number(),
+      dataLen: Type.Number(),
+      compressType: Type.Optional(Type.Number()),
     }),
-    (aesKey: string, fileId: string) => getToolsApi().downloadVideo(aesKey, fileId),
+    (toWxid: string, msgId: number, dataLen: number, compressType?: number) =>
+      getToolsApi().downloadVideo(toWxid, msgId, dataLen, compressType),
   ],
-  /** /Tools/DownloadVoice */
+  /** /Tools/DownloadVoice — swagger {fromUserName, msgId, length, bufid} */
   downloadVoice: [
-    "下载语音.",
+    "下载语音. fromUserName=发送人, msgId=消息ID, length=语音字节数.",
     Type.Object({
-      aesKey: Type.String(),
-      fileId: Type.String(),
-      durationMs: Type.Optional(Type.Number()),
+      fromUserName: Type.String(),
+      msgId: Type.Number(),
+      length: Type.Number(),
+      bufid: Type.Optional(Type.String()),
     }),
-    (aesKey: string, fileId: string, durationMs?: number) => getToolsApi().downloadVoice(aesKey, fileId, durationMs),
+    (fromUserName: string, msgId: number, length: number, bufid?: string) =>
+      getToolsApi().downloadVoice(fromUserName, msgId, length, bufid),
   ],
-  /** /Tools/DownloadFile */
+  /** /Tools/DownloadFile — swagger {app_id, attach_id, data_len, section, user_name} */
   downloadFile: [
-    "下载文件 (v1.2.1 P1-fix: 需 appID/attachId, vendor v1 文件消息不提供, 可能失败).",
+    "下载文件. attachId=文件标识, userName=发送人/群ID, dataLen=文件字节数.",
     Type.Object({
-      appID: Type.String(),
       attachId: Type.String(),
       userName: Type.String(),
+      dataLen: Type.Number(),
+      appId: Type.Optional(Type.String()),
     }),
-    (appID: string, attachId: string, userName: string) => getToolsApi().downloadFile(appID, attachId, userName),
+    (attachId: string, userName: string, dataLen: number, appId?: string) =>
+      getToolsApi().downloadFile(attachId, userName, dataLen, appId),
   ],
-  /** /Tools/CdnDownloadImage */
+  /** /Tools/CdnDownloadImage — swagger {file_aes_key, file_no} */
   cdnDownloadImage: [
-    "CDN 单独下载高清图片.",
+    "CDN 下载高清图片. fileAesKey/fileNo 来自 image.cdn_download_contexts.",
     Type.Object({
-      aesKey: Type.String(),
-      fileId: Type.String(),
+      fileAesKey: Type.String(),
+      fileNo: Type.String(),
     }),
-    (aesKey: string, fileId: string) => getToolsApi().cdnDownloadImage(aesKey, fileId),
+    (fileAesKey: string, fileNo: string) => getToolsApi().cdnDownloadImage(fileAesKey, fileNo),
   ],
-  /** /Tools/UploadFile */
+  /** /Tools/UploadFile — swagger {base64} */
   uploadFile: [
-    "上传文件. fileType 例: image/png, video/mp4.",
+    "上传文件 (base64 内容).",
     Type.Object({
-      fileBase64: Type.String(),
-      fileType: Type.String(),
+      base64: Type.String(),
     }),
-    (fileBase64: string, fileType: string) => getToolsApi().uploadFile(fileBase64, fileType),
+    (base64: string) => getToolsApi().uploadFile(base64),
   ],
   /** /Tools/GetA8Key */
   getA8Key: [
@@ -107,22 +116,31 @@ export const TOOLS_META: ToolMeta = {
   ],
   // ===== v1.3.25 SWAGGER-254: 新增 2 个 (media-enrich 已用, 补 AI 工具) =====
 
-  /** /Tools/DownloadFileBinary — 完整下载微信文件 */
+  /** /Tools/DownloadFileBinary — swagger {app_id, attach_id, data_len, file_name, section, user_name} */
   downloadFileBinary: [
-    "完整下载微信文件 (二进制). fileNo 来自 file.download_context.",
+    "完整下载微信文件 (二进制). attachId/userName/dataLen 来自 file.download_context.",
     Type.Object({
-      fileNo: Type.String({ description: "文件 download_context 标识" }),
+      attachId: Type.String(),
+      userName: Type.String(),
+      dataLen: Type.Number(),
       fileName: Type.Optional(Type.String()),
+      appId: Type.Optional(Type.String()),
     }),
-    (fileNo: string, fileName?: string) => getToolsApi().downloadFileBinary(fileNo, fileName ?? ""),
+    (attachId: string, userName: string, dataLen: number, fileName?: string, appId?: string) =>
+      getToolsApi().downloadFileBinary(attachId, userName, dataLen, fileName ?? "", appId),
   ],
-  /** /Tools/DownloadVoiceBinary — 下载微信语音原文件 */
+  /** /Tools/DownloadVoiceBinary — swagger Tools.BinaryVoiceDownloadParamDoc (无必填) */
   downloadVoiceBinary: [
     "下载微信语音原文件 (二进制). msgId/newMsgId 来自语音消息.",
     Type.Object({
       msgId: Type.Number(),
       newMsgId: Type.String(),
+      toUserName: Type.Optional(Type.String()),
+      fromUserName: Type.Optional(Type.String()),
+      length: Type.Optional(Type.Number()),
+      format: Type.Optional(Type.Number()),
     }),
-    (msgId: number, newMsgId: string) => getToolsApi().downloadVoiceBinary(msgId, newMsgId),
+    (msgId: number, newMsgId: string, toUserName?: string, fromUserName?: string, length?: number, format?: number) =>
+      getToolsApi().downloadVoiceBinary(msgId, newMsgId, toUserName, fromUserName, length, format),
   ],
 };

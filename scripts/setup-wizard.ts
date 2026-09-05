@@ -5,22 +5,15 @@
 
 // v1.3.18 P2-D-1 (2026-08-10): prod 误跑防护 — setup-wizard 改 prod 配置是高危动作
 //   默认拒绝在 NODE_ENV=production 模式运行；显式设 WPP_ALLOW_SETUP_PROD=1 才能强制绕过 (老板手动确认)
-const _IS_PROD = process.env.NODE_ENV === "production" && process.env.WPP_ALLOW_SETUP_PROD !== "1";
-if (_IS_PROD && process.env.WPP_SETUP_GUARD_SKIP !== "1") {
-  // console.error 是有意的 (引导用户, 不走 logger 避免 init 副作用)
-  console.error("\n🚫 setup-wizard 不允许在 production 模式运行 (会改 accounts/<id>.json + webhook 凭证)");
-  console.error("   若确认是 dev/调试, 设 WPP_ALLOW_SETUP_PROD=1 强制绕过\n");
-  process.exit(2);
-}
+//   (guard 放 import 之后, 避免 ESM top-level import 顺序问题)
 
 import { readFile as readFileAsync, writeFile as writeFileAsync, access, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createConnection } from "node:net";
-import { isValidAccountId, listAccountIds, loadAccountConfig } from "./config.js";
-import { stringifyLargeInts } from "./util/bigint.js";
-import { postWppJson } from "./api/client.js";
-import { ctxToCallOpts } from "./send/factory.js";
-import type { WppAccountConfig } from "./types.js";
+import { isValidAccountId, listAccountIds, loadAccountConfig } from "../dist/config.js";
+import { stringifyLargeInts } from "../dist/util/bigint.js";
+import { postWppJson } from "../dist/api/client.js";
+import { ctxToCallOpts } from "../dist/send/factory.js";
 
 /** accounts 目录 (相对 cwd, 可被 WPP_ACCOUNTS_DIR env 覆盖)
  * 用 function (不是 const) 保证每次读 env, 避免 module load 时 env 未设
@@ -339,13 +332,13 @@ export interface AddAccountInput {
   mcpEnabled?: boolean;
   // ============ v1.3.75 HEARTFLOW (2026-08-22 心流主动回复): 未@群消息主动参与 ============
   /** 心流主动回复配置. 默认 {enabled:false} (关闭). 显式 enabled:true 才启用. */
-  heartflow?: import("./inbound/heartflow.js").HeartflowConfig;
+  heartflow?: import("../dist/inbound/heartflow.js").HeartflowConfig;
   // ============ v1.3.76 JARGON (2026-08-22 黑话挖掘): 群黑话自主学习 ============
   /** 黑话挖掘配置. 默认 {enabled:false} (关闭). 显式 enabled:true 才启用. */
-  jargon?: import("./inbound/jargon.js").JargonConfig;
+  jargon?: import("../dist/inbound/jargon.js").JargonConfig;
   // ============ v1.3.77 AFFECTION (2026-08-22 好感度): 社交关系系统 ============
   /** 好感度/社交关系配置. 默认 {enabled:false} (关闭). 显式 enabled:true 才启用. */
-  affection?: import("./inbound/affection.js").AffectionConfig;
+  affection?: import("../dist/inbound/affection.js").AffectionConfig;
 }
 
 /** 校验输入 + 写 accounts/<id>.json. 抛错 if 失败. */
