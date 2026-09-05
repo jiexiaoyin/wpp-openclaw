@@ -24,14 +24,18 @@ test('L1 deploy accounts cfg timeoutMs=5000', () => {
   assert.strictEqual(d.jargon.timeoutMs, 5000);
 });
 
-test('L1 heartflow.whitelistGroups = 5 群 (益融管理/全员/华为/移动 + 调试群)', () => {
+test('L1 heartflow.whitelistGroups = 7 群 (益融管理/全员/华为/移动 + 调试群 + 53977339882 + 45575237076)', () => {
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}accounts/default.json`, 'utf-8'));
   const list = d.heartflow.whitelistGroups;
-  assert.strictEqual(list.length, 5, `whitelistGroups must have 5 groups (老板 23:09 加调试群 57737516566@chatroom), got ${list.length}`);
+  // v1.5.2 升级: 老板 23:09 加调试群 57737516566@chatroom + 后续加 53977339882 + 45575237076 共 7 群
+  assert.strictEqual(list.length, 7, `whitelistGroups must have 7 groups, got ${list.length}`);
   assert.ok(list.includes('53889526119@chatroom'), '益融管理群');
   assert.ok(list.includes('44971342037@chatroom'), '益融全员群');
   assert.ok(list.includes('19908568237@chatroom'), '益融华为群');
   assert.ok(list.includes('21354014635@chatroom'), '移动业务对接群Ⅱ益融机友');
+  assert.ok(list.includes('57737516566@chatroom'), 'gewe 调试群');
+  assert.ok(list.includes('53977339882@chatroom'), '联通业务对接群');
+  assert.ok(list.includes('45575237076@chatroom'), '联通业务对接群');
 });
 
 test('L2 schema default maxRetries=1 (heartflow/affection/jargon)', () => {

@@ -15,19 +15,24 @@ const ROOT = '/root/dev/wechatpadpro-openclaw';
 const DEPLOY = '/root/.openclaw/extensions/wechatpadpro';
 
 // ===== P2-1: HMAC 验签 =====
-test('P2-1.1: HMAC secret 已生成 + 持久化到 credentials', () => {
+// v1.5.2 文档化: v1.5.1 老板拍板回滚到 v1.1.10 permissive 模式
+//   - vendor 不发 signature 时 plugin 默认跳过 HMAC
+//   - 不需要预生成 secret 文件
+//   - 未来 vendor 公开签名时, 配 WECHATPRO_WEBHOOK_SECRET=64hex + 自动生成 credentials 文件
+// 保留旧测试作为未来启用 HMAC 的检查清单（当前 skip）
+test('P2-1.1 (v1.5.1 skip): HMAC secret 文件由 v1.1.10 permissive 模式跳过', { skip: true }, () => {
   const secretFile = '/root/.openclaw/credentials/wechatpadpro-webhook-secret.json';
   assert.ok(fs.existsSync(secretFile), 'secret 文件必须存在');
   const d = JSON.parse(fs.readFileSync(secretFile, 'utf-8'));
   assert.ok(d.webhookSecret, 'webhookSecret 必须存在');
   assert.strictEqual(d.webhookSecret.length, 64, '32 字节 hex = 64 字符');
-  // 验证文件权限 600
   const stats = fs.statSync(secretFile);
   assert.strictEqual(stats.mode & 0o777, 0o600, '文件权限必须 600');
 });
 
 test('P2-1.2 (v1.5.1): env 不写 WECHATPRO_WEBHOOK_SECRET (vendor 不发 signature, v1.1.10 permissive)', () => {
-  const envFile = '/root/.openclaw/gateway.systemd.env';
+  // v1.5.2 路径修正: gateway.systemd.env 已合并到 /root/.openclaw/.env
+  const envFile = '/root/.openclaw/.env';
   const content = fs.readFileSync(envFile, 'utf-8');
   assert.doesNotMatch(content, /^WECHATPRO_WEBHOOK_SECRET=\w+/m, 'env 不应有 WECHATPRO_WEBHOOK_SECRET (vendor 不发 signature, 按 v1.1.10 permissive)');
   // 未来 vendor 公开签名时, 配 WECHATPRO_WEBHOOK_SECRET=64hex 即可启用 HMAC
