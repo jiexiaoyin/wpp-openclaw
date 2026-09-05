@@ -354,7 +354,8 @@ export async function judgeHeartflow(input, cfg, opts) {
     const maxTokens = 300;
     const maxRetries = Math.max(0, cfg.maxRetries ?? 1); // v1.4.0 P0-fix 19:25: fallback 2→1 跟 defaultHeartflowConfig (line 154) 对齐 + 真实实现老板 14:55 C 方案 "5000ms × 2次重试 = 10秒总"
     const prompt = buildHeartflowPrompt(input, cfg);
-    const systemPrompt = "你是一个专业的群聊回复决策系统，能够准确判断消息价值和回复时机。\n" +
+    const systemPrompt = (cfg.businessContext ? cfg.businessContext + "\n\n" : "") +
+        "你是一个专业的群聊回复决策系统，能够准确判断消息价值和回复时机。\n" +
         "你必须严格按照JSON格式返回结果，不要包含任何其他内容！请不要进行对话，只返回JSON！";
     let lastErr = "";
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
