@@ -80,7 +80,7 @@ export async function uploadToOss(oss, localPath, ossKey) {
 export async function downloadImageBase64(ctx, aesKey, fileNo) {
     const { postWppJson } = await import("../../api/client.js");
     const { ctxToCallOpts } = await import("../../send/factory.js");
-    const resp = await postWppJson(ctx.baseUrl, "/Tools/CdnDownloadImage", { fileAesKey: aesKey, fileNo }, ctxToCallOpts(ctx));
+    const resp = await postWppJson(ctx.baseUrl, "/Tools/CdnDownloadImage", { file_aes_key: aesKey, file_no: fileNo }, ctxToCallOpts(ctx));
     const image = resp.Data?.Image;
     if (!image) {
         throw new Error(`CdnDownloadImage missing Image: code=${resp.Code} value=${resp.CodeValue ?? ""}`);
@@ -114,24 +114,5 @@ export async function ossUploadBuffer(buf, filename, prefix, opts) {
         }
         catch { /* ignore */ }
     }
-}
-export async function downloadByEndpoint(ctx, endpoint, aesKey, fileNo, extraBody = {}) {
-    const { postWppJson } = await import("../../api/client.js");
-    const { ctxToCallOpts } = await import("../../send/factory.js");
-    const resp = await postWppJson(ctx.baseUrl, endpoint, { aesKey, fileId: fileNo, ...extraBody }, ctxToCallOpts(ctx));
-    const data = (resp.Data ?? {});
-    const b64 = (typeof data.File === "string" && data.File) ||
-        (typeof data.file === "string" && data.file) ||
-        (typeof data.Video === "string" && data.Video) ||
-        (typeof data.video === "string" && data.video) ||
-        (typeof data.Voice === "string" && data.Voice) ||
-        (typeof data.voice === "string" && data.voice) ||
-        (typeof data.Buffer === "string" && data.Buffer) ||
-        (typeof data.buffer === "string" && data.buffer) ||
-        "";
-    if (!b64) {
-        throw new Error(`${endpoint} missing binary data: code=${resp.Code} value=${resp.CodeValue ?? ""}`);
-    }
-    return b64;
 }
 //# sourceMappingURL=shared.js.map
