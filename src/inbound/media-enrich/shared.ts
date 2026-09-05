@@ -109,7 +109,7 @@ export async function downloadImageBase64(
   const resp = await postWppJson<{ Image?: string }>(
     ctx.baseUrl,
     "/Tools/CdnDownloadImage",
-    { fileAesKey: aesKey, fileNo },
+    { file_aes_key: aesKey, file_no: fileNo },
     ctxToCallOpts(ctx),
   );
   const image = resp.Data?.Image;
@@ -147,39 +147,6 @@ export async function ossUploadBuffer(
   } finally {
     try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
   }
-}
-export async function downloadByEndpoint(
-  ctx: WppAccountCtx,
-  endpoint: string,
-  aesKey: string,
-  fileNo: string,
-  extraBody: Record<string, unknown> = {},
-): Promise<string> {
-  const { postWppJson } = await import("../../api/client.js");
-  const { ctxToCallOpts } = await import("../../send/factory.js");
-  const resp = await postWppJson<Record<string, unknown>>(
-    ctx.baseUrl,
-    endpoint,
-    { aesKey, fileId: fileNo, ...extraBody },
-    ctxToCallOpts(ctx),
-  );
-  const data = (resp.Data ?? {}) as Record<string, unknown>;
-  const b64 =
-    (typeof data.File === "string" && data.File) ||
-    (typeof data.file === "string" && data.file) ||
-    (typeof data.Video === "string" && data.Video) ||
-    (typeof data.video === "string" && data.video) ||
-    (typeof data.Voice === "string" && data.Voice) ||
-    (typeof data.voice === "string" && data.voice) ||
-    (typeof data.Buffer === "string" && data.Buffer) ||
-    (typeof data.buffer === "string" && data.buffer) ||
-    "";
-  if (!b64) {
-    throw new Error(
-      `${endpoint} missing binary data: code=${resp.Code} value=${resp.CodeValue ?? ""}`,
-    );
-  }
-  return b64;
 }
 export interface MediaEnrichResult {
   mediaUrl: string | null;
