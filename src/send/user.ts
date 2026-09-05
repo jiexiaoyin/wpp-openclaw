@@ -59,16 +59,15 @@ export function makeWppUser(ctx: WppAccountCtx) {
     /** /User/SetPasswd — 修改密码 */
     setPasswd: (newPwd: string) => dispatch("/User/SetPasswd", { newPwd }),
 
-    /** /User/UpdateProfile — 修改个人信息 (v1.2.1 swagger-alignment: UpdateProfileParam {NickName, Signature, Sex, City, Country, Province, Wxid}) */
-    updateProfile: (nickname?: string, signature?: string, sex?: number, wxid?: string) =>
+    /** /User/UpdateProfile — 修改个人信息 (swagger User.UpdateProfileParamDoc {nickName, signature, sex, city, country, province}) */
+    updateProfile: (nickname?: string, signature?: string, sex?: number) =>
       dispatch("/User/UpdateProfile", {
-        NickName: nickname ?? "",
-        Signature: signature ?? "",
-        Sex: sex ?? 0,
-        Wxid: wxid ?? "",
-        City: "",
-        Country: "",
-        Province: "",
+        nickName: nickname ?? "",
+        signature: signature ?? "",
+        sex: sex ?? 0,
+        city: "",
+        country: "",
+        province: "",
       }),
 
     /** /User/UploadHeadImage — 修改头像 */
