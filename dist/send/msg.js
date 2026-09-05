@@ -41,12 +41,12 @@ function outboundContentFor(ep, body) {
         case "/Msg/SendVideo": return "[视频]"; // Base64
         case "/Msg/ShareVideo": return "[视频]";
         case "/Msg/SendVoice": return "[语音]"; // Base64
-        case "/Msg/SendCDNFile": return `[文件] ${body.fileUrl ?? ""}`;
-        case "/Msg/SendEmoji": return `[表情] ${body.emojiMd5 ?? ""}`;
+        case "/Msg/SendCDNFile": return `[文件] ${body.Content ?? ""}`;
+        case "/Msg/SendEmoji": return `[表情] ${body.Md5 ?? ""}`;
         case "/Msg/ShareCard": return `[名片] ${body.CardNickName ?? ""}`;
         case "/Msg/ShareLink": return `[链接] ${extractXmlTitle(body.Xml)}`;
         case "/Msg/ShareLocation": return `[位置] ${body.Label ?? body.Poiname ?? ""}`;
-        case "/Msg/SendXCX": return `[小程序] ${body.xcxTitle ?? ""}`;
+        case "/Msg/SendXCX": return `[小程序] ${extractXmlTitle(body.Content)}`;
         default: return "";
     }
 }
@@ -222,8 +222,8 @@ export function makeWppMsg(ctx) {
         }),
         /** 发 XML 应用消息: /Msg/SendApp 是群发端点不能用, 用 /Msg/ShareLink */
         sendApp: (toWxid, xml, _appName) => dispatch("/Msg/ShareLink", { ToWxid: toWxid, Type: 5, Xml: xml }),
-        /** /Msg/SendCDNFile — 发送 CDN 文件(转发) */
-        sendCDNFile: (toWxid, fileUrl) => dispatch("/Msg/SendCDNFile", { toWxid, fileUrl }),
+        /** /Msg/SendCDNFile — 转发 CDN 文件 (swagger Msg.DefaultParamDoc {Content, ToWxid}; Content=收到文件消息xml) */
+        sendCDNFile: (toWxid, fileUrl) => dispatch("/Msg/SendCDNFile", { ToWxid: toWxid, Content: fileUrl }),
         /**
          * v1.3.12 sendFile: 发送文件 (推荐). 下载 fileUrl → sendFileViaApp (UploadFile+type6).
          * 实测 SendCDNFile Ret=-2; sendFileViaApp 可发可打开 (有"未审核应用"标签, 方案 C 接受).
@@ -244,8 +244,8 @@ export function makeWppMsg(ctx) {
         },
         /** /Msg/SendCDNVideo — 发送 CDN 视频 (v1.2.1 swagger-alignment: DefaultParamDoc {Content, ToWxid}) */
         sendCDNVideo: (toWxid, videoUrl) => dispatch("/Msg/SendCDNVideo", { ToWxid: toWxid, Content: videoUrl }),
-        /** /Msg/SendEmoji — 发送 Emoji */
-        sendEmoji: (toWxid, emojiMd5, emojiSize) => dispatch("/Msg/SendEmoji", { toWxid, emojiMd5, emojiSize }),
+        /** /Msg/SendEmoji — swagger Msg.SendEmojiParamDoc {Md5, ToWxid, TotalLen} */
+        sendEmoji: (toWxid, emojiMd5, emojiSize) => dispatch("/Msg/SendEmoji", { ToWxid: toWxid, Md5: emojiMd5, TotalLen: emojiSize }),
         /** 小程序发送走 sendXCX (/Msg/SendXCX); 不再有 sendMiniProgram 死代码 (曾错调 /Msg/SendApp 群发端点) */
         /** 发送小程序 XML (vendor 期望 <appmsg> 节点, type=2001 mini-program + <mmapp>) */
         sendAppFromXml: (toWxid, xml, _appName) => dispatch("/Msg/ShareLink", { ToWxid: toWxid, Type: 5, Xml: xml }),
@@ -303,14 +303,15 @@ export function makeWppMsg(ctx) {
                 VoiceTime: voiceTime,
             }, persist);
         },
-        /** /Msg/SendXCX — 发送小程序消息 */
+        /** /Msg/SendXCX — swagger Msg.DefaultParamDoc {Content, ToWxid}; Content=小程序xml (appmsg type=2001) */
         sendXCX: (toWxid, xcxTitle, xcxDesc, xcxUrl, xcxAppId, thumbUrl) => dispatch("/Msg/SendXCX", {
-            toWxid,
-            xcxTitle,
-            xcxDesc,
-            xcxUrl,
-            xcxAppId,
-            thumbUrl: thumbUrl ?? "",
+            ToWxid: toWxid,
+            Content: buildAppMsgXml(toWxid, xcxTitle, xcxDesc, {
+                appid: xcxAppId,
+                sourcedisplayname: xcxTitle,
+                url: xcxUrl,
+                ...(thumbUrl ? { weappiconurl: thumbUrl } : {}),
+            }),
         }),
         /** /Msg/ShareCard — 分享名片 (v1.2.1 swagger-alignment: ShareCardParamDoc {CardAlias, CardNickName, CardWxId, ToWxid}) */
         shareCard: (toWxid, cardWxid, cardNickname, cardAlias) => dispatch("/Msg/ShareCard", {
