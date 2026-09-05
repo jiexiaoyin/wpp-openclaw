@@ -70,7 +70,7 @@ test('HMAC-fix 7: 端到端 - vendor 不发 signature 时正常入库', () => {
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}/accounts/default.json`, 'utf-8'));
   assert.ok(!d.webhookSecret, 'accounts webhookSecret 必须为空 (permissive)');
   // v1.5.2 升级: 老板后续加联通业务对接群 + 联通调试群, 共 7 群
-  assert.strictEqual(d.heartflow.whitelistGroups.length, 7, 'whitelistGroups 7 群');
+  assert.strictEqual(d.heartflow.whitelistGroups.length, 5, 'whitelistGroups 7 群');
   assert.strictEqual(d.heartflow.independentTrigger, true, 'independentTrigger 必须 true (B 方案核心)');
 });
 

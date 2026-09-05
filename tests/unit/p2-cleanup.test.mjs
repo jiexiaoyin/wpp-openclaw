@@ -118,22 +118,22 @@ test('P2-3.4: enrich.ts import 改用 heartflow-trigger', () => {
 });
 
 // ===== P2-4: plugin.json version 对齐 =====
-test('P2-4.1: dev openclaw.plugin.json version = 1.5.2', () => {
+test('P2-4.1: dev openclaw.plugin.json version = 1.5.4', () => {
   const d = JSON.parse(fs.readFileSync(`${ROOT}/openclaw.plugin.json`, 'utf-8'));
-  assert.strictEqual(d.version, '1.5.2', 'dev openclaw.plugin.json.version 必须 1.5.2');
+  assert.strictEqual(d.version, '1.5.4', 'dev openclaw.plugin.json.version 必须 1.5.4');
 });
 
-test('P2-4.2: deploy openclaw.plugin.json version = 1.5.2', () => {
+test('P2-4.2: deploy openclaw.plugin.json version = 1.5.4', () => {
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}/openclaw.plugin.json`, 'utf-8'));
-  assert.strictEqual(d.version, '1.5.2', 'deploy openclaw.plugin.json.version 必须 1.5.2');
+  assert.strictEqual(d.version, '1.5.4', 'deploy openclaw.plugin.json.version 必须 1.5.4');
 });
 
-test('P2-4.3: package.json version = 1.5.2', () => {
+test('P2-4.3: package.json version = 1.5.4', () => {
   const d = JSON.parse(fs.readFileSync(`${ROOT}/package.json`, 'utf-8'));
-  assert.strictEqual(d.version, '1.5.2');
+  assert.strictEqual(d.version, '1.5.4');
 });
 
-test('P2-4.4: PLUGIN_VERSION 常量 = 1.5.2', () => {
-  const src = fs.readFileSync(`${DEPLOY}/dist/core/constants.js`, 'utf-8');
-  assert.match(src, /PLUGIN_VERSION = "1\.5\.2"/, 'PLUGIN_VERSION 常量必须 1.5.2');
+test('P2-4.4: PLUGIN_VERSION 从 package.json 动态读取 = 1.5.4', async () => {
+  const { PLUGIN_VERSION } = await import(`${DEPLOY}/dist/core/constants.js`);
+  assert.strictEqual(PLUGIN_VERSION, '1.5.4', `PLUGIN_VERSION must be 1.5.4, got ${PLUGIN_VERSION}`);
 });
