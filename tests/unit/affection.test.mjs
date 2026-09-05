@@ -11,10 +11,11 @@ test('affection.ts defaultAffectionConfig timeoutMs=5000', async () => {
   assert.match(src, /timeoutMs:\s*5000/, 'defaultAffectionConfig.timeoutMs must be 5000');
 });
 
-test('affection.ts AbortSignal.timeout 5000ms', async () => {
+test('affection.ts timeoutMs 5000ms (经 callJudge 抽象层传递)', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('../../src/inbound/affection.ts', import.meta.url), 'utf-8');
-  assert.match(src, /signal: AbortSignal\.timeout\(cfg\.timeoutMs \?\? 5000\)/);
+  // v1.5.2 修正: affection/jargon/heartflow 通过 callJudge 抽象层传 timeoutMs, AbortSignal 在 llm-judge.ts 内部创建
+  assert.match(src, /timeoutMs:\s*cfg\.timeoutMs \?\? 5000/, 'affection 必须把 timeoutMs 透传给 callJudge');
 });
 
 test('jargon.ts defaultJargonConfig timeoutMs=5000', async () => {
