@@ -512,6 +512,7 @@ function buildCtxPayload(
   injectedContext?: string,
   heartflowNote?: string,
   moodNote?: string,
+  relayNote?: string,
 ): Record<string, unknown> {
   const isGroup = msg.peerKind === "group";
   const toWxid = msg.toWxid ?? msg.accountId;
@@ -525,6 +526,9 @@ function buildCtxPayload(
   }
   if (moodNote) {
     body = `${body}\n\n${moodNote}`;
+  }
+  if (relayNote) {
+    body = `${body}\n\n[系统提示] ${relayNote}`;
   }
   const quoteCtx = buildQuoteContext(msg);
   if (quoteCtx) {
@@ -833,6 +837,17 @@ async function dispatchOne(
     }
   }
 
+  // v1.5.5 RELAY-STYLE (老板 2026-09-05 拍板): 接龙强制触发时注入应景指令 —
+  //   主模型看到编号清单会本能"整理成表格/统计", 不是鼓励 (截图实证: 门店/型号/颜色表 + 幻觉行)
+  //   注: 接龙消息在 handler Step 3 已被改写为 `[接龙] 标题\n1. …` 前缀, 此处据此识别
+  let relayNote: string | null = null;
+  if ((msg.content ?? "").startsWith("[接龙]")) {
+    relayNote =
+      "（注意：群里刚有人发起/更新一条接龙报单。请用简短、热情、应景的语气表扬、鼓励大家（如：太棒了！大家加油！冲🔥 恭喜🎉），像普通群成员一样为伙伴们打气。\n" +
+      "禁止：不要逐条复述接龙内容，不要把接龙转成表格/清单/统计，不要解释消息结构，不要问\"要不要回复\"。）";
+  }
+
+
   // Step 1: 记录入站消息 (AI 上下文), ctx 必填
   const ctxPayload = buildCtxPayload(
     msg,
@@ -840,6 +855,7 @@ async function dispatchOne(
     injectedGroupContext ?? undefined,
     heartflowNote ?? undefined,
     moodNote ?? undefined,
+    relayNote ?? undefined,
   );
   try {
     await runtime.session.recordInboundSession({ storePath, sessionKey, ctx: ctxPayload });
