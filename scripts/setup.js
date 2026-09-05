@@ -1,4 +1,12 @@
 #!/usr/bin/env node
+// === SETUP GUARD (prod 误跑防护) ===
+const _IS_PROD = process.env.NODE_ENV === "production" && process.env.WPP_ALLOW_SETUP_PROD !== "1";
+if (_IS_PROD && process.env.WPP_SETUP_GUARD_SKIP !== "1") {
+  console.error("\n🚫 setup-wizard 不允许在 production 模式运行 (会改 accounts/<id>.json + webhook 凭证)");
+  console.error("   若确认是 dev/调试, 设 WPP_ALLOW_SETUP_PROD=1 强制绕过\n");
+  process.exit(2);
+}
+
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout, exit } from "node:process";
 import { join } from "node:path";

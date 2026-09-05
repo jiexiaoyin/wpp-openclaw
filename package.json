@@ -8,7 +8,8 @@
     "setup": "node scripts/setup.js",
     "test": "node --test tests/unit/*.test.mjs",
     "test:single": "node --test",
-    "build": "tsc"
+    "build": "tsc && node scripts/build-setup-wizard.mjs",
+    "build:setup-wizard": "node scripts/build-setup-wizard.mjs"
   },
   "openclaw": {
     "extensions": [
