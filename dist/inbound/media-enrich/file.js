@@ -3,7 +3,7 @@
 import { logObj as log, formatErr } from "../../core/logger.js";
 import { safeFetchWithCap } from "../../util/safe-fetch.js";
 import { parseFileXml } from "./xml.js";
-import { loadOssConfig, uploadToOss, downloadByEndpoint, ossUploadBuffer, buildOssKey } from "./shared.js";
+import { loadOssConfig, uploadToOss, ossUploadBuffer, buildOssKey } from "./shared.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,37 +42,18 @@ export function isV1SchemaFile(raw) {
     }
     return { isV1: false };
 }
-export async function enrichFileMessage(ctx, xml) {
+export async function enrichFileMessage(_ctx, xml) {
     const parsed = parseFileXml(xml);
     if (!parsed)
         return { mediaUrl: null, filename: "", size: null, error: "no aeskey/fileNo in xml" };
-    const oss = loadOssConfig();
-    if (!oss)
-        return { mediaUrl: null, filename: parsed.filename, size: parsed.size ?? null, error: "oss credentials missing" };
-    let tmpPath = null;
-    try {
-        const b64 = await downloadByEndpoint(ctx, "/Tools/DownloadFile", parsed.aesKey, parsed.fileNo);
-        const buf = Buffer.from(b64, "base64");
-        tmpPath = path.join(os.tmpdir(), `wpp-file-${crypto.randomBytes(6).toString("hex")}.${parsed.fileext}`);
-        fs.writeFileSync(tmpPath, buf);
-        const hash = crypto.createHash("md5").update(parsed.filename).digest("hex").slice(0, 12);
-        const safeName = parsed.filename.replace(/[^\w.\-]/g, "_");
-        const ossKey = buildOssKey(ctx.accountId, "files", `${hash}-${safeName}`);
-        const url = await uploadToOss(oss, tmpPath, ossKey);
-        log.info(`[WPP v1.3.74] file enrich OSS: ${url} (${buf.length} bytes, ${parsed.filename})`);
-        return { mediaUrl: url, filename: parsed.filename, size: buf.length };
-    }
-    catch (e) {
-        log.warn(`[WPP v1.3.74] file enrich failed: ${formatErr(e)}`, { filename: parsed.filename });
-        return { mediaUrl: null, filename: parsed.filename, size: parsed.size ?? null, error: e.message };
-    }
-    finally {
-        if (tmpPath)
-            try {
-                fs.unlinkSync(tmpPath);
-            }
-            catch { /* ignore */ }
-    }
+    // v0 XML 文件下载在新 vendor 不可用: /Tools/DownloadFile 需要 v1 download_context
+    // (app_id/attach_id/data_len/user_name), v0 XML 仅 aeskey+fileno → 直接标注失败, 不发无效请求
+    return {
+        mediaUrl: null,
+        filename: parsed.filename,
+        size: parsed.size ?? null,
+        error: "v0 XML file download unsupported on new vendor (needs v1 download_context)",
+    };
 }
 /**
  * v1.2.5 FILE-DOWNLOAD-BINARY: 用新版 DownloadFileBinary 完整下载 v1 schema 文件。

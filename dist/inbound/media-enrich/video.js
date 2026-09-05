@@ -2,44 +2,23 @@
 // 从 media-enrich.ts v1.3.26 拆分 (2026-08-10, P3-2): 仅搬运, 不优化
 import { logObj as log, formatErr } from "../../core/logger.js";
 import { parseVideoXml } from "./xml.js";
-import { loadOssConfig, uploadToOss, downloadByEndpoint, buildOssKey } from "./shared.js";
+import { loadOssConfig, uploadToOss, buildOssKey } from "./shared.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 /** 视频消息 (msgType=43) 下载 + OSS */
-export async function enrichVideoMessage(ctx, xml) {
+export async function enrichVideoMessage(_ctx, xml) {
     const parsed = parseVideoXml(xml);
     if (!parsed)
         return { mediaUrl: null, mediaSize: null, error: "no aeskey/fileNo in xml" };
-    const oss = loadOssConfig();
-    if (!oss)
-        return { mediaUrl: null, mediaSize: null, error: "oss credentials missing" };
-    let tmpPath = null;
-    try {
-        // vendor 端点无 Cdn 前缀 (错调 /Tools/CdnDownloadVideo 会 404)
-        const b64 = await downloadByEndpoint(ctx, "/Tools/DownloadVideo", parsed.aesKey, parsed.fileNo);
-        const buf = Buffer.from(b64, "base64");
-        const ext = parsed.md5 ? "mp4" : "mp4";
-        tmpPath = path.join(os.tmpdir(), `wpp-vid-${crypto.randomBytes(6).toString("hex")}.${ext}`);
-        fs.writeFileSync(tmpPath, buf);
-        const filename = `${parsed.md5 ?? crypto.randomBytes(8).toString("hex")}.mp4`;
-        const ossKey = buildOssKey(ctx.accountId, "videos", filename);
-        const url = await uploadToOss(oss, tmpPath, ossKey);
-        log.info(`[WPP v1.3.74] video enrich OSS: ${url} (${buf.length} bytes)`);
-        return { mediaUrl: url, mediaSize: buf.length };
-    }
-    catch (e) {
-        log.warn(`[WPP v1.3.74] video enrich failed: ${formatErr(e)}`, { aesKey: parsed.aesKey });
-        return { mediaUrl: null, mediaSize: null, error: e.message };
-    }
-    finally {
-        if (tmpPath)
-            try {
-                fs.unlinkSync(tmpPath);
-            }
-            catch { /* ignore */ }
-    }
+    // v0 XML 视频下载在新 vendor 不可用: /Tools/DownloadVideo 需要 v1 download_context
+    // (to_wxid/msg_id/data_len), v0 XML 仅 aeskey+cdnvideourl → 直接标注失败, 不发无效请求
+    return {
+        mediaUrl: null,
+        mediaSize: null,
+        error: "v0 XML video download unsupported on new vendor (needs v1 download_context)",
+    };
 }
 /** 从 raw_payload 提取新版视频 download_context (kind=video + video.download_context) */
 export function isV1SchemaVideo(raw) {
