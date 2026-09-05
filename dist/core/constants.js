@@ -1,7 +1,10 @@
 // core/constants.ts - 全局常量 SSOT
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const { version: PACKAGE_VERSION } = require("../../package.json");
 export const CHANNEL_ID = "wechatpadpro";
 export const PLUGIN_NAME = "wechatpadpro";
-export const PLUGIN_VERSION = "1.5.2";
+export const PLUGIN_VERSION = PACKAGE_VERSION;
 // 默认 bot 昵称 (群 @ 触发检测用; accounts/<id>.json nickname 优先, 配置驱动 + 默认兜底)
 export const DEFAULT_BOT_NICKNAME = "YourBot";
 // 单账号 demo 默认账号 ID (B 方案 accounts/<id>.json)
