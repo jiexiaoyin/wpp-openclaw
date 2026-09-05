@@ -20,7 +20,8 @@ const DEPLOY = '/root/.openclaw/extensions/wechatpadpro';
 
 // ===== P2-fix 修复验证 =====
 test('HMAC-fix 1: env 文件已删 WECHATPRO_WEBHOOK_SECRET', () => {
-  const env = fs.readFileSync('/root/.openclaw/gateway.systemd.env', 'utf-8');
+  // v1.5.2 路径修正: gateway.systemd.env 已合并到 /root/.openclaw/.env
+  const env = fs.readFileSync('/root/.openclaw/.env', 'utf-8');
   assert.doesNotMatch(env, /^WECHATPRO_WEBHOOK_SECRET=/m, 'env 必须删 WECHATPRO_WEBHOOK_SECRET (v1.1.10 permissive)');
 });
 
@@ -29,7 +30,9 @@ test('HMAC-fix 2: accounts.cfg 保留 webhookSecretEnv (未来启用 HMAC 的开
   assert.strictEqual(d.webhookSecretEnv, 'WECHATPRO_WEBHOOK_SECRET', 'accounts cfg 保留 webhookSecretEnv 字段');
 });
 
-test('HMAC-fix 3: credentials 文件保留 (未来启用 HMAC 的凭据)', () => {
+// v1.5.2 文档化: v1.5.1 回滚到 v1.1.10 permissive 后, secret 文件不存在是预期状态
+// 保留旧测试作为未来启用 HMAC 的检查清单（当前 skip）
+test('HMAC-fix 3 (v1.5.1 skip): credentials 文件保留 (未来启用 HMAC 的凭据)', { skip: true }, () => {
   const creds = '/root/.openclaw/credentials/wechatpadpro-webhook-secret.json';
   assert.ok(fs.existsSync(creds), 'credentials 文件必须保留');
   const stats = fs.statSync(creds);
@@ -66,7 +69,8 @@ test('HMAC-fix 7: 端到端 - vendor 不发 signature 时正常入库', () => {
   // vendor 推送 webhook 无 signature → signatureRequired('') === false → 跳过 verify → 入库
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}/accounts/default.json`, 'utf-8'));
   assert.ok(!d.webhookSecret, 'accounts webhookSecret 必须为空 (permissive)');
-  assert.strictEqual(d.heartflow.whitelistGroups.length, 5, 'whitelistGroups 5 群 (老板 23:09 加调试群 57737516566@chatroom)');
+  // v1.5.2 升级: 老板后续加联通业务对接群 + 联通调试群, 共 7 群
+  assert.strictEqual(d.heartflow.whitelistGroups.length, 7, 'whitelistGroups 7 群');
   assert.strictEqual(d.heartflow.independentTrigger, true, 'independentTrigger 必须 true (B 方案核心)');
 });
 
