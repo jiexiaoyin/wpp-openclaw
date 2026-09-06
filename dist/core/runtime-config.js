@@ -1,5 +1,16 @@
+// src/core/runtime-config.ts - 运行时配置解析器 (v1.1.40 GLOBAL-CONFIG)
+//
+// 设计原则 (B 方案兼容):
+//
+// 借鉴 sunnoy/wecom §openclaw-compat.js resolvePluginConfig 范式
+//   - sunnoy 用 module-level Map 缓存解析结果
+//   - WPP 用对象 + getter 函数 (单例), 避免每次调用都重读 config
 import { DEFAULT_VENDOR_API_BASE, VENDOR_BASE_PATH, WS_PATH, DEFAULT_BOT_NICKNAME, DEFAULT_WEBHOOK_HOST, DEFAULT_WEBHOOK_PORT, DEFAULT_WEBHOOK_PATH, DEFAULT_DEBOUNCE_MS, DEFAULT_ACCOUNT_ID, REQUEST_TIMEOUT_MS, WEBHOOK_BODY_LIMIT_BYTES, API_TIMEOUT_MS, API_MAX_RETRIES, API_RETRY_BASE_MS, DEDUPE_TTL_MS, } from "./constants.js";
+// ============================================================
+// 默认值常量 (集中管理, 唯一来源)
+// ============================================================
 export const RUNTIME_DEFAULTS = {
+    // defaults 分组
     defaults: {
         vendorApiBase: DEFAULT_VENDOR_API_BASE,
         vendorBasePath: VENDOR_BASE_PATH,
@@ -10,6 +21,7 @@ export const RUNTIME_DEFAULTS = {
         webhookPath: DEFAULT_WEBHOOK_PATH,
         debounceMs: DEFAULT_DEBOUNCE_MS,
     },
+    // runtime 分组
     runtime: {
         apiTimeoutMs: API_TIMEOUT_MS,
         requestTimeoutMs: REQUEST_TIMEOUT_MS,
@@ -22,10 +34,12 @@ export const RUNTIME_DEFAULTS = {
         execTimeoutMs: 30_000,
         configCacheTtlMs: 60_000,
     },
+    // vendor 分组
     vendor: {
         name: "wechatpadpro",
         authHeader: "X-TokenKey",
     },
+    // sync 分组 (WppAccountConfig.sync)
     sync: {
         fallbackSyncMs: 60_000,
         wsReconnect: {
@@ -38,6 +52,14 @@ export const RUNTIME_DEFAULTS = {
     },
     defaultAccountId: DEFAULT_ACCOUNT_ID,
 };
+/**
+ * 解析 WppGlobalConfig → 完整 ResolvedGlobalConfig (所有字段填充默认值)
+ *
+ * 调用方: index.ts plugin register 时, 缓存结果到 module-level
+ *
+ * @param cfg 从 config.json 读的 WppGlobalConfig (可能字段缺失)
+ * @returns ResolvedGlobalConfig (所有字段保证有值)
+ */
 export function resolveGlobalConfig(cfg) {
     return {
         defaults: {
@@ -71,6 +93,7 @@ export function resolveGlobalConfig(cfg) {
 export function resolveSyncConfig(cfg) {
     const enableWsClient = cfg?.sync?.enableWsClient ?? RUNTIME_DEFAULTS.sync.enableWsClient;
     const enableHttpFallback = cfg?.sync?.enableHttpFallback ?? RUNTIME_DEFAULTS.sync.enableHttpFallback;
+    // v1.1.41 WS-DEGRADE: enableHttpFallback=false → fallbackSyncMs=0 (ws-client start() 会跳过 timer)
     const fallbackSyncMs = enableHttpFallback
         ? (cfg?.sync?.fallbackSyncMs ?? RUNTIME_DEFAULTS.sync.fallbackSyncMs)
         : 0;
@@ -85,3 +108,10 @@ export function resolveSyncConfig(cfg) {
         enableHttpFallback,
     };
 }
+/**
+ * 解析 WppAccountConfig.sync → ResolvedSyncConfig
+ *
+ * @param cfg WppAccountConfig
+ * @returns ResolvedSyncConfig (所有字段保证有值)
+ */ 
+//# sourceMappingURL=runtime-config.js.map

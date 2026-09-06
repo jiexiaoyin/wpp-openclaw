@@ -1,3 +1,4 @@
+// src/dispatch/agent-tools/translate-meta.ts - Translate tag (翻译, 2)
 import { Type } from "typebox";
 import { makeWppTranslate } from "../../send/index.js";
 import { getDefaultAccountRegistry } from "../../account-state.js";
@@ -29,3 +30,4 @@ export const TRANSLATE_META = {
         (toWxid, content, targetLang) => getTrn().send(toWxid, content, targetLang),
     ],
 };
+//# sourceMappingURL=translate-meta.js.map

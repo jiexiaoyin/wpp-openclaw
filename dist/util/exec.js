@@ -1,4 +1,16 @@
+// util/exec.ts - spawn-based async exec wrapper
+// 仿 本项目/src/util/exec.ts 范式
+// 关键: never block main thread, no shell, SIGKILL on timeout
 import { spawn } from "node:child_process";
+/**
+ * execAsync(cmd, args[], opts?) — never throws on non-zero exit.
+ * - spawn (no shell) 防命令注入 (vendor 推 binary 时含 shell 元字符会爆)
+ * - 默认 timeout 30s, SIGKILL 兜底
+ * - 默认 stdin "ignore" (防 stdin hang)
+ *
+ * 与 child_process.exec 不一样: 我们返回完整 stdout/stderr 不 throw;
+ * 调用方按 code 判断是否成功
+ */
 export function execAsync(command, args = [], opts = {}) {
     const timeoutMs = opts.timeoutMs ?? 30_000;
     const started = Date.now();
@@ -11,6 +23,7 @@ export function execAsync(command, args = [], opts = {}) {
                 "pipe",
                 "pipe",
             ],
+            // don't open shell
             shell: false,
             windowsHide: true,
         });
@@ -23,6 +36,7 @@ export function execAsync(command, args = [], opts = {}) {
                 child.kill("SIGKILL");
             }
             catch {
+                /* already dead */
             }
         }, timeoutMs);
         if (child.stdout) {
@@ -64,3 +78,4 @@ export function execAsync(command, args = [], opts = {}) {
         });
     });
 }
+//# sourceMappingURL=exec.js.map

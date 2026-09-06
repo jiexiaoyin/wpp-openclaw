@@ -1,8 +1,11 @@
+// src/api/client.ts - vendor HTTP API 客户端
+// global fetch + 超时 + 3 retries; 大整数预引号化 (16+ 位 msgId 防 JSON.parse 丢精度)
 import { API_TIMEOUT_MS, API_MAX_RETRIES, API_RETRY_BASE_MS, VENDOR_BASE_PATH, DEFAULT_ACCOUNT_ID, API_JSON_MAX_BYTES, } from "../core/constants.js";
 import { warn, error, formatErr } from "../core/logger.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
 import { stringifyLargeInts } from "../util/bigint.js";
-export { stringifyLargeInts };
+export { stringifyLargeInts }; // re-export (v1.3.27: 定义移入 util/bigint.ts, 兼容老调用方/测试)
+/** Retryable http/network error patterns */
 const RETRYABLE_PATTERNS = [
     /fetch failed/i,
     /ECONNREFUSED/,
@@ -22,6 +25,10 @@ function isRetryable(status, err) {
     const msg = err instanceof Error ? err.message : String(err);
     return RETRYABLE_PATTERNS.some((re) => re.test(msg));
 }
+/**
+ * 反向: parseJson 时如果 msgId 是数字 (e.g. 后端忘了引号), 也尝试修复.
+ * 但最佳策略是在 vendor 返回处修复, 调用方拿到 string.
+ */
 export function parseJsonText(text) {
     const safe = stringifyLargeInts(text);
     try {
@@ -31,17 +38,23 @@ export function parseJsonText(text) {
         return null;
     }
 }
+/** Build full URL: {baseUrl}/api{endpoint} */
 export function buildUrl(baseUrl, endpoint) {
     const base = baseUrl.replace(/\/$/, "");
     const ep = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
     return `${base}${VENDOR_BASE_PATH}${ep}`;
 }
+/**
+ * 空凭证兜底: agent tools meta 构建期 ctx 为空, execute 时从 registry 拿真实凭证 (否则 Failed to parse URL)
+ */
 export function resolveCallCtx(baseUrl, opts) {
     if (baseUrl && opts.tokenKey) {
         return { baseUrl, tokenKey: opts.tokenKey, authcode: opts.authcode };
     }
+    // v1.3.59 P2 (2026-08-13 完整审阅): 缺凭证回落 default 前警告 (多账号下易跨账号凭证泄露)
     warn(`[WPP v1.3.59] resolveCallCtx: 缺凭证 (baseUrl=${baseUrl ? "有" : "空"} tokenKey=${opts.tokenKey ? "有" : "空"}) — 回落 default 账号凭证, 多账号场景请显式传凭证`);
     try {
+        // 兜底取默认账号凭证 (单账号 demo); 多账号时调用方应带 baseUrl+tokenKey 直接返回
         const state = getDefaultAccountRegistry().get(DEFAULT_ACCOUNT_ID);
         if (state?.config) {
             const cfg = state.config;
@@ -53,21 +66,31 @@ export function resolveCallCtx(baseUrl, opts) {
         }
     }
     catch {
+        // registry 未就绪 — 用原值 (调用方会拿到明确错误)
     }
     return { baseUrl, tokenKey: opts.tokenKey, authcode: opts.authcode };
 }
+/**
+ * authcode 自动注入 URL query (vendor 全部 endpoint 要求, 缺失 → HTTP 400 "缺少授权码")
+ */
 export function withAuthcodeQuery(url, authcode) {
     if (!authcode || url.includes("authcode="))
         return url;
     const sep = url.includes("?") ? "&" : "?";
     return `${url}${sep}authcode=${encodeURIComponent(authcode)}`;
 }
+/**
+ * POST to vendor API with retries + timeout + large-int stringification.
+ */
 export async function postWppJson(baseUrl, endpoint, body, opts) {
+    // 空凭证兜底 (agent tools meta 空 ctx → registry 真实凭证)
     const rt = resolveCallCtx(baseUrl, opts);
     const url = opts.raw ? `${rt.baseUrl.replace(/\/$/, "")}${endpoint.startsWith("/") ? endpoint : "/" + endpoint}` : buildUrl(rt.baseUrl, endpoint);
+    // URL query 注入 authcode (vendor swagger 要求 query 必填)
     const finalUrl = withAuthcodeQuery(url, rt.authcode);
     const timeoutMs = opts.timeoutMs ?? API_TIMEOUT_MS;
     const maxRetries = opts.maxRetries ?? API_MAX_RETRIES;
+    // authcode 自动注入 body 顶层; Admin 端点白名单防护 (body.authcode 语义不同, 无差别注入会删/改本账号授权码)
     const finalBody = { ...body };
     const ADMIN_ENDPOINTS = ["/Admin/", "/User/GetAllOnline"];
     const isAdminEndpoint = ADMIN_ENDPOINTS.some((p) => endpoint.startsWith(p));
@@ -84,6 +107,7 @@ export async function postWppJson(baseUrl, endpoint, body, opts) {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
+                    // vendor 自定义鉴权: X-TokenKey 头部 (adminmaxapi 二进制读取)
                     "X-TokenKey": rt.tokenKey,
                     "X-Request-Id": `wpp-${Date.now()}-${attempt}`,
                 },
@@ -91,6 +115,7 @@ export async function postWppJson(baseUrl, endpoint, body, opts) {
                 signal: ac.signal,
             });
             clearTimeout(timer);
+            // v1.3.59 P2 (2026-08-13 完整审阅): JSON 响应体字节 cap (媒体端点经此下载 base64, 防巨型响应 OOM)
             const cl = Number(res.headers.get("content-length") ?? 0);
             if (cl > API_JSON_MAX_BYTES) {
                 lastErr = new Error(`postWppJson ${endpoint} response too large: ${cl} > ${API_JSON_MAX_BYTES}`);
@@ -151,6 +176,7 @@ export async function postWppJson(baseUrl, endpoint, body, opts) {
             };
         }
     }
+    // unreachable — loop always returns — but for type safety:
     error(`postWppJson ${endpoint} exhausted retries`, lastErr);
     return {
         Code: -1,
@@ -163,7 +189,9 @@ async function backoff(attempt) {
     const jitter = Math.floor(Math.random() * 100);
     await new Promise((r) => setTimeout(r, delay + jitter));
 }
+/** GET 变种 (vendor: HeartBeatLogs/LongLinkStatus/CheckCanSetAlias/GetOnlineInfo/GroupList/List/GeneratePayQCode)  */
 export async function getWppJson(baseUrl, endpoint, opts) {
+    // 空凭证兜底; GET 也注入 authcode (vendor GET endpoint 要求 query authcode)
     const rt = resolveCallCtx(baseUrl, opts);
     const url = withAuthcodeQuery(buildUrl(rt.baseUrl, endpoint), rt.authcode);
     const timeoutMs = opts.timeoutMs ?? API_TIMEOUT_MS;
@@ -211,3 +239,4 @@ export async function getWppJson(baseUrl, endpoint, opts) {
         raw: lastErr instanceof Error ? lastErr.message : String(lastErr),
     };
 }
+//# sourceMappingURL=client.js.map
