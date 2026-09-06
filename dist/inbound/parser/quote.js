@@ -1,7 +1,10 @@
+// src/inbound/parser/quote.ts - 引用消息 <refermsg> XML 解析
 import { safeMatch } from "../../core/safe-regex.js";
+/** Parse `<refermsg type="..."><type>...</type><svrid>...</svrid>...</refermsg>` block */
 export function parseQuoteXml(content) {
     if (!content || !content.includes("<refermsg"))
         return null;
+    // 用 safeMatch 截断 4096 防恶意构造 XML 触发 ReDoS
     const block = safeMatch(/<refermsg\b[^>]*>([\s\S]*?)<\/refermsg>/, content);
     if (!block || block[1] === undefined)
         return null;
@@ -13,6 +16,7 @@ export function parseQuoteXml(content) {
     const result = {
         type: tag("type"),
         msgId: tag("svrid") ?? tag("msgid") ?? "",
+        // 真实结构是 <fromusr> (不是 fromusername)
         fromWxid: tag("fromusr") ?? tag("fromusername"),
         title: tag("displayname") ?? tag("title"),
         content: tag("content"),
@@ -21,6 +25,7 @@ export function parseQuoteXml(content) {
         return null;
     return result;
 }
+/** 从 raw_payload 提取 reply_context 引用信息 (无则 null) */
 export function extractReferencedFromReplyContext(raw) {
     if (!raw || typeof raw !== "object")
         return null;
@@ -38,6 +43,7 @@ export function extractReferencedFromReplyContext(raw) {
         chatroomId: typeof rc.chat_user_id === "string" ? rc.chat_user_id : undefined,
     };
 }
+/** 从 raw_payload 提取 app.reference (category=quote 引用消息) 被引用信息 */
 export function extractReferencedFromApp(raw) {
     if (!raw || typeof raw !== "object")
         return null;
@@ -58,3 +64,4 @@ export function extractReferencedFromApp(raw) {
         displayName: typeof ref.display_name === "string" ? ref.display_name : undefined,
     };
 }
+//# sourceMappingURL=quote.js.map

@@ -1,5 +1,17 @@
+// src/dispatch/intent-embed.ts - v1.3.2 embedding 快路径 (混用: embedding + LLM 兜底)
+//
+// 老板拍板混用: 群聊 @ 触发时, 非命令意图用 embedding 相似度快速定位相关候选 (ms 级),
+// 命令类意图 (删/发/转/帮) embedding 判断不了 → LLM 兜底。
+//
+// embedding: 阿里 dashscope text-embedding-v4 (OpenAI 兼容)
+//   POST https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings
+//   Body {model, input: [texts]} / Header Authorization: Bearer <BAILIAN_EMBEDDING_API_KEY>
 import { logObj as log, warn } from "../core/logger.js";
-import { safeFetch } from "../util/safe-fetch.js";
+import { safeFetch } from "../util/safe-fetch.js"; // v1.3.27 P3-safe-fetch: 白名单化防 SSRF
+/**
+ * 批量文本 → 向量 (dashscope /embeddings, OpenAI 兼容)。失败 → null (调用方降级)。
+ * 返回与 input 顺序一致的向量数组。
+ */
 export async function embedTexts(texts, opts) {
     if (!texts.length)
         return [];
@@ -31,6 +43,7 @@ export async function embedTexts(texts, opts) {
             warn(`[WPP v1.3.2 EMBED] response count mismatch: got ${data.length}, want ${texts.length}`);
             return null;
         }
+        // 按 index 排序保证顺序
         const sorted = [...data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
         return sorted.map((d) => d.embedding ?? []);
     }
@@ -39,6 +52,7 @@ export async function embedTexts(texts, opts) {
         return null;
     }
 }
+/** 余弦相似度 (纯函数) */
 export function cosineSimilarity(a, b) {
     if (!a.length || a.length !== b.length)
         return 0;
@@ -52,11 +66,16 @@ export function cosineSimilarity(a, b) {
         return 0;
     return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
+/** 命令类意图 (embedding 判断不了) → 走 LLM */
 export function isCommandIntent(text) {
     return /删|撤回|发|转|帮|改|推送|群发|邀请|踢|移除|改名|建|拉|分享|转发|回复/i.test(String(text ?? ""));
 }
+// 候选向量缓存 (msgId → embedding), 消息不变则复用
+// v1.3.63 P2-4 (2026-08-14 审阅): 加容量上限防无界增长 (~1024 维 float64 每条 8-16KB,
+//   群活跃 2000 条/天 → 月 GB 级). Map 按插入序, 超上限删最旧.
 const embedCache = new Map();
 const EMBED_CACHE_MAX = 2000;
+/** 缓存一条候选的向量 (测试可清); 超上限删最旧条目 */
 export function cacheEmbedding(msgId, vec) {
     embedCache.set(msgId, vec);
     if (embedCache.size > EMBED_CACHE_MAX) {
@@ -65,12 +84,18 @@ export function cacheEmbedding(msgId, vec) {
             embedCache.delete(oldest);
     }
 }
+/** 读缓存向量 */
 export function getCachedEmbedding(msgId) {
     return embedCache.get(msgId);
 }
+/** 测试用: 清空向量缓存 */
 export function clearEmbedCache() {
     embedCache.clear();
 }
+/**
+ * 用 embedding 相似度选 top-N 相关候选 (返回 msgId 列表, 相似度 > threshold)。
+ * 失败 (embedding null) → 返回 null (调用方降级 LLM)。
+ */
 export async function selectTopNByEmbedding(triggerText, candidates, opts) {
     if (!candidates.length)
         return [];
@@ -86,6 +111,7 @@ export async function selectTopNByEmbedding(triggerText, candidates, opts) {
         const vecs = await embedTexts(toEmbed, opts);
         if (vecs === null)
             return null;
+        // 回填缓存
         let vi = 0;
         candidates.forEach((c, i) => {
             if (!cachedVectors[i]) {
@@ -102,6 +128,8 @@ export async function selectTopNByEmbedding(triggerText, candidates, opts) {
     const triggerVec = await embedTexts([triggerText], opts);
     if (!triggerVec?.[0]?.length)
         return null;
+    // v1.3.3: 媒体候选 (文件/图片/语音/视频) 优先全部保留 — 用户发媒体+"看看"应都看到,
+    //   embedding 纯相似度会把文件挤掉 (老板实测: 文档.pdf 没进上下文)
     const mediaIds = candidates
         .filter((c) => c.type === "file" || c.type === "image" || c.type === "voice" || c.type === "video")
         .map((c) => c.msgId);
@@ -116,3 +144,4 @@ export async function selectTopNByEmbedding(triggerText, candidates, opts) {
     log.debug(`[WPP v1.3.2 EMBED] selected ${all.length}/${candidates.length} (media=${mediaIds.length}, text=${relevant.length}, topN=${topN})`);
     return all;
 }
+//# sourceMappingURL=intent-embed.js.map

@@ -1,3 +1,4 @@
+// src/dispatch/agent-tools/label-meta.ts - Label tag (标签, 5)
 import { Type } from "typebox";
 import { makeWppLabel } from "../../send/index.js";
 import { getDefaultAccountRegistry } from "../../account-state.js";
@@ -34,11 +35,15 @@ export const LABEL_META = {
             labelId: Type.String(),
             wxidList: Type.String({ description: "wxid 数组 join(',')" }),
         }),
+        // 原版 api.updateList(labelId, wxidList) — 但 api.updateList 签名是 (labelId, wxidList: string[])
+        // 历史不一致, 不优化
         (labelId, wxidList) => getLab().updateList(labelId, [wxidList]),
     ],
+    /** /Label/GetWXFriendListByLabel — 按标签拉好友 (v1.3.67 新 API; labelId number) */
     getWXFriendListByLabel: [
         "按标签拉取好友列表 (名称/备注/头像/标签). labelId=标签 ID (数字).",
         Type.Object({ labelId: Type.Number() }),
         (labelId) => getLab().getWXFriendListByLabel(labelId),
     ],
 };
+//# sourceMappingURL=label-meta.js.map

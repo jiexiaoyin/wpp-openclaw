@@ -27,7 +27,7 @@ docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
 
 部署 vendor **必须**先有 tokenKey (客户端密钥):
 
-1. 打开 [访问控制](https://cloud.wechatpadpro.com/user/access-tokens) 并登录
+1. 打开 [访问控制](https://adminmax.knowhub.cloud/user/access-tokens) 并登录
 2. 在 `access-tokens` 页面创建客户端密钥 (仅显示一次, 立即保存)
 3. 填入 `config/app.conf` 的 `user_token_key` (install.sh 也会引导完成)
 
@@ -46,7 +46,7 @@ chmod +x install.sh check-proxy.sh
 ### 关键配置 (config/app.conf)
 
 ```ini
-user_token_key = "<你的客户端密钥>"     # cloud.wechatpadpro.com 后台生成, 每位使用者用自己的
+user_token_key = "<你的客户端密钥>"     # adminmax.knowhub.cloud 后台生成, 每位使用者用自己的
 httpaddr = "0.0.0.0"
 httpport = 18062                        # HTTP API
 websocketport = 18089                   # WebSocket

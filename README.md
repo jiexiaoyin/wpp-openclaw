@@ -3,14 +3,6 @@
 **基于 WeChatPadPro (微信 Pad 协议 HTTP API) 的 OpenClaw 适配插件 — 让微信账号接入 OpenClaw AI 自动回复**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/jiexiaoyin/wpp-openclaw?style=social)](https://github.com/jiexiaoyin/wpp-openclaw/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/jiexiaoyin/wpp-openclaw?style=social)](https://github.com/jiexiaoyin/wpp-openclaw/network)
-[![Open Issues](https://img.shields.io/github/issues/jiexiaoyin/wpp-openclaw)](https://github.com/jiexiaoyin/wpp-openclaw/issues)
-[![Last commit](https://img.shields.io/github/last-commit/jiexiaoyin/wpp-openclaw)](https://github.com/jiexiaoyin/wpp-openclaw/commits/main)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
-[![Node](https://img.shields.io/badge/Node-%E2%89%A520-green)](https://nodejs.org/)
-
-[English](#) · [中文](#) — 当前为中文版
 
 WeChatPadPro 微信 Pad 协议 → OpenClaw gateway → AI 自动回复。支持收发文本/图片/语音/视频/文件、引用回复、图片 AI 识别、语音收发 (silk 自动转码)、群接龙自动触发 AI、多账号。
 
@@ -46,12 +38,12 @@ WeChatPadPro 微信 Pad 协议 → OpenClaw gateway → AI 自动回复。支持
 ## ⚡ 快速部署 (先服务端, 再插件)
 
 > **先部署服务端 (vendor), 再装插件** — 插件依赖服务端提供 HTTP API + WebSocket。本包**不含服务端二进制**, 服务端通过官方 Docker 镜像获取。
-> **凭证顺序**: 先在 [cloud.wechatpadpro.com](https://cloud.wechatpadpro.com/user/access-tokens) 拿 **tokenKey** → 部署 vendor → 登录后拿 **authcode** → 配插件。
+> **凭证顺序**: 先在 [adminmax.knowhub.cloud](https://adminmax.knowhub.cloud/user/access-tokens) 拿 **tokenKey** → 部署 vendor → 登录后拿 **authcode** → 配插件。
 
 ### 第 1 步: 拿 tokenKey (客户端密钥) + 部署服务端 (vendor)
 
 ```bash
-# 1. 拿 tokenKey: 打开 https://cloud.wechatpadpro.com/user/access-tokens 创建客户端密钥 (只显示一次, 保存好)
+# 1. 拿 tokenKey: 打开 https://adminmax.knowhub.cloud/user/access-tokens 创建客户端密钥 (只显示一次, 保存好)
 
 # 2. 拉取官方镜像 (build 20260818, 唯一适配版本)
 docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
@@ -228,12 +220,8 @@ wechatpadpro-openclaw/
 │   └── default.json.example   # 账号配置模板
 ├── config.json                # 全局配置 (DB)
 ├── GETTING_STARTED.md         # 快速开始
-├── DEPLOY.md                  # 部署 + 回滚
-├── USAGE.md                   # 使用说明
-├── CHANGELOG.md               # 版本变更日志
 ├── LICENSE                    # MIT
-├── openclaw.plugin.json       # OpenClaw manifest
-└── vendor/                    # 服务端部署包(脱敏版)
+└── openclaw.plugin.json       # OpenClaw manifest
 ```
 
 ## 文档
@@ -242,24 +230,6 @@ wechatpadpro-openclaw/
 - [DEPLOY.md](./DEPLOY.md) — 部署 + 回滚 + 故障排查
 - [USAGE.md](./USAGE.md) — 使用说明 (工具 / 配置 / 多账号 / 监控)
 - [vendor/README.md](./vendor/README.md) — 配套服务端部署
-
-## 🔗 相关项目
-
-本项目是 WeChatPadPro 跨平台适配插件生态的一部分:
-
-| 项目 | 平台 | 语言 | 状态 |
-|---|---|---|---|
-| **[wpp-openclaw](https://github.com/jiexiaoyin/wpp-openclaw)** (本仓库) | OpenClaw | TypeScript | ✅ 活跃维护 |
-| **[wpp-hermes](https://github.com/jiexiaoyin/wpp-hermes)** | Hermes Agent | Python 3 | ✅ 活跃维护 |
-| **[astrbot-plugin-wpp](https://github.com/jiexiaoyin/astrbot-plugin-wpp)** | AstrBot | Python 3 | ✅ 活跃维护 |
-
-三个仓库覆盖同一 vendor API,根据 agent 平台选择:
-
-- 想用 **OpenClaw gateway** 的 LLM → 本仓库 (`wpp-openclaw`)
-- 想用 **Hermes Agent** → [wpp-hermes](https://github.com/jiexiaoyin/wpp-hermes)
-- 想用 **AstrBot** 的多平台架构 → [astrbot-plugin-wpp](https://github.com/jiexiaoyin/astrbot-plugin-wpp)
-
-WeChatPadPro 服务端二进制本身不开放,需通过 [cloud.wechatpadpro.com](https://cloud.wechatpadpro.com) 申请 token。
 
 ## 许可证
 

@@ -1,9 +1,22 @@
+// src/vendor-mcp-client.ts - vendor MCP 客户端封装 (v1.2.0 新增)
+// 背景: 老板 2026-08-09 发现 vendor 提供 MCP 端点 (127.0.0.1:8062/mcp),
+//       它暴露 7 只读工具 (wechat_get_recent_messages 等) + 6 可写 (需 mcp:write, 当前关)。
+// 用途: v1 schema 文件消息 (只拿 filename, 无 CDN URL) → 通过 wechat_get_recent_messages
+//       拿 vendor 视角的完整 payload, 看是否含 CDN URL / 下载凭证, 再走 OSS 上传 → AI 读到文件。
+//
+// 鉴权: Authorization: Bearer <token> (实测 = WECHATPRO_AUTHCODE, 不是 TokenKey)
+// 会话: StreamableHTTP 用 Set-Cookie (SDK transport 自动处理)
+// 安全: 只调 7 只读工具, 不碰写 (mcp_write_enabled=false, 且无调用路径)
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { MCP_BASE_URL, MCP_AUTH_TOKEN_ENV, MCP_TIMEOUT_MS, LOG_TAG } from "./core/constants.js";
 import { info, warn, error as logError, formatErr } from "./core/logger.js";
 import { getDefaultAccountRegistry } from "./account-state.js";
 const _conns = new Map();
+/**
+ * 解析指定账号的 MCP token (Bearer authcode)。
+ * 多账号: 账号 config.authcodeEnv → env 值; 单账号/default: WECHATPRO_AUTHCODE。
+ */
 export function getMcpToken(accountId) {
     if (accountId && accountId !== "default") {
         try {
@@ -17,6 +30,10 @@ export function getMcpToken(accountId) {
     }
     return process.env[MCP_AUTH_TOKEN_ENV] ?? null;
 }
+/**
+ * 连接 vendor MCP (幂等, 并发安全, per-account)。
+ * 失败不抛 — 返回 false, 调用方走 fallback (不卡主链路)。
+ */
 export async function connectMcpClient(accountId) {
     const token = getMcpToken(accountId);
     if (!token) {
@@ -25,26 +42,29 @@ export async function connectMcpClient(accountId) {
     }
     const key = accountId ?? "default";
     const existing = _conns.get(key);
+    // 已连接且 5 分钟内 → 直接 true
     if (existing?.client && existing?.transport && Date.now() - existing.connectedAt < 5 * 60 * 1000) {
         return true;
     }
+    // 并发连接去重
     if (existing?.connectPromise)
         return existing.connectPromise;
     const entry = { client: null, transport: null, token, connectedAt: 0, connectPromise: null };
     _conns.set(key, entry);
     entry.connectPromise = (async () => {
         try {
+            // v1.2.1 P2-fix: 重连前 close 旧 transport (防 SSE 连接每 5 分钟泄漏)
             if (entry.transport) {
                 try {
                     await entry.transport.close();
                 }
-                catch { }
+                catch { /* ignore */ }
             }
             if (entry.client) {
                 try {
                     await entry.client.close();
                 }
-                catch { }
+                catch { /* ignore */ }
             }
             const transport = new StreamableHTTPClientTransport(new URL(MCP_BASE_URL), {
                 requestInit: {
@@ -52,9 +72,12 @@ export async function connectMcpClient(accountId) {
                         Authorization: `Bearer ${entry.token}`,
                         "Content-Type": "application/json",
                     },
+                    // 注: SDK 内部覆盖 signal (requestInit.signal 死代码), 用下方 Promise.race 硬超时
                 },
             });
             const client = new Client({ name: "wechatpadpro", version: "1.2.0" });
+            // v1.2.1 P2-fix: 连接也加 5s 硬超时 (Promise.race, 防 vendor 接受但挂住)
+            // v1.3.59 P0-3: 保存 timer 引用 + clearTimeout, 防 timer 泄漏 (否则 --test-force-exit 杀测试)
             let timeoutId;
             try {
                 await Promise.race([
@@ -86,6 +109,10 @@ export async function connectMcpClient(accountId) {
     })();
     return entry.connectPromise;
 }
+/**
+ * 调 vendor MCP 工具。失败不抛 → 返回 null, 调用方 fallback。
+ * v1.3.60: accountId 参数 — 多账号下用对应账号的 MCP 连接/token。
+ */
 export async function callMcpTool(name, args = {}, accountId) {
     const key = accountId ?? "default";
     const ok = await connectMcpClient(key);
@@ -97,6 +124,7 @@ export async function callMcpTool(name, args = {}, accountId) {
             name,
             arguments: args,
         }, undefined, { timeout: MCP_TIMEOUT_MS });
+        // v1.3.63 P3: args 只记 keys 不记值 (值可能含 CDN 签名 URL/消息内容)
         const argKeys = Object.keys((args ?? {})).join(",");
         info(`${LOG_TAG} [VENDOR-MCP] callTool ok: ${name} account=${key} argKeys=${argKeys}`);
         return result;
@@ -106,6 +134,7 @@ export async function callMcpTool(name, args = {}, accountId) {
         return null;
     }
 }
+/** 获取 vendor MCP 工具列表 (诊断用) */
 export async function listMcpTools(accountId) {
     const key = accountId ?? "default";
     const ok = await connectMcpClient(key);
@@ -121,6 +150,7 @@ export async function listMcpTools(accountId) {
         return null;
     }
 }
+/** 断开 MCP (shutdown 时调用, 全部账号) */
 export async function disconnectMcpClient() {
     for (const [key, conn] of _conns) {
         if (conn.transport) {
@@ -135,12 +165,23 @@ export async function disconnectMcpClient() {
     _conns.clear();
     info(`${LOG_TAG} [VENDOR-MCP] disconnected all (${_conns.size} remaining)`);
 }
+// ============ 文件下载增强 (MCP 视角) ============
+/**
+ * v1 schema 文件消息 → 用 MCP 的 wechat_get_recent_messages 拿完整 payload,
+ * 解析是否含 CDN URL / 下载凭证。拿不到返回 null (调用方走确定性回复兜底)。
+ * (v1.2.1 P2-fix: 改名为 resolveFileViaMcp 避免与 media-enrich 同名混淆; 多 block 累积 + isError 识别)
+ *
+ * @param localId 文件消息的 local_id (vendor 内部 id)
+ * @param filename 文件名 (日志用)
+ */
 export async function resolveFileViaMcp(localId, filename, accountId) {
+    // v1.3.60 MULTI-ACCOUNT: 传 accountId → 用对应账号的 MCP 连接/token
     const recent = await callMcpTool("wechat_get_recent_messages", { limit: 500 }, accountId);
     if (!recent) {
         warn(`${LOG_TAG} [VENDOR-MCP] resolveFileViaMcp: get_recent_messages null (fallback)`);
         return null;
     }
+    // 解析 result → 消息数组 (v1.2.1: 多 block 累积, 识别 isError, 不覆盖)
     let messages = [];
     let isError = false;
     try {
@@ -170,6 +211,7 @@ export async function resolveFileViaMcp(localId, filename, accountId) {
         warn(`${LOG_TAG} [VENDOR-MCP] resolveFileViaMcp: msg not found localId=${localId} filename=${filename}`);
         return null;
     }
+    // v1.3.63 P3: payload 只记 keys 不记内容 (内容可能含 CDN 签名 URL)
     const targetKeys = Object.keys((target ?? {})).join(",");
     info(`${LOG_TAG} [VENDOR-MCP] resolveFileViaMcp: found msg localId=${localId} payloadKeys=${targetKeys}`);
     const rawContent = String(target.content ?? "");
@@ -185,7 +227,9 @@ export async function resolveFileViaMcp(localId, filename, accountId) {
     warn(`${LOG_TAG} [VENDOR-MCP] resolveFileViaMcp: no CDN URL in payload localId=${localId}`);
     return null;
 }
+/** 从 content 提取 HTTP(S) URL (CDN 地址常见于 content 里的 URL) */
 function extractHttpUrl(content) {
     const m = content.match(/https?:\/\/[^\s"'<>]+/);
     return m ? m[0] : null;
 }
+//# sourceMappingURL=vendor-mcp-client.js.map

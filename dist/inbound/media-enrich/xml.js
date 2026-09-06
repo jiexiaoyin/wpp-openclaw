@@ -1,3 +1,8 @@
+// src/inbound/media-enrich/xml.ts - 媒体消息 XML 解析器 (v0 schema)
+// 从 media-enrich.ts v1.3.26 拆分 (2026-08-10, P3-2): 仅搬运, 不优化
+/**
+ * 从图片 XML 提取 CDN 下载参数 (aeskey + cdnthumburl/cdnbigimgurl)
+ */
 export function parseImageXml(xml) {
     const aesKey = xml.match(/aeskey="([^"]+)"/)?.[1];
     const fileNo = xml.match(/cdnbigimgurl="([^"]+)"/)?.[1] ||
@@ -8,8 +13,14 @@ export function parseImageXml(xml) {
         return null;
     return { aesKey, fileNo, md5 };
 }
+/**
+ * 解析 file msg XML → 拿 aeskey + fileNo + filename + size
+ * vendor file XML 范式: <appmsg><type>6</type><appattach>
+ *   <attachurl> <aeskey> <fileno> <fileext> <filename name="...">
+ */
 export function parseFileXml(xml) {
     const aesKey = xml.match(/aeskey="([^"]+)"/)?.[1];
+    // fileNo 字段名 vendor 多种: fileno / attachfileid / fileid / fileNo
     const fileNo = xml.match(/<fileno>([^<]+)<\/fileno>/)?.[1] ||
         xml.match(/fileno="([^"]+)"/)?.[1] ||
         xml.match(/<attachfileid>([^<]+)<\/attachfileid>/)?.[1] ||
@@ -24,8 +35,13 @@ export function parseFileXml(xml) {
         return null;
     return { aesKey, fileNo, filename, fileext, size };
 }
+/**
+ * 解析 videomsg XML → aeskey + cdnthumbaeskey/cdnthumburl/cdnvideourl
+ * 注: 微信 videomsg 有两个 CDN: 视频本体 + 缩略图
+ */
 export function parseVideoXml(xml) {
     const aesKey = xml.match(/aeskey="([^"]+)"/)?.[1];
+    // videomsg 通常用 cdnvideourl/cdnvideourl/aeskey 字段
     const fileNo = xml.match(/cdnvideourl="([^"]+)"/)?.[1] ||
         xml.match(/<cdnvideourl>([^<]+)<\/cdnvideourl>/)?.[1] ||
         xml.match(/cdnvideofileid="([^"]+)"/)?.[1] ||
@@ -38,6 +54,9 @@ export function parseVideoXml(xml) {
         return null;
     return { aesKey, fileNo, md5, thumbUrl, playLength };
 }
+/**
+ * 解析 voicemsg XML → aeskey + fileNo (silk/AMR/MP3)
+ */
 export function parseVoiceXml(xml) {
     const aesKey = xml.match(/aeskey="([^"]+)"/)?.[1];
     const fileNo = xml.match(/cdnvoiceurl="([^"]+)"/)?.[1] ||
@@ -50,3 +69,4 @@ export function parseVoiceXml(xml) {
         return null;
     return { aesKey, fileNo, md5, durationMs };
 }
+//# sourceMappingURL=xml.js.map

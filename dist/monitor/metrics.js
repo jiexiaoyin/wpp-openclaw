@@ -1,15 +1,22 @@
+// src/monitor/metrics.ts - Prometheus counters (wechatpadpro_*)
+// 范式仿 本项目/src/monitor/metrics.ts
 const counters = new Map();
+/** Counter namespacing: wpp_messages_received_total etc. */
 const ns = "wpp";
+/** 增 1 (default) 或增 n */
 export function incCounter(name, n = 1) {
     const k = `${ns}_${name}`;
     counters.set(k, (counters.get(k) ?? 0) + n);
 }
+/** 读 (测试/debug 用) */
 export function getCounter(name) {
     return counters.get(`${ns}_${name}`) ?? 0;
 }
+/** 重置 (测试/teardown 用) */
 export function resetAllCounters() {
     counters.clear();
 }
+/** 输出 Prometheus 0.0.4 text format */
 export function renderPrometheus() {
     const lines = [];
     const byType = new Map();
@@ -33,6 +40,7 @@ export function renderPrometheus() {
     }
     return lines.join("\n") + "\n";
 }
+/** 在 webhook 入口统一打的预定义计数 helpers (v1.0.2: 11 counters) */
 export const WebhookMetrics = {
     incReceived: () => incCounter("messages_received_total"),
     incRejectedPath: () => incCounter("messages_rejected_path_total"),
@@ -49,12 +57,19 @@ export const WebhookMetrics = {
     incHandlerOnError: () => incCounter("handler_onerror_total"),
     incDispatchDispatched: () => incCounter("dispatch_dispatch_total"),
 };
+// v1.1.12 P2-1 (2026-08-08): setWebhook tag metrics (autoSetWebhook 用)
+// 监控: 启动时 setWebhook 成功/失败/重试/periodic retry
+// 按结果分开: ok / fail / retry / periodic_ok / periodic_fail
 export const SetWebhookMetrics = {
+    // 启动时 3 次 backoff 内
     incSetWebhookOk: () => incCounter("setwebhook_ok_total"),
     incSetWebhookFail: () => incCounter("setwebhook_fail_total"),
+    // 周期性 retry
     incPeriodicOk: () => incCounter("setwebhook_periodic_ok_total"),
     incPeriodicFail: () => incCounter("setwebhook_periodic_fail_total"),
+    // 跳过原因
     incSkippedNoPublicUrl: () => incCounter("setwebhook_skipped_no_public_url_total"),
     incSkippedNoAuthcode: () => incCounter("setwebhook_skipped_no_authcode_total"),
     incSkippedDisabled: () => incCounter("setwebhook_skipped_disabled_total"),
 };
+//# sourceMappingURL=metrics.js.map

@@ -1,10 +1,22 @@
+// src/storage/db/mysql.ts - MySQL/MariaDB adapter 实现
+// 范式仿 本项目/src/storage/db/mysql.ts
+// 关键:
+//  - queryWithTimeout 包 SET SESSION max_statement_time (防 30s 卡死)
+//  - saveMessage 用 INSERT ... ON DUPLICATE KEY UPDATE (idempotent)
+//  - ensureColumns/Index 在 init() 末尾跑, vendor schema 漂移时自动迁移
 import mysql from "mysql2/promise";
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { info, warn, error, formatErr } from "../../core/logger.js";
 import { findPluginRoot } from "../../core/paths.js";
+/** ER_STATEMENT_TIMEOUT (1969): caught → throw QueryTimeoutError (silent killer 防护) */
 const ER_STATEMENT_TIMEOUT = 1969;
+/** max_statement_time (s) per query (vendor 文档明示不超过 10s) */
 const STMT_TIMEOUT_SECONDS = 10;
+/**
+ * 查询超时异常 (不静默返 [] — 曾把单行查询误判"不存在" silent killer)
+ * 用法: catch (e) { if (e instanceof QueryTimeoutError) ... }
+ */
 export class QueryTimeoutError extends Error {
     originalError;
     code = "QUERY_TIMEOUT";
@@ -17,6 +29,10 @@ export class QueryTimeoutError extends Error {
         this.sql = sql;
     }
 }
+/**
+ * Run a query with optional max_statement_time timeout.
+ * Throws QueryTimeoutError on ER_STATEMENT_TIMEOUT (caller can catch by instanceof).
+ */
 export async function queryWithTimeout(pool, sql, params = [], opts) {
     const conn = await pool.getConnection();
     try {
@@ -41,6 +57,7 @@ export async function queryWithTimeout(pool, sql, params = [], opts) {
         conn.release();
     }
 }
+/** 加列 (IF NOT EXISTS 幂等; MariaDB 不支持 ADD COLUMN IF NOT EXISTS 直接, 用 SHOW COLUMNS 兜底) */
 async function ensureColumn(pool, table, column, type, after) {
     const cols = await queryWithTimeout(pool, `SHOW COLUMNS FROM ${table} LIKE ?`, [column]);
     if (cols.length === 0) {
@@ -51,6 +68,7 @@ async function ensureColumn(pool, table, column, type, after) {
         info(`ensureColumn: ${table}.${column} ADD (${type})`);
     }
 }
+/** 加索引 (用 SHOW INDEX 判重) */
 async function ensureIndex(pool, table, indexName, cols) {
     const idx = await queryWithTimeout(pool, `SHOW INDEX FROM ${table} WHERE Key_name = ?`, [indexName]);
     if (idx.length === 0) {
@@ -59,9 +77,14 @@ async function ensureIndex(pool, table, indexName, cols) {
         info(`ensureIndex: ${table}.${indexName} (${cols.join(", ")})`);
     }
 }
+/** 取数组第一个 row (noUncheckedIndexedAccess 友好) */
 function firstRow(rows) {
     return rows.length > 0 && rows[0] !== undefined ? rows[0] : null;
 }
+/**
+ * Read schema.sql from plugin root db/schema.sql, split by `;` and execute each.
+ * 已 IF NOT EXISTS, idempotent.
+ */
 async function applySchemaSql(pool) {
     const schemaPath = join(await findPluginRoot(), "db", "schema.sql");
     try {
@@ -81,9 +104,12 @@ async function applySchemaSql(pool) {
     }
     info(`applySchemaSql: ${stmts.length} statements applied from ${schemaPath}`);
 }
+/** Always include these migrations for vendor schema drift safety */
 async function applyMigrations(pool) {
+    // 撤回时间戳应来自原始消息入库时间: wpp_messages 加 create_time BIGINT 列 (ensureColumn 幂等 ADD)
     await ensureColumn(pool, "wpp_messages", "create_time", "BIGINT NULL");
     await ensureColumn(pool, "wpp_messages", "from_wxid", "VARCHAR(128) NULL");
+    // 旧行回填: 从 raw_payload.sender_id 提取 (已有行无 from_wxid)
     try {
         await pool.query(`UPDATE wpp_messages SET from_wxid = JSON_UNQUOTE(JSON_EXTRACT(raw_payload, '$.sender_id'))
        WHERE from_wxid IS NULL AND raw_payload IS NOT NULL AND raw_payload <> ''
@@ -92,11 +118,13 @@ async function applyMigrations(pool) {
     catch (e) {
         warn(`applyMigrations: backfill from_wxid failed (non-fatal): ${formatErr(e)}`);
     }
+    // 基础 (account_id, chat_id, ts) 复合, 覆盖 history query
     await ensureIndex(pool, "wpp_messages", "idx_account_chat_ts", [
         "account_id",
         "chat_id",
         "ts",
     ]);
+    // (peer_kind, peer_id) 复合, 覆盖跨账号 peer 查询
     await ensureIndex(pool, "wpp_messages", "idx_peer_kind_peer_id", [
         "peer_kind",
         "peer_id",
@@ -106,16 +134,19 @@ async function applyMigrations(pool) {
         "peer_id",
         "from_wxid",
     ]);
+    // (account_id, peer_id, ts) 复合, 加速 get-history-from-peer (复合后走 index range scan)
     await ensureIndex(pool, "wpp_messages", "idx_account_peer_ts", [
         "account_id",
         "peer_id",
         "ts",
     ]);
+    // (account_id, msg_type, ts) 复合, 加速按消息类型查
     await ensureIndex(pool, "wpp_messages", "idx_account_msgtype_ts", [
         "account_id",
         "msg_type",
         "ts",
     ]);
+    // 引用消息 svrid 映射表: 微信 svrid 无法主动获取, 只能从"别人引用该消息"的 refermsg.svrid 被动捕获
     await pool.query(`
     CREATE TABLE IF NOT EXISTS wpp_svrid_mapping (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -129,6 +160,7 @@ async function applyMigrations(pool) {
       KEY idx_md5 (msg_md5)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+    // Synckey 增量游标持久化: 保存 Sync 返回的 KeyBuf.buffer, 重启后用增量游标只拉新消息 (防全量重放风暴)
     await pool.query(`
     CREATE TABLE IF NOT EXISTS wpp_sync_state (
       account_id VARCHAR(64) NOT NULL,
@@ -138,6 +170,10 @@ async function applyMigrations(pool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 }
+/**
+ * Factory: createMysqlAdapter(cfg) returns DbAdapter.
+ * 隐藏 mysql2 pool 细节, caller 只用 interface methods.
+ */
 export function createMysqlAdapter(cfg) {
     let pool = null;
     const getPool = () => {
@@ -152,6 +188,8 @@ export function createMysqlAdapter(cfg) {
                 waitForConnections: true,
                 enableKeepAlive: true,
                 charset: "utf8mb4",
+                // v1.3.63 P2: queueLimit 防池耗尽时 getConnection 无限排队
+                //   (mysql2 PoolOptions 无 acquireTimeout; 池级排队上限由 queueLimit 兜底)
                 queueLimit: cfg.mysql.queueLimit ?? 50,
             });
             info(`mysqlAdapter pool init: ${cfg.mysql.host}:${cfg.mysql.port}/${cfg.mysql.database} (user=${cfg.mysql.user}, limit=${cfg.mysql.connectionLimit})`);
@@ -176,8 +214,10 @@ export function createMysqlAdapter(cfg) {
             const p = getPool();
             await p.query("SELECT 1 AS ok");
         },
+        // ===== Messages =====
         async saveMessage(record) {
             const p = getPool();
+            // UNIQUE (account_id, msg_id, new_msg_id) + ON DUPLICATE KEY UPDATE — 三通道重复推送时幂等
             await p.query(`INSERT INTO wpp_messages
          (account_id, msg_id, new_msg_id, direction, peer_kind, peer_id, peer_name,
           chat_id, msg_type, content, raw_payload, from_wxid, ts)
@@ -229,6 +269,7 @@ export function createMysqlAdapter(cfg) {
                 where.push("from_wxid = ?");
                 params.push(opts.fromWxid);
             }
+            // clamp limit 防 DoS (单次最多 1000 行, 防 caller 传 1M 内存爆)
             const safeLimit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
             const sql = `SELECT * FROM wpp_messages` +
                 (where.length ? ` WHERE ${where.join(" AND ")}` : "") +
@@ -241,11 +282,16 @@ export function createMysqlAdapter(cfg) {
             const rows = await queryWithTimeout(p, `SELECT * FROM wpp_messages WHERE msg_id = ? AND account_id = ? LIMIT 1`, [msgId, accountId]);
             return firstRow(rows) ? rowToMessage(firstRow(rows)) : null;
         },
-        async getMessageByMsgIdOrNewId(msgId, newMsgId, accountId, opts) {
+        // 持久化去重查询: 按 msg_id 或 new_msg_id 任一命中即视为已存在 (vendor 重放时 msg_id 相同)
+        async getMessageByMsgIdOrNewId(msgId, newMsgId, accountId, 
+        // v1.3.18 P1-核心2 fix: 加 direction 选项, 默认 inbound (保持向后兼容, dedup 用)
+        opts) {
             if (!msgId && !newMsgId)
                 return null;
             const p = getPool();
             const direction = opts?.direction ?? "inbound";
+            // SQL 运算符优先级陷阱: 必须 `account_id AND (msg_id OR new_msg_id) AND direction`
+            //  (曾写成 OR 连 chain, AND 优先 → account_id 恒真 → 全部误杀, 消息丢失根因)
             const idClauses = [];
             const params = [accountId];
             if (msgId) {
@@ -265,6 +311,7 @@ export function createMysqlAdapter(cfg) {
             const rows = await queryWithTimeout(p, `SELECT * FROM wpp_messages WHERE account_id = ? AND raw_payload LIKE ? LIMIT 1`, [accountId, `%"md5":"${md5}"%`]);
             return firstRow(rows) ? rowToMessage(firstRow(rows)) : null;
         },
+        // ===== Quote svrid 映射 =====
         async saveSvridMapping(record) {
             const p = getPool();
             await p.query(`INSERT INTO wpp_svrid_mapping (account_id, svrid, msg_md5, quoted_content_hash, captured_at)
@@ -285,6 +332,7 @@ export function createMysqlAdapter(cfg) {
             const rows = await queryWithTimeout(p, `SELECT svrid FROM wpp_svrid_mapping WHERE account_id = ? AND msg_md5 = ? ORDER BY captured_at DESC LIMIT 1`, [accountId, md5]);
             return rows.length > 0 ? String(rows[0].svrid) : null;
         },
+        // ===== Sync state (Synckey 持久化) =====
         async saveSynckey(accountId, synckey) {
             const p = getPool();
             await p.query(`INSERT INTO wpp_sync_state (account_id, synckey, updated_at)
@@ -296,6 +344,7 @@ export function createMysqlAdapter(cfg) {
             const rows = await queryWithTimeout(p, `SELECT synckey FROM wpp_sync_state WHERE account_id = ? LIMIT 1`, [accountId]);
             return rows.length > 0 ? String(rows[0].synckey) : null;
         },
+        // ===== Contacts =====
         async saveContact(record) {
             const p = getPool();
             await p.query(`INSERT INTO wpp_contacts
@@ -319,6 +368,7 @@ export function createMysqlAdapter(cfg) {
         },
         async getContacts(accountId, limit = 500) {
             const p = getPool();
+            // v1.3.63 P2: LIMIT clamp (与 getMessages 一致 1-1000, 防超长参数注 SQL 拼接)
             const safeLimit = Math.max(1, Math.min(Math.trunc(limit) || 500, 1000));
             const rows = await queryWithTimeout(p, `SELECT * FROM wpp_contacts WHERE account_id = ? LIMIT ${safeLimit}`, [accountId]);
             return rows.map((r) => ({
@@ -331,6 +381,7 @@ export function createMysqlAdapter(cfg) {
                 signature: r.signature == null ? null : String(r.signature),
             }));
         },
+        // ===== Chatrooms =====
         async saveChatroom(record) {
             const p = getPool();
             await p.query(`INSERT INTO wpp_chatrooms
@@ -352,7 +403,7 @@ export function createMysqlAdapter(cfg) {
         },
         async getChatrooms(accountId, limit = 500) {
             const p = getPool();
-            const safeLimit = Math.max(1, Math.min(Math.trunc(limit) || 500, 1000));
+            const safeLimit = Math.max(1, Math.min(Math.trunc(limit) || 500, 1000)); // v1.3.63 P2 clamp
             const rows = await queryWithTimeout(p, `SELECT * FROM wpp_chatrooms WHERE account_id = ? LIMIT ${safeLimit}`, [accountId]);
             return rows.map((r) => ({
                 account_id: String(r.account_id),
@@ -363,6 +414,7 @@ export function createMysqlAdapter(cfg) {
                 member_count: r.member_count == null ? null : Number(r.member_count),
             }));
         },
+        // ===== Session state =====
         async getSessionState(opts) {
             const p = getPool();
             const rows = await queryWithTimeout(p, `SELECT * FROM wpp_session_state WHERE account_id = ? AND peer_kind = ? AND peer_id = ? LIMIT 1`, [opts.accountId, opts.peerKind, opts.peerId]);
@@ -399,6 +451,7 @@ export function createMysqlAdapter(cfg) {
                 record.pending_count ?? 0,
             ]);
         },
+        // ===== API call audit =====
         async logApiCall(record) {
             const p = getPool();
             await p.query(`INSERT INTO wpp_api_calls
@@ -426,6 +479,7 @@ export function createMysqlAdapter(cfg) {
                 where.push("endpoint = ?");
                 params.push(opts.endpoint);
             }
+            // clamp limit 防 DoS
             const safeLimit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
             const sql = `SELECT * FROM wpp_api_calls` +
                 (where.length ? ` WHERE ${where.join(" AND ")}` : "") +
@@ -440,8 +494,10 @@ export function createMysqlAdapter(cfg) {
                 latency_ms: r.latency_ms == null ? null : Number(r.latency_ms),
             }));
         },
+        // ===== Account registry state (G2-3 持久化) =====
         async upsertAccount(record) {
             const p = getPool();
+            // config_json 已 JSON.stringify 过; 若未 stringify 则直接传 (mysql2 会自动)
             const cfgJson = record.config_json === undefined || record.config_json === null
                 ? null
                 : typeof record.config_json === "string"
@@ -477,6 +533,7 @@ export function createMysqlAdapter(cfg) {
             const first = firstRow(rows);
             return first ? rowToAccount(first) : null;
         },
+        // ====== v1.3.76 Jargon (黑话) ======
         async saveJargonTerm(record) {
             const p = getPool();
             await queryWithTimeout(p, `INSERT INTO wpp_jargon_terms
@@ -520,6 +577,7 @@ export function createMysqlAdapter(cfg) {
         },
     };
 }
+/** wpp_accounts row → AccountRecord (脱敏不在这层做, 上层只存非敏感字段) */
 function rowToAccount(r) {
     return {
         account_id: String(r.account_id),
@@ -557,6 +615,7 @@ function rowToMessage(r) {
         ts: r.ts instanceof Date ? Math.floor(r.ts.getTime() / 1000) : Number(r.ts ?? 0),
     };
 }
+/** 测试用 — 暴露内部 ensureColumn/ensureIndex/row 映射 helpers (供无 MySQL 环境单测纯函数) */
 export const _internal = {
     ensureColumn,
     ensureIndex,
@@ -565,6 +624,7 @@ export const _internal = {
     rowToMessage,
     rowToAccount,
 };
+/** 关 pool (test cleanup) */
 export async function closeMysqlForTest(adapter) {
     try {
         await adapter.close();
@@ -573,3 +633,4 @@ export async function closeMysqlForTest(adapter) {
         error("closeMysqlForTest failed", e);
     }
 }
+//# sourceMappingURL=mysql.js.map
