@@ -27,6 +27,47 @@
 //   - 范围 [0.1, 1.0]
 import { warn } from "../core/logger.js";
 import { callJudge, resolveJudgeCreds } from "../llm-judge.js";
+/** v1.6.x 心流学习参数缺省表 (代码默认; schema default 与 accounts JSON 缺省保持一致) */
+export const HF_LEARNING_DEFAULTS = {
+    enabled: false,
+    minSample: 10,
+    lowEngageRate: 0.15,
+    highEngageRate: 0.5,
+    step: 0.05,
+    bandMin: 0.3,
+    bandMax: 0.9,
+    sampleWindow: 20,
+    observeWindowSec: 600,
+    minChangeCooldownSec: 4 * 3600,
+    sweepIntervalSec: 300,
+    staleJudgedMaxSec: 1800,
+};
+/** v1.6.x: 合并账号 learning 配置与缺省 (enabled 取配置或缺省) */
+export function resolveHfLearning(cfg) {
+    const l = cfg?.learning;
+    const D = HF_LEARNING_DEFAULTS;
+    return {
+        enabled: l?.enabled ?? D.enabled,
+        minSample: l?.minSample ?? D.minSample,
+        lowEngageRate: l?.lowEngageRate ?? D.lowEngageRate,
+        highEngageRate: l?.highEngageRate ?? D.highEngageRate,
+        step: l?.step ?? D.step,
+        bandMin: l?.bandMin ?? D.bandMin,
+        bandMax: l?.bandMax ?? D.bandMax,
+        sampleWindow: l?.sampleWindow ?? D.sampleWindow,
+        observeWindowSec: l?.observeWindowSec ?? D.observeWindowSec,
+        minChangeCooldownSec: l?.minChangeCooldownSec ?? D.minChangeCooldownSec,
+        sweepIntervalSec: l?.sweepIntervalSec ?? D.sweepIntervalSec,
+        staleJudgedMaxSec: l?.staleJudgedMaxSec ?? D.staleJudgedMaxSec,
+    };
+}
+/** v1.6.x: 群是否在心流白名单 (空数组=全放行; 与 checkHeartflowGate 白名单子句同语义, 供 sweep 过滤) */
+export function isHfGroupAllowed(chatId, cfg) {
+    const wl = cfg.whitelistGroups;
+    if (!wl || wl.length === 0)
+        return true;
+    return wl.includes(chatId);
+}
 export function defaultHeartflowConfig() {
     return {
         enabled: false,

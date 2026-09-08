@@ -370,6 +370,72 @@
                 "type": "boolean",
                 "default": false,
                 "description": "v1.5.0 B-fix 20:06 老板拍板 B (3 层分层架构): 心流独立 trigger 开关. true=enrichBatch 写库后异步触发心流, 绕过 requireAtMention/groupPolicy (仅看 whitelistGroups + heartflow gate). 默认 false 保持现有行为兼容. 设计: 解耦 AI 主动观察与 AI 被动响应 (@bot)."
+              },
+              "learning": {
+                "type": "object",
+                "description": "v1.6.x HEARTFLOW-FEEDBACK: per-群双向自适应调阈 (反馈闭环, 只对白名单群). schema default 全关/全缺省 (enabled=false) 保持旧行为; 生产 accounts JSON 显式开 enabled=true 即安全灰度 (样本满前阈值不动). learned 阈值落 DB (wpp_hf_group_state) 不回写 JSON",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "总开关 (默认 false; 生产 accounts/default.json 显式 true)"
+                  },
+                  "minSample": {
+                    "type": "number",
+                    "default": 10,
+                    "description": "最小样本量 (不足=不调阈, 自然灰度)"
+                  },
+                  "lowEngageRate": {
+                    "type": "number",
+                    "default": 0.15,
+                    "description": "接话率 ≤ 此值 → 上调阈值 (更克制)"
+                  },
+                  "highEngageRate": {
+                    "type": "number",
+                    "default": 0.5,
+                    "description": "接话率 ≥ 此值 → 下调阈值 (更主动)"
+                  },
+                  "step": {
+                    "type": "number",
+                    "default": 0.05,
+                    "description": "单次步长上限"
+                  },
+                  "bandMin": {
+                    "type": "number",
+                    "default": 0.3,
+                    "description": "硬区间下限"
+                  },
+                  "bandMax": {
+                    "type": "number",
+                    "default": 0.9,
+                    "description": "硬区间上限"
+                  },
+                  "sampleWindow": {
+                    "type": "number",
+                    "default": 20,
+                    "description": "参与统计的最近 closed 样本数 (滚窗)"
+                  },
+                  "observeWindowSec": {
+                    "type": "number",
+                    "default": 600,
+                    "description": "观察窗时长 (秒): 心流回复发出后多久内有人类消息 = engaged"
+                  },
+                  "minChangeCooldownSec": {
+                    "type": "number",
+                    "default": 14400,
+                    "description": "相邻两次阈值变更最小间隔 (秒, 防抖)"
+                  },
+                  "sweepIntervalSec": {
+                    "type": "number",
+                    "default": 300,
+                    "description": "sweep 周期 (秒)"
+                  },
+                  "staleJudgedMaxSec": {
+                    "type": "number",
+                    "default": 1800,
+                    "description": "judged 无发送结果呆账上限 (秒)"
+                  }
+                }
               }
             }
           },

@@ -112,6 +112,98 @@ export interface DbAdapter {
   getJargonTerms(accountId: string, groupId: string, limit?: number): Promise<JargonTermRecord[]>;
   /** 查某词条是否存在 */
   hasJargonTerm(accountId: string, groupId: string, term: string): Promise<boolean>;
+
+  // ====== v1.6.x HEARTFLOW-FEEDBACK (心流反馈闭环) ======
+  /** judge 通过落行 (INSERT IGNORE, dup 保留首次决策) */
+  recordHfJudged(record: HfLedgerRecord): Promise<void>;
+  /** judged → sent (guard: 仅 judged 可推进, 防 deliver 双调重置窗) */
+  setHfLedgerSent(
+    accountId: string,
+    inboundMsgId: string,
+    sentAtSec: number,
+    windowExpiresAtSec: number,
+  ): Promise<void>;
+  /** judged → suppressed (guard: 仅 judged) */
+  setHfLedgerSuppressed(
+    accountId: string,
+    inboundMsgId: string,
+    reason: string,
+    atSec: number,
+  ): Promise<void>;
+  /** 人类接话: sent 开窗且未定 → engaged=1 + closed (立即收敛) */
+  markHfEngaged(accountId: string, groupId: string, atSec: number): Promise<void>;
+  /** sweep: sent 到期无人接话 → ignored (engaged=0) + closed */
+  closeHfExpiredWindows(accountId: string, atSec: number): Promise<void>;
+  /** sweep: judged 无发送结果超上限 → suppressed (呆账收敛) */
+  expireHfStaleJudged(
+    accountId: string,
+    atSec: number,
+    judgedBeforeSec: number,
+  ): Promise<void>;
+  /** 滚窗样本: 最近 limit 条已收敛 closed 的 engaged 值 (engaged 非空=排除 suppressed) */
+  getHfClosedRecent(
+    accountId: string,
+    groupId: string,
+    limit: number,
+  ): Promise<HfClosedSample[]>;
+  /** upsert 每群 learned 阈值状态 */
+  upsertHfGroupState(record: HfGroupStateRecord): Promise<void>;
+  /** 读单群状态 (无则 null) */
+  getHfGroupState(accountId: string, groupId: string): Promise<HfGroupStateRecord | null>;
+  /** 列账号所有群状态 (供 /heartflow status 只读摘要) */
+  listHfGroupStates(accountId: string): Promise<HfGroupStateRecord[]>;
+  /** 阈值变更审计落行 */
+  logHfThresholdChange(record: HfThresholdAuditRecord): Promise<void>;
+  /** sweep: 有已收敛样本的群清单 (since 之后) */
+  getHfLedgerDistinctClosedGroups(accountId: string, sinceSec: number): Promise<string[]>;
+}
+
+/** v1.6.x: 心流 ledger 行类型 (wpp_hf_ledger, 落行字段; 列见 DDL) */
+export interface HfLedgerRecord {
+  account_id: string;
+  inbound_msg_id: string;
+  new_msg_id?: string | null;
+  group_id: string;
+  from_wxid?: string | null;
+  msg_type?: string | null;
+  content_head?: string | null;
+  judge_overall?: number | null;
+  dim_r?: number | null;
+  dim_w?: number | null;
+  dim_s?: number | null;
+  dim_t?: number | null;
+  dim_c?: number | null;
+  effective_threshold?: number | null;
+  energy?: number | null;
+  judged_at: number; // epoch sec
+}
+
+/** v1.6.x: 每群 learned 阈值状态 (wpp_hf_group_state) */
+export interface HfGroupStateRecord {
+  account_id: string;
+  group_id: string;
+  learned_threshold?: number | null;
+  last_change_at?: number | null;
+  last_change_old?: number | null;
+  last_change_new?: number | null;
+  last_change_reason?: string | null;
+}
+
+/** v1.6.x: 阈值变更审计行 (wpp_hf_threshold_audit) */
+export interface HfThresholdAuditRecord {
+  account_id: string;
+  group_id: string;
+  old_threshold?: number | null;
+  new_threshold: number;
+  sample_total: number;
+  sample_engaged: number;
+  reason?: string | null;
+}
+
+/** v1.6.x: 已收敛 closed 样本 (滚窗统计用; engaged 0/1) */
+export interface HfClosedSample {
+  engaged: number; // 0 | 1
+  closed_at?: number | null;
 }
 
 /** v1.3.76: 群黑话词条 row (wpp_jargon_terms) */

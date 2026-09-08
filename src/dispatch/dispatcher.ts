@@ -31,7 +31,8 @@ import { extractReferencedFromReplyContext, extractReferencedFromApp } from "../
 import { classifyGroupIntent, decideIntentWithLlm, needsLlm, normalizeTriggerText, toIntentCandidate } from "./intent-llm.js";
 import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
 import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
-import { recordRawMessage, type HeartflowConfig } from "../inbound/heartflow.js";
+import { recordRawMessage, resolveHfLearning, HF_LEARNING_DEFAULTS, type HeartflowConfig } from "../inbound/heartflow.js";
+import { persistHfSendOutcome } from "../inbound/heartflow-learn.js";
 import { getGroupMood, buildMoodSystemPrompt } from "../inbound/affection.js";
 // re-export (兼容旧测试/外部引用) — classifyGroupIntent/GroupIntent 定义在 intent-llm.ts
 export { classifyGroupIntent, type GroupIntent } from "./intent-llm.js";
@@ -923,6 +924,12 @@ async function dispatchOne(
             createtime: shouldQuote ? msg.ts : undefined,
             innerType: shouldQuote ? msg.msgType : undefined,
           });
+          // v1.6.x HEARTFLOW-LEARN: 仅心流主动回复 send 后落账 (fire-and-forget, 不阻断 deliver 返回)
+          if (msg.trigger === "heartflow") {
+            const hfCfg = getDefaultAccountRegistry().get(msg.accountId)?.config.heartflow;
+            const observeSec = hfCfg ? resolveHfLearning(hfCfg).observeWindowSec : HF_LEARNING_DEFAULTS.observeWindowSec;
+            void persistHfSendOutcome(msg.accountId, msg.msgId, result, Math.floor(Date.now() / 1000), observeSec);
+          }
           info(`[WPP DEBUG-DELIVER] sendAiReply done: ok=${result.ok} error=${result.error ?? "none"} msgId=${result.msgId ?? ""}`);
           return result;
         },

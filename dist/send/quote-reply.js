@@ -23,7 +23,7 @@ import { postWppJson } from "../api/client.js";
 import { buildQuoteReplyXml } from "./quote-xml.js";
 import { resolveQuoteSvrid } from "../inbound/quote-svrid.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
-import { info, warn, formatErr } from "../core/logger.js";
+import { debug, warn, formatErr } from "../core/logger.js";
 /**
  * v1.3.16 OUTBOUND-PERSIST: 引用回复成功后入库 (老板拍板 "任意渠道发送都要入库, 以便引用 bot 消息")。
  * sendAiReply 有引用时走 quoteReply (AI 引用回复主路径), 之前未入库 → 引用不到 bot 的回复。
@@ -43,7 +43,7 @@ async function persistQuoteReply(acct, toWxid, content, resp) {
             msg_type: "quote",
             content,
         });
-        info(`[WPP v1.3.16 OUTBOUND-PERSIST] saved quote reply → ${toWxid} msgId=${String(d.msgId ?? "")}`);
+        debug(`[WPP v1.3.16 OUTBOUND-PERSIST] saved quote reply → ${toWxid} msgId=${String(d.msgId ?? "")}`);
     }
     catch (e) {
         warn(`[WPP v1.3.16 OUTBOUND-PERSIST] persist quote reply failed (non-fatal): ${formatErr(e)}`);
@@ -180,9 +180,10 @@ export async function quoteReply(params) {
     const xml = buildQuoteReplyXml(finalContent, quote);
     const state = getDefaultAccountRegistry().get(acct);
     const cfg = state?.config;
-    info(`[WPP v1.2.0 QUOTE-TITLE-FIX] quoteReply ShareLink type=57: to=${toWxid} svrid=${svrid} (title=AI reply + svrid+fromusr refermsg)`);
-    info(`[WPP v1.2.0 QUOTE-TITLE-FIX] quoteReply XML (first 800 chars): ${xml.slice(0, 800).replace(/\n/g, "\\n")}`);
-    info(`[WPP v1.2.0 QUOTE-TITLE-FIX] quoteReply XML totalLen=${xml.length}`);
+    // QUOTE-TITLE-FIX 诊断三连 (每引用回复必打, 刷屏) → 全部降 debug, 排查时开 WPP_DEBUG
+    debug(`[WPP v1.2.0 QUOTE-TITLE-FIX] quoteReply ShareLink type=57: to=${toWxid} svrid=${svrid} (title=AI reply + svrid+fromusr refermsg)`);
+    debug(`[WPP v1.2.0 QUOTE-TITLE-FIX] quoteReply XML (first 800 chars): ${xml.slice(0, 800).replace(/\n/g, "\\n")}`);
+    debug(`[WPP v1.2.0 QUOTE-TITLE-FIX] quoteReply XML totalLen=${xml.length}`);
     // vendor /Msg/Quote 永久 ret=-2 不可用 → 走 /Msg/ShareLink + Type=5 + 自构造 XML (gewe 范式)
     const resp = await postWppJson(cfg?.apiBaseUrl ?? "", "/Msg/ShareLink", {
         ToWxid: toWxid,
@@ -195,10 +196,16 @@ export async function quoteReply(params) {
     });
     const d = (resp.Data ?? {});
     const baseRespRet = d.BaseResponse?.ret;
-    info(`[WPP v1.2.0 REVERT] vendor resp: Code=${resp.Code} ret=${baseRespRet} msgId=${d.msgId ?? 0} newMsgId=${d.newMsgId ?? 0} type=${d.type ?? 0}`);
     // 判据陷阱: Code=0 只是 HTTP 200, 真正成功看 Data.BaseResponse.ret === 0 (msgId=0 时 Code=0 不代表成功)
     // v1.3.57 P2-3 (2026-08-13 交付审阅): Code=200 也视为成功 (与 outbound.ts isSendOk 对齐)
     const ok = (resp.Code === 0 || resp.Code === 200) && (baseRespRet === 0 || baseRespRet === undefined);
+    // vendor 回包: 成功只 debug (发送成功由 dispatcher sendAiReply done 单条 info 汇总), 失败 warn 提级
+    if (ok) {
+        debug(`[WPP v1.2.0 REVERT] vendor resp: Code=${resp.Code} ret=${baseRespRet} msgId=${d.msgId ?? 0} newMsgId=${d.newMsgId ?? 0} type=${d.type ?? 0}`);
+    }
+    else {
+        warn(`[WPP v1.2.0 REVERT] vendor resp FAILED: Code=${resp.Code} ret=${baseRespRet} msgId=${d.msgId ?? 0} newMsgId=${d.newMsgId ?? 0} type=${d.type ?? 0}`);
+    }
     if (ok)
         await persistQuoteReply(acct, toWxid, content, resp);
     return {

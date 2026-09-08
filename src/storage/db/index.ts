@@ -25,6 +25,20 @@ export {
 } from "./messages.js";
 export { initDbPool, pingDb, initSchema, closeDb } from "./connection.js";
 export { saveJargonTerm, getJargonTerms, hasJargonTerm } from "./jargon.js";
+export {
+  recordHfJudged,
+  setHfLedgerSent,
+  setHfLedgerSuppressed,
+  markHfEngaged,
+  closeHfExpiredWindows,
+  expireHfStaleJudged,
+  getHfClosedRecent,
+  upsertHfGroupState,
+  getHfGroupState,
+  listHfGroupStates,
+  logHfThresholdChange,
+  getHfLedgerDistinctClosedGroups,
+} from "./heartflow.js";
 export { upsertAccount, getAccounts, getAccount } from "./accounts.js";
 export {
   createMysqlAdapter,
