@@ -135,3 +135,66 @@ CREATE TABLE IF NOT EXISTS wpp_jargon_terms (
   INDEX idx_group (account_id, group_id),
   INDEX idx_term (term)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 心流反馈闭环表 (v1.6.x 2026-09-07 新增: 心流「应触发发送」决策 + 发送结果 + 接话观察窗)
+-- 数据源: heartflow-learn.ts recordHfJudged / dispatcher persistHfSendOutcome / sweep 关窗
+-- 用途: per-群自适应调阈的样本库 + 审计回看. 生产建表唯一途径 = applyMigrations (deploy 不拷 db/)
+-- 时间全用 epoch 秒 (INT UNSIGNED), 对齐 wpp_messages.create_time 语义
+CREATE TABLE IF NOT EXISTS wpp_hf_ledger (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  account_id VARCHAR(64) NOT NULL,
+  inbound_msg_id VARCHAR(128) NOT NULL,        -- msg.msgId (parser 保证非空; 跨通道稳定)
+  new_msg_id VARCHAR(128) NULL,                -- 审计用 (可为 '')
+  group_id VARCHAR(128) NOT NULL,              -- chatId (xxx@chatroom)
+  from_wxid VARCHAR(128) NULL,
+  msg_type VARCHAR(32) NULL,
+  content_head VARCHAR(512) NULL,              -- content 归一化后前 256 字符
+  judge_overall DECIMAL(6,4) NULL,             -- 0..1
+  dim_r DECIMAL(5,2) NULL,                     -- 0..10 (relevance)
+  dim_w DECIMAL(5,2) NULL,                     -- willingness
+  dim_s DECIMAL(5,2) NULL,                     -- social
+  dim_t DECIMAL(5,2) NULL,                     -- timing
+  dim_c DECIMAL(5,2) NULL,                     -- continuity
+  effective_threshold DECIMAL(6,4) NULL,       -- judge 时实际阈值 (learned ?? 账号级)
+  energy DECIMAL(5,3) NULL,                    -- judge 前精力
+  status ENUM('judged','sent','suppressed','closed') NOT NULL DEFAULT 'judged',
+  suppressed_reason VARCHAR(96) NULL,          -- dedup/ack-template/empty/no-deliver-outcome/send-failed
+  engaged TINYINT(1) NULL,                     -- NULL=suppressed 排除样本外; 1=engaged; 0=ignored
+  judged_at INT UNSIGNED NOT NULL,
+  sent_at INT UNSIGNED NULL,
+  window_expires_at INT UNSIGNED NULL,         -- = sent_at + observeWindowSec
+  closed_at INT UNSIGNED NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_hf_acct_msg (account_id, inbound_msg_id),
+  KEY idx_hf_group_status (account_id, group_id, status),
+  KEY idx_hf_open (account_id, status, window_expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 心流每群自适应状态 (v1.6.x): 1 行/群, learned 阈值落这里 (高频写 DB, 不回写 accounts JSON 防 fs.watch 抖动)
+CREATE TABLE IF NOT EXISTS wpp_hf_group_state (
+  account_id VARCHAR(64) NOT NULL,
+  group_id VARCHAR(128) NOT NULL,
+  learned_threshold DECIMAL(6,4) NULL,         -- NULL=回落账号级 replyThreshold
+  last_change_at INT UNSIGNED NULL,
+  last_change_old DECIMAL(6,4) NULL,
+  last_change_new DECIMAL(6,4) NULL,
+  last_change_reason VARCHAR(128) NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (account_id, group_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 心流阈值变更审计 (v1.6.x): 每次变更插一行 (满足「变更留痕」护栏)
+CREATE TABLE IF NOT EXISTS wpp_hf_threshold_audit (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  account_id VARCHAR(64) NOT NULL,
+  group_id VARCHAR(128) NOT NULL,
+  old_threshold DECIMAL(6,4) NULL,
+  new_threshold DECIMAL(6,4) NOT NULL,
+  sample_total INT UNSIGNED NOT NULL,          -- 触发本次变更的样本基数
+  sample_engaged INT UNSIGNED NOT NULL,
+  reason VARCHAR(255) NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_hf_audit (account_id, group_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

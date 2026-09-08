@@ -1,5 +1,13 @@
-import { info, warn, formatErr } from "../core/logger.js";
+// src/inbound/debouncer.ts - 1.5s timer-based batch flush
+// 关键: VOICE/系统消息 bypass; key = accountId:peerKind:peerId:fromWxid; .unref() 防保活
+import { debug, warn, formatErr } from "../core/logger.js";
 import { DEFAULT_DEBOUNCE_MS } from "../core/constants.js";
+/**
+ * Per-key inbox. Same sender-target within intervalMs gets merged; on flush, batch emitted.
+ * 触发顺序: 入队 → 如果已有 timer 则 reset → 设新 timer;
+ *           timer fires → 取 batch → reset key;
+ *           VOICE / SYSTEM / control → 直接 flush
+ */
 export class WppInboundDebouncer {
     intervalMs;
     timers = new Map();
@@ -16,9 +24,11 @@ export class WppInboundDebouncer {
     key(msg) {
         return `${msg.accountId}:${msg.peerKind}:${msg.peerId}:${msg.fromWxid}`;
     }
+    /** 入队 (分组到 batch, 起 timer) */
     enqueue(msg) {
+        // 系统消息 / VOICE / control 直接 flush
         if (msg.msgType === 10000 ||
-            msg.msgType === 34 ||
+            msg.msgType === 34 /* VOICE (silk) */ ||
             msg.msgType === 10002 ||
             (this.isControlCommand && this.isControlCommand(msg))) {
             void this.flushBatch([msg]);
@@ -34,6 +44,7 @@ export class WppInboundDebouncer {
         const timer = setTimeout(() => {
             void this.flushKey(k);
         }, this.intervalMs);
+        // 不保活
         timer.unref?.();
         this.timers.set(k, timer);
     }
@@ -59,19 +70,22 @@ export class WppInboundDebouncer {
                 this.onError(e, batch);
         }
     }
+    /** 强制 flush (例如 shutdown) */
     async flushAll() {
         const keys = Array.from(this.buffers.keys());
         for (const k of keys) {
             await this.flushKey(k);
         }
-        info(`debouncer flushAll: ${keys.length} keys`);
+        debug(`debouncer flushAll: ${keys.length} keys`);
     }
+    /** 清掉全部 pending (测试用) */
     clear() {
         for (const t of this.timers.values())
             clearTimeout(t);
         this.timers.clear();
         this.buffers.clear();
     }
+    /** 当前 buffered 条数 (测试 + 监控) */
     size() {
         let n = 0;
         for (const list of this.buffers.values())
@@ -79,3 +93,4 @@ export class WppInboundDebouncer {
         return n;
     }
 }
+//# sourceMappingURL=debouncer.js.map

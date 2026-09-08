@@ -103,7 +103,8 @@ export class WechatpadproWsClient {
                 // 握手帧: {"Code":0,"Success":true,"Message":"实时消息通道已就绪","Data":{"timestamp":...,"type":"connection_ready"}}
                 //         跳过 — 不是真消息推送
                 if (type === "connection_ready") {
-                    log.info("ws recv: connection_ready (handshake ack)");
+                    // 与 "ws connected" 重复, 降 debug
+                    log.debug("ws recv: connection_ready (handshake ack)");
                     return;
                 }
                 // 其他帧 (有 newMsgId / Wxid / MessageType 等) → 触发 SyncMessage 拉取
@@ -157,12 +158,8 @@ export class WechatpadproWsClient {
             const newKey = sync?.Data?.KeyBuf?.buffer;
             const list = sync?.Data?.CmdList?.List ?? [];
             const count = list.length;
-            if (count > 0) {
-                log.info(`ws sync pulled ${count} message(s): reason=${reason} synckey=${prevSynckey ? "incremental" : "full"}`);
-            }
-            else {
-                log.debug(`ws sync pulled 0 messages: reason=${reason} synckey=${prevSynckey ? "incremental" : "full"}`);
-            }
+            // ws 轮询/推送每次都会到, 有消息也会由下游 enrich/dispatch 落日志 → 一律 debug
+            log.debug(`ws sync pulled ${count} message(s): reason=${reason} synckey=${prevSynckey ? "incremental" : "full"}`);
             // P1 (2026-08-23): 先 enqueue 消息, 再保存 synckey —
             //   之前先 saveSynckey 再处理, 崩溃 (SIGKILL/OOM) 窗口内消息未落库但游标已前进 → 永久丢失。
             //   DB 唯一键幂等 (wpp_messages UNIQUE), 重拉安全 (at-least-once)。

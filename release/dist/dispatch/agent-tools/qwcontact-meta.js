@@ -1,3 +1,4 @@
+// src/dispatch/agent-tools/qwcontact-meta.ts - QWContact tag (企业联系人, 3)
 import { Type } from "typebox";
 import { makeWppQWContact } from "../../send/index.js";
 import { getDefaultAccountRegistry } from "../../account-state.js";
@@ -26,3 +27,4 @@ export const QW_CONTACT_META = {
         (username, v1) => getQwc().qwAddContact(username, v1),
     ],
 };
+//# sourceMappingURL=qwcontact-meta.js.map

@@ -9,7 +9,7 @@ import { CHANNEL_ID, PLUGIN_NAME, PLUGIN_VERSION, DEFAULT_BOT_NICKNAME } from ".
 import { loadGlobalConfigAsync, loadAccountConfigAsync, listAccountIds, isConfigured } from "./config.js";
 import { listAccountIds as helperListAccountIds, resolveAccount, defaultAccountId, isConfigured as helperIsConfigured, unconfiguredReason, describeAccount, } from "./config-helpers.js";
 import { getDefaultAccountRegistry } from "./account-state.js";
-import { closeDb, initDbPool, getSynckey, saveSynckey } from "./db.js";
+import { closeDb, initDbPool, getSynckey, saveSynckey, listHfGroupStates } from "./db.js";
 import { WechatpadproWsClient } from "./ws-client.js";
 import { WechatpadproWebhookServer } from "./webhook-receiver.js";
 import { createWppInboundHandler } from "./inbound/handler.js";
@@ -24,6 +24,7 @@ import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairi
 import { resolveGlobalConfig, resolveSyncConfig } from "./core/runtime-config.js";
 import { resolveAiConfig } from "./config-ai.js";
 import { defaultHeartflowConfig } from "./inbound/heartflow.js";
+import { loadLearnedThresholds, startHeartflowSweep } from "./inbound/heartflow-learn.js";
 import { defaultJargonConfig } from "./inbound/jargon.js";
 import { defaultAffectionConfig } from "./inbound/affection.js";
 // 每账号 triggerConfig/triggerCtx 可变容器: handler 闭包持有对象引用, 热重载 update 字段即刻生效
@@ -238,7 +239,27 @@ async function handleFeatureCommand(feature, args, send, accountId) {
         if (feature === "heartflow") {
             const th = typeof fc?.replyThreshold === "number" ? fc.replyThreshold : 0.6;
             const wl = Array.isArray(fc?.whitelistGroups) ? fc.whitelistGroups.length : 0;
-            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个`;
+            const lrEnabled = Boolean(fc?.learning?.enabled);
+            let learnLine = `\n自适应调阈: ${lrEnabled ? "✅ 开启" : "❌ 关闭"}`;
+            try {
+                const learned = await listHfGroupStates(accountId);
+                if (learned.length > 0) {
+                    learnLine += `\n已学阈值群 (${learned.length}):\n` + learned
+                        .map((s) => {
+                        const cur = s.learned_threshold == null ? "回落账号级" : Number(s.learned_threshold).toFixed(2);
+                        const last = s.last_change_new == null ? "" : ` (上次 ${s.last_change_old == null ? "账号级" : Number(s.last_change_old).toFixed(2)}→${Number(s.last_change_new).toFixed(2)})`;
+                        return `- ${s.group_id} → ${cur}${last}`;
+                    })
+                        .join("\n");
+                }
+                else {
+                    learnLine += " (暂无已学阈值 — 样本收集中, 满 10 条才自动调)";
+                }
+            }
+            catch (e) {
+                learnLine += " (读学习状态失败)";
+            }
+            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}`;
         }
         await send(`${label} (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}${extra}\n用法: /${feature} on|off|status`);
         return true;
@@ -495,6 +516,13 @@ _agentId = "main") {
     const inboundHandler = runtimeInboundHandlers.get(accountId);
     // shutdown 时 flush 缓冲消息 (幂等: 只 attach 一次, 复用同 handler)
     state.attachInboundFlush(() => inboundHandler.flushAll());
+    // v1.6.x HEARTFLOW-FEEDBACK: 加载 per-群 learned 阈值进内存 + 启动每账号 sweep (幂等; stop 时 state 统一 clear)
+    //   幂等性由 startHeartflowSweep 内部 clear-then-reschedule 保证 (含 in-flight race 已启动再进)
+    void loadLearnedThresholds(accountId).then((n) => {
+        if (n > 0)
+            log.info(`[WPP HF] learned thresholds loaded: account=${accountId} groups=${n}`);
+    });
+    startHeartflowSweep(state, accountId, () => runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig());
     // 幂等 early-return: 任一 ws/webhook 已 attach 即视为已启动 (防并发 start 双重连接/端口占用)
     if (state.wsClient || state.webhookServer) {
         log.info(`account partially/fully started (in-flight race safe return): ${accountId} ws=${!!state.wsClient} webhook=${!!state.webhookServer}`);
@@ -589,7 +617,7 @@ _agentId = "main") {
         });
         // 业务回调: 完整消息 → 直接 handler
         srv.addPath(businessPath, async (payload) => {
-            log.info(`business callback: received payload (top keys=${Object.keys(payload ?? {}).join(",")})`);
+            log.debug(`business callback: received payload (top keys=${Object.keys(payload ?? {}).join(",")})`);
             await inboundHandler.handle(payload);
         });
         // v1.3.63 P1: 每个账号都 attach 自己的 paths (stop 时 removePath 只摘自己).

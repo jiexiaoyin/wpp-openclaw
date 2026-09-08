@@ -141,7 +141,7 @@ export async function enrichImageMessageFromV1Cdn(ctx, cdnCtx, md5) {
         const filename = `${sanitizeFilenamePart(md5)}.jpg`;
         const ossKey = buildOssKey(ctx.accountId, "images", filename);
         const url = await uploadToOss(oss, tmpPath, ossKey);
-        log.info(`[WPP v1.2.5 IMAGE-CDN-DOWNLOAD] ok: ${url} (${img.length} bytes, variant=${cdnCtx.variant ?? "?"})`);
+        log.debug(`[WPP v1.2.5 IMAGE-CDN-DOWNLOAD] ok: ${url} (${img.length} bytes, variant=${cdnCtx.variant ?? "?"})`);
         return { mediaUrl: url, mediaSize: img.length };
     }
     catch (e) {

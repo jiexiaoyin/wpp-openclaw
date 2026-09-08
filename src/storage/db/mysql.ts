@@ -17,6 +17,10 @@ import type {
   ChatroomRecord,
   ContactRecord,
   DbAdapter,
+  HfClosedSample,
+  HfGroupStateRecord,
+  HfLedgerRecord,
+  HfThresholdAuditRecord,
   JargonTermRecord,
   MessageRecord,
   ResolvedDbConfig,
@@ -212,6 +216,73 @@ async function applyMigrations(pool: Pool): Promise<void> {
       synckey VARCHAR(1024) NOT NULL,
       updated_at INT UNSIGNED NOT NULL DEFAULT 0,
       PRIMARY KEY (account_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // ====== v1.6.x HEARTFLOW-FEEDBACK (心流反馈闭环) ======
+  // 生产建表唯一途径 = applyMigrations (deploy-swap.sh 不拷 db/, schema.sql 只在 dev 生效)
+  // 纯增量 CREATE IF NOT EXISTS, 幂等, 每 boot 3 条空执行. 表无 FK, 不 ALTER 旧表.
+  // 心流「应触发发送」决策 + 发送结果 + 接话观察窗 (per-群自适应调阈样本库)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wpp_hf_ledger (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      account_id VARCHAR(64) NOT NULL,
+      inbound_msg_id VARCHAR(128) NOT NULL,
+      new_msg_id VARCHAR(128) NULL,
+      group_id VARCHAR(128) NOT NULL,
+      from_wxid VARCHAR(128) NULL,
+      msg_type VARCHAR(32) NULL,
+      content_head VARCHAR(512) NULL,
+      judge_overall DECIMAL(6,4) NULL,
+      dim_r DECIMAL(5,2) NULL,
+      dim_w DECIMAL(5,2) NULL,
+      dim_s DECIMAL(5,2) NULL,
+      dim_t DECIMAL(5,2) NULL,
+      dim_c DECIMAL(5,2) NULL,
+      effective_threshold DECIMAL(6,4) NULL,
+      energy DECIMAL(5,3) NULL,
+      status ENUM('judged','sent','suppressed','closed') NOT NULL DEFAULT 'judged',
+      suppressed_reason VARCHAR(96) NULL,
+      engaged TINYINT(1) NULL,
+      judged_at INT UNSIGNED NOT NULL,
+      sent_at INT UNSIGNED NULL,
+      window_expires_at INT UNSIGNED NULL,
+      closed_at INT UNSIGNED NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_hf_acct_msg (account_id, inbound_msg_id),
+      KEY idx_hf_group_status (account_id, group_id, status),
+      KEY idx_hf_open (account_id, status, window_expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  // 每群 learned 阈值状态 (learned 落 DB, 不回写 accounts JSON 防 fs.watch 抖动)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wpp_hf_group_state (
+      account_id VARCHAR(64) NOT NULL,
+      group_id VARCHAR(128) NOT NULL,
+      learned_threshold DECIMAL(6,4) NULL,
+      last_change_at INT UNSIGNED NULL,
+      last_change_old DECIMAL(6,4) NULL,
+      last_change_new DECIMAL(6,4) NULL,
+      last_change_reason VARCHAR(128) NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (account_id, group_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  // 阈值变更审计 (每次变更插一行, 满足「变更留痕」护栏)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wpp_hf_threshold_audit (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      account_id VARCHAR(64) NOT NULL,
+      group_id VARCHAR(128) NOT NULL,
+      old_threshold DECIMAL(6,4) NULL,
+      new_threshold DECIMAL(6,4) NOT NULL,
+      sample_total INT UNSIGNED NOT NULL,
+      sample_engaged INT UNSIGNED NOT NULL,
+      reason VARCHAR(255) NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_hf_audit (account_id, group_id, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 }
@@ -731,6 +802,190 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       );
       return rows.length > 0;
     },
+
+    // ====== v1.6.x HEARTFLOW-FEEDBACK (心流反馈闭环) ======
+    // 全部幂等/带 status guard (仅 judged 可推进, 防 deliver 双调/竞态). adapter 不 catch, 错误由上层 catch 吞.
+    async recordHfJudged(record: HfLedgerRecord): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `INSERT IGNORE INTO wpp_hf_ledger
+         (account_id, inbound_msg_id, new_msg_id, group_id, from_wxid, msg_type, content_head,
+          judge_overall, dim_r, dim_w, dim_s, dim_t, dim_c, effective_threshold, energy,
+          status, judged_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'judged', ?, CURRENT_TIMESTAMP)`,
+        [
+          record.account_id,
+          record.inbound_msg_id,
+          record.new_msg_id ?? null,
+          record.group_id,
+          record.from_wxid ?? null,
+          record.msg_type ?? null,
+          record.content_head ?? null,
+          record.judge_overall ?? null,
+          record.dim_r ?? null,
+          record.dim_w ?? null,
+          record.dim_s ?? null,
+          record.dim_t ?? null,
+          record.dim_c ?? null,
+          record.effective_threshold ?? null,
+          record.energy ?? null,
+          record.judged_at,
+        ],
+      );
+    },
+    async setHfLedgerSent(
+      accountId,
+      inboundMsgId,
+      sentAtSec,
+      windowExpiresAtSec,
+    ): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `UPDATE wpp_hf_ledger SET status = 'sent', sent_at = ?, window_expires_at = ?
+         WHERE account_id = ? AND inbound_msg_id = ? AND status = 'judged'`,
+        [sentAtSec, windowExpiresAtSec, accountId, inboundMsgId],
+      );
+    },
+    async setHfLedgerSuppressed(accountId, inboundMsgId, reason, atSec): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `UPDATE wpp_hf_ledger SET status = 'suppressed', suppressed_reason = ?, closed_at = ?
+         WHERE account_id = ? AND inbound_msg_id = ? AND status = 'judged'`,
+        [reason, atSec, accountId, inboundMsgId],
+      );
+    },
+    async markHfEngaged(accountId, groupId, atSec): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `UPDATE wpp_hf_ledger SET engaged = 1, status = 'closed', closed_at = ?
+         WHERE account_id = ? AND group_id = ? AND status = 'sent'
+           AND engaged IS NULL AND window_expires_at IS NOT NULL AND window_expires_at > ?`,
+        [atSec, accountId, groupId, atSec],
+      );
+    },
+    async closeHfExpiredWindows(accountId, atSec): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `UPDATE wpp_hf_ledger SET status = 'closed', engaged = 0, closed_at = ?
+         WHERE account_id = ? AND status = 'sent' AND engaged IS NULL
+           AND window_expires_at IS NOT NULL AND window_expires_at <= ?`,
+        [atSec, accountId, atSec],
+      );
+    },
+    async expireHfStaleJudged(accountId, atSec, judgedBeforeSec): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `UPDATE wpp_hf_ledger SET status = 'suppressed', suppressed_reason = 'no-deliver-outcome', closed_at = ?
+         WHERE account_id = ? AND status = 'judged' AND judged_at <= ?`,
+        [atSec, accountId, judgedBeforeSec],
+      );
+    },
+    async getHfClosedRecent(accountId, groupId, limit): Promise<HfClosedSample[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT engaged, closed_at FROM wpp_hf_ledger
+         WHERE account_id = ? AND group_id = ? AND status = 'closed' AND engaged IS NOT NULL
+         ORDER BY closed_at DESC LIMIT ?`,
+        [accountId, groupId, Math.min(Math.max(limit, 1), 500)],
+      );
+      return rows.map((r) => ({
+        engaged: Number(r.engaged),
+        closed_at: r.closed_at == null ? null : Number(r.closed_at),
+      }));
+    },
+    async upsertHfGroupState(record: HfGroupStateRecord): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `INSERT INTO wpp_hf_group_state
+         (account_id, group_id, learned_threshold, last_change_at, last_change_old, last_change_new, last_change_reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           learned_threshold = VALUES(learned_threshold),
+           last_change_at = VALUES(last_change_at),
+           last_change_old = VALUES(last_change_old),
+           last_change_new = VALUES(last_change_new),
+           last_change_reason = VALUES(last_change_reason)`,
+        [
+          record.account_id,
+          record.group_id,
+          record.learned_threshold ?? null,
+          record.last_change_at ?? null,
+          record.last_change_old ?? null,
+          record.last_change_new ?? null,
+          record.last_change_reason ?? null,
+        ],
+      );
+    },
+    async getHfGroupState(accountId, groupId): Promise<HfGroupStateRecord | null> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT account_id, group_id, learned_threshold, last_change_at, last_change_old, last_change_new, last_change_reason
+         FROM wpp_hf_group_state WHERE account_id = ? AND group_id = ? LIMIT 1`,
+        [accountId, groupId],
+      );
+      const first = firstRow(rows);
+      return first ? rowToHfGroupState(first) : null;
+    },
+    async listHfGroupStates(accountId): Promise<HfGroupStateRecord[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT account_id, group_id, learned_threshold, last_change_at, last_change_old, last_change_new, last_change_reason
+         FROM wpp_hf_group_state WHERE account_id = ? ORDER BY group_id`,
+        [accountId],
+      );
+      return rows.map(rowToHfGroupState);
+    },
+    async logHfThresholdChange(record: HfThresholdAuditRecord): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `INSERT INTO wpp_hf_threshold_audit
+         (account_id, group_id, old_threshold, new_threshold, sample_total, sample_engaged, reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          record.account_id,
+          record.group_id,
+          record.old_threshold ?? null,
+          record.new_threshold,
+          record.sample_total,
+          record.sample_engaged,
+          record.reason ?? null,
+        ],
+      );
+    },
+    async getHfLedgerDistinctClosedGroups(accountId, sinceSec): Promise<string[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT DISTINCT group_id FROM wpp_hf_ledger
+         WHERE account_id = ? AND status = 'closed' AND engaged IS NOT NULL AND closed_at >= ?`,
+        [accountId, sinceSec],
+      );
+      return rows.map((r) => String(r.group_id));
+    },
+  };
+}
+
+/** wpp_hf_group_state row → HfGroupStateRecord */
+function rowToHfGroupState(r: RowDataPacket): HfGroupStateRecord {
+  return {
+    account_id: String(r.account_id),
+    group_id: String(r.group_id),
+    learned_threshold: r.learned_threshold == null ? null : Number(r.learned_threshold),
+    last_change_at: r.last_change_at == null ? null : Number(r.last_change_at),
+    last_change_old: r.last_change_old == null ? null : Number(r.last_change_old),
+    last_change_new: r.last_change_new == null ? null : Number(r.last_change_new),
+    last_change_reason: r.last_change_reason == null ? null : String(r.last_change_reason),
   };
 }
 

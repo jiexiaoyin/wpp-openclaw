@@ -54,6 +54,10 @@ function fmtFields(fields) {
     return parts.length ? " " + parts.join(" ") : "";
 }
 function emit(level, msg, fields) {
+    // 统一 DEBUG 门控: 函数式 debug() 与对象式 log.debug 一律只受 WPP_DEBUG=1 控制
+    // (此前 logObj.debug 漏门控 → ws 轮询等 debug 全量漏打刷屏)
+    if (level === "DEBUG" && process.env.WPP_DEBUG !== "1")
+        return;
     const line = `${new Date().toISOString()} ${level} ${LOG_TAG} ${msg}${fmtFields(fields)}`;
     if (level === "ERROR")
         console.error(line);

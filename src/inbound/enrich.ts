@@ -113,7 +113,8 @@ async function tryHeartflowAfterEnrich(
       },
       cfg,
     );
-    log.info(
+    // 触发成功才 info; 未触发(false)是常态噪音 → debug
+    (result.triggered ? log.info : log.debug)(
       `[WPP HEARTFLOW] independent trigger result: triggered=${result.triggered} reason="${result.reason}" chatId=${msg.chatroomId}`,
     );
   } catch (err) {
@@ -145,7 +146,9 @@ export async function enrichBatch(
     if (r.saved) saved++;
     else failed++;
   }
-  log.info(`enrichBatch: ${saved} saved, ${failed} failed (size=${batch.length})`);
+  // 每条入站消息都会落库 → 全部成功只 debug; 有失败才 warn 提级 (需排查)
+  if (failed > 0) log.warn(`enrichBatch: ${saved} saved, ${failed} failed (size=${batch.length})`);
+  else log.debug(`enrichBatch: ${saved} saved, ${failed} failed (size=${batch.length})`);
 
   // v1.5.0 B-fix 20:06: enrichBatch 写库后, fire-and-forget 异步触发心流独立 trigger
   // v1.5.2 B-fix: cfg 优先 caller 传入, fallback 到 defaultHeartflowConfig + WPP_HEARTFLOW_CONFIG env (向后兼容)

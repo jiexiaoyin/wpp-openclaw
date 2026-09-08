@@ -151,7 +151,7 @@ export class AccountContext {
         if (this.inboundFlushHook) {
             try {
                 await this.inboundFlushHook();
-                this.info(`inbound flush completed (debouncer buffered messages dispatched)`);
+                this.debug(`inbound flush completed (debouncer buffered messages dispatched)`);
             }
             catch (e) {
                 this.warn(`inbound flush error: ${formatErr(e)}`);

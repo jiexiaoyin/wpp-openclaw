@@ -1,6 +1,6 @@
 // src/inbound/debouncer.ts - 1.5s timer-based batch flush
 // 关键: VOICE/系统消息 bypass; key = accountId:peerKind:peerId:fromWxid; .unref() 防保活
-import { info, warn, formatErr } from "../core/logger.js";
+import { debug, warn, formatErr } from "../core/logger.js";
 import { DEFAULT_DEBOUNCE_MS } from "../core/constants.js";
 /**
  * Per-key inbox. Same sender-target within intervalMs gets merged; on flush, batch emitted.
@@ -76,7 +76,7 @@ export class WppInboundDebouncer {
         for (const k of keys) {
             await this.flushKey(k);
         }
-        info(`debouncer flushAll: ${keys.length} keys`);
+        debug(`debouncer flushAll: ${keys.length} keys`);
     }
     /** 清掉全部 pending (测试用) */
     clear() {

@@ -6,7 +6,7 @@
 //  - meta 元组顺序 = fn 参数顺序 (1-1 验证由 typebox schema 推)
 
 import type { TSchema } from "typebox";
-import { error as logErr, info, formatErr } from "../../core/logger.js";
+import { error as logErr, debug, formatErr } from "../../core/logger.js";
 import type { ToolEntry, ToolMeta } from "./_shared.js";
 
 export interface ChannelAgentTool {
@@ -57,7 +57,8 @@ export function buildAgentTools(meta: ToolMeta): ChannelAgentTool[] {
   const out: ChannelAgentTool[] = [];
   for (const [name, entry] of Object.entries(meta)) {
     out.push(makeTool(name, entry));
-    info(`agent-tools: + ${name}`);
+    // 工具注册枚举是启动噪音 (200+ 行/load), 排查时开 WPP_DEBUG 再看
+    debug(`agent-tools: + ${name}`);
   }
   return out;
 }

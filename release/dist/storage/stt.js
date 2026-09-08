@@ -1,12 +1,15 @@
+// src/storage/stt.ts - SiliconFlow SenseVoiceSmall STT
+// Pipeline: silk → decode → PCM → WAV header → SiliconFlow API → text
 import { warn, error } from "../core/logger.js";
 import { decodeSilkToPcm } from "./silk.js";
-import { safeFetch } from "../util/safe-fetch.js";
+import { safeFetch } from "../util/safe-fetch.js"; // v1.3.27 P3-safe-fetch: 白名单化防 SSRF (自定义 env URL 需自行加白名单)
 const SILICONFLOW_STT_URL = process.env.SILICONFLOW_STT_URL || "https://api.siliconflow.cn/v1/audio/transcriptions";
 const STT_MODEL = process.env.SILICONFLOW_STT_MODEL || "FunAudioLLM/SenseVoiceSmall";
 const SILICONFLOW_API_KEY = process.env.SILICONFLOW_API_KEY || "";
 const WAV_SAMPLE_RATE = 24_000;
 const WAV_CHANNELS = 1;
 const WAV_BITS_PER_SAMPLE = 16;
+/** 纯函数: PCM → WAV (44 字节 RIFF/WAVE 头 + PCM 数据). 导出供测试 (v1.3.74 P2-2) */
 export function buildWavBuffer(pcmBuffer) {
     const pcmLen = pcmBuffer.length;
     const totalSize = 44 + pcmLen;
@@ -27,6 +30,10 @@ export function buildWavBuffer(pcmBuffer) {
     pcmBuffer.copy(wav, 44);
     return wav;
 }
+/**
+ * silk buffer → WAV → SiliconFlow STT → 转写文字 + 时长
+ * 缺 apiKey / decode 失败 → return null (caller 决定 fallback)
+ */
 export async function transcribeSilkBuffer(silkBuffer, apiKey = SILICONFLOW_API_KEY) {
     if (!apiKey) {
         warn("[STT] missing SILICONFLOW_API_KEY env var");
@@ -53,7 +60,7 @@ export async function transcribeSilkBuffer(silkBuffer, apiKey = SILICONFLOW_API_
                 method: "POST",
                 headers: { Authorization: `Bearer ${apiKey}` },
                 body: form,
-                signal: AbortSignal.timeout(60_000),
+                signal: AbortSignal.timeout(60_000), // 60s 单次超时
             });
             if (response.ok)
                 break;
@@ -95,3 +102,4 @@ export async function transcribeSilkBuffer(silkBuffer, apiKey = SILICONFLOW_API_
         durationMs: Math.round((pcmBuffer.length / (WAV_SAMPLE_RATE * 2)) * 1000),
     };
 }
+//# sourceMappingURL=stt.js.map

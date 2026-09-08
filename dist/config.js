@@ -302,7 +302,8 @@ export async function watchAccountConfigs(onChange) {
         }, watchDebounceMs);
     };
     if (watchActive) {
-        log.warn(`watchAccountConfigs: already watching, returning no-op unwatch`);
+        // 每次 reload watch 都会撞到, 良性 no-op → debug
+        log.debug(`watchAccountConfigs: already watching, returning no-op unwatch`);
         return () => { };
     }
     try {

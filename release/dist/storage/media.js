@@ -1,6 +1,23 @@
+// src/storage/media.ts - 媒体存储抽象 (S3-compatible interface + vendor CDN fallback)
+// @aws-sdk/client-s3 完整 S3 API + s3-request-presigner presigned URL;
+// 兼容 AWS S3 / MinIO / AliOSS / TXOSS / Cloudflare R2 (path-style 配置)
+//
+// 用途: 解决 vendor CDN 不稳定时 (高并发限流, 临时不可用) 媒体 (图片/语音/视频) 备份
+// 设计:
+//   - MediaStorage 抽象接口 (S3-compatible: put/get/sign/url)
+//   - PassthroughStorage: 直接返回 vendor 给的 URL (默认, 无副作用)
+//   - S3Storage: 用 @aws-sdk 完整 putObject + presigned URL
+//   - CompositeStorage: 优先 vendor CDN, 失败 fallback S3 (高可用)
+//
+// 调用方约定:
+//   - storage.put(key, buffer, mimeType) → 返回 { url, etag, ... }
+//   - storage.get(key) → 返 buffer
+//   - storage.sign(key, expiresIn) → 返 presigned URL (S3 模式) 或 直传 URL (vendor 模式)
 import { S3Client, PutObjectCommand, GetObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { logObj as log } from "../core/logger.js";
+// ============ PassthroughStorage (vendor CDN 直传) ============
+/** PassthroughStorage 不存, 返原 URL (vendor 已有 CDN) */
 export class PassthroughStorage {
     options;
     kind = "passthrough";
@@ -28,6 +45,10 @@ export class PassthroughStorage {
         return true;
     }
 }
+/**
+ * @aws-sdk/client-s3 + s3-request-presigner
+ * 兼容: AWS S3 / MinIO / AliOSS / TXOSS / Cloudflare R2
+ */
 export class S3Storage {
     config;
     kind = "s3";
@@ -58,6 +79,7 @@ export class S3Storage {
             Body: buffer,
             ContentType: mimeType,
         });
+        // put/get 加 30s timeout 防 endpoint 挂死时消息队列无限积压
         const resp = await this.withTimeout(this.client.send(cmd), 30_000, `put ${key}`);
         return {
             url: this.publicUrl(key),
@@ -79,6 +101,10 @@ export class S3Storage {
             storage: this.kind,
         };
     }
+    /**
+     * 30s timeout race wrapper for any S3 op.
+     * AbortController is the cleanest path but @aws-sdk v3 default config has requestHandler; for simplicity use Promise.race.
+     */
     async withTimeout(p, ms, label) {
         let timer;
         try {
@@ -100,6 +126,7 @@ export class S3Storage {
         return getSignedUrl(this.client, cmd, { expiresIn: expiresInSec });
     }
     async ping() {
+        // 加 timeout (防网络挂死)
         try {
             const cmd = new HeadBucketCommand({ Bucket: this.config.bucket });
             await Promise.race([
@@ -112,16 +139,20 @@ export class S3Storage {
             return false;
         }
     }
+    /** 公共 URL (virtual-hosted or path-style) */
     publicUrl(key) {
         if (this.cdnBase)
             return `${this.cdnBase}/${key}`;
         if (this.config.pathStyle) {
             return `${this.endpoint}/${this.config.bucket}/${key}`;
         }
+        // virtual-hosted: {bucket}.{endpoint}/{key}
         const u = new URL(this.endpoint);
         return `${u.protocol}//${this.config.bucket}.${u.host}/${key}`;
     }
 }
+// ============ CompositeStorage (vendor CDN + S3 fallback) ============
+/** 优先用 vendor CDN (passthrough), 失败时 fallback S3 */
 export class CompositeStorage {
     primary;
     fallback;
@@ -161,6 +192,7 @@ export class CompositeStorage {
         return this.fallback.ping();
     }
 }
+// ============ factory ============
 export function createMediaStorage(config) {
     switch (config.kind) {
         case "passthrough":
@@ -183,3 +215,4 @@ export function createMediaStorage(config) {
             return new CompositeStorage(primary, fallback);
     }
 }
+//# sourceMappingURL=media.js.map

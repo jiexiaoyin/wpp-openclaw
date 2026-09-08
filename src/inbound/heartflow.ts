@@ -74,6 +74,88 @@ export interface HeartflowConfig {
   independentTrigger?: boolean;
   /** v1.5.4 BUSINESS-CONTEXT: 心流 judge 的业务背景知识注入，提升运营商群等专业场景判断准确率 */
   businessContext?: string;
+  /**
+   * v1.6.x HEARTFLOW-FEEDBACK: per-群双向自适应调阈 (反馈闭环) 参数块
+   * 只在 heartflow-learn.ts 的 sweep 使用; 默认缺省 = 全用 HF_LEARNING_DEFAULTS, enabled 缺省 false (不开)
+   * learned 阈值本身存 DB (wpp_hf_group_state), 不回写 accounts JSON
+   */
+  learning?: HfLearningConfig;
+}
+
+/**
+ * v1.6.x 心流自适应学习参数 (全部可选, 缺省走 HF_LEARNING_DEFAULTS)
+ * 方向: 接话率高 = 插话受欢迎 → 下调阈值更主动; 低 = 不受待见 → 上调更克制
+ */
+export interface HfLearningConfig {
+  /** 总开关 (默认 false; 生产 accounts/default.json 显式开 true) */
+  enabled?: boolean;
+  /** 最小样本量 (不足=不调阈, 自然灰度) */
+  minSample?: number;
+  /** 接话率 ≤ 此值 → 上调 */
+  lowEngageRate?: number;
+  /** 接话率 ≥ 此值 → 下调 */
+  highEngageRate?: number;
+  /** 单次步长上限 */
+  step?: number;
+  /** 硬区间下限 */
+  bandMin?: number;
+  /** 硬区间上限 */
+  bandMax?: number;
+  /** 参与统计的最近 closed 样本数 (滚窗) */
+  sampleWindow?: number;
+  /** 观察窗时长 (秒): 心流回复发出后多久内有人类消息 = engaged */
+  observeWindowSec?: number;
+  /** 相邻两次阈值变更最小间隔 (秒, 防抖) */
+  minChangeCooldownSec?: number;
+  /** sweep 周期 (秒) */
+  sweepIntervalSec?: number;
+  /** judged 无发送结果呆账上限 (秒) */
+  staleJudgedMaxSec?: number;
+}
+
+/** v1.6.x 心流学习参数缺省表 (代码默认; schema default 与 accounts JSON 缺省保持一致) */
+export const HF_LEARNING_DEFAULTS: Required<Omit<HfLearningConfig, "enabled">> & {
+  enabled: boolean;
+} = {
+  enabled: false,
+  minSample: 10,
+  lowEngageRate: 0.15,
+  highEngageRate: 0.5,
+  step: 0.05,
+  bandMin: 0.3,
+  bandMax: 0.9,
+  sampleWindow: 20,
+  observeWindowSec: 600,
+  minChangeCooldownSec: 4 * 3600,
+  sweepIntervalSec: 300,
+  staleJudgedMaxSec: 1800,
+};
+
+/** v1.6.x: 合并账号 learning 配置与缺省 (enabled 取配置或缺省) */
+export function resolveHfLearning(cfg?: HeartflowConfig): Required<HfLearningConfig> {
+  const l = cfg?.learning;
+  const D = HF_LEARNING_DEFAULTS;
+  return {
+    enabled: l?.enabled ?? D.enabled,
+    minSample: l?.minSample ?? D.minSample,
+    lowEngageRate: l?.lowEngageRate ?? D.lowEngageRate,
+    highEngageRate: l?.highEngageRate ?? D.highEngageRate,
+    step: l?.step ?? D.step,
+    bandMin: l?.bandMin ?? D.bandMin,
+    bandMax: l?.bandMax ?? D.bandMax,
+    sampleWindow: l?.sampleWindow ?? D.sampleWindow,
+    observeWindowSec: l?.observeWindowSec ?? D.observeWindowSec,
+    minChangeCooldownSec: l?.minChangeCooldownSec ?? D.minChangeCooldownSec,
+    sweepIntervalSec: l?.sweepIntervalSec ?? D.sweepIntervalSec,
+    staleJudgedMaxSec: l?.staleJudgedMaxSec ?? D.staleJudgedMaxSec,
+  };
+}
+
+/** v1.6.x: 群是否在心流白名单 (空数组=全放行; 与 checkHeartflowGate 白名单子句同语义, 供 sweep 过滤) */
+export function isHfGroupAllowed(chatId: string, cfg: HeartflowConfig): boolean {
+  const wl = cfg.whitelistGroups;
+  if (!wl || wl.length === 0) return true;
+  return wl.includes(chatId);
 }
 
 export function defaultHeartflowConfig(): HeartflowConfig {

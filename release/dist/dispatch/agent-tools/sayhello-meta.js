@@ -1,3 +1,4 @@
+// src/dispatch/agent-tools/sayhello-meta.ts - SayHello tag (打招呼, 2)
 import { Type } from "typebox";
 import { makeWppSayHello } from "../../send/index.js";
 import { getDefaultAccountRegistry } from "../../account-state.js";
@@ -31,6 +32,7 @@ export const SAY_HELLO_META = {
         }),
         (toUserName, content, scene) => getSay().modelv2(toUserName, content ?? "", scene ?? 15),
     ],
+    /** /SayHello/Modelv3 — 搜索结果凭据提交打招呼 (v1.3.67 新 API) */
     sayHelloModelv3: [
         "打招呼模式3 (用搜索结果凭据提交申请). scene=来源场景, v3=联系人凭据, v4=备用凭据, verifyContent=申请说明.",
         Type.Object({
@@ -42,3 +44,4 @@ export const SAY_HELLO_META = {
         (scene, v3, v4, verifyContent) => getSay().modelv3(scene, v3, v4 ?? "", verifyContent ?? ""),
     ],
 };
+//# sourceMappingURL=sayhello-meta.js.map

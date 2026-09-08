@@ -17,6 +17,7 @@ import { SeenTracker, buildDedupeKey } from "../webhook-receiver.js";
 import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1Cdn, enrichFileMessage, enrichFileMessageFromV1Binary, enrichVideoMessage, enrichVideoMessageFromV1, isV1SchemaVideo, enrichVoiceMessage, enrichVoiceMessageFromV1, isV1SchemaVoice, enrichFileMessageViaMcp, isV1SchemaImage, isV1SchemaFile } from "./media-enrich.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
 import { judgeHeartflow, recordRawMessage, getChatState, buildChatContextSummary, getRawBuffer, formatRawMessages, lastBotReply, secondsSinceLastReply, recordActiveReply, recordPassiveMessage, markHeartflowJudged, } from "./heartflow.js";
+import { resolveThresholdOverride, persistHfJudged, markHfGroupEngaged, } from "./heartflow-learn.js";
 import { updateJargonFromMessage, recordJargonMessage, shouldTriggerMine, mineJargonForGroup, getGroupMessageCount, } from "./jargon.js";
 import { processAffectionMessage, } from "./affection.js";
 // 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
@@ -83,7 +84,7 @@ export function createWppInboundHandler(opts) {
                             const imgR = await enrichImageMessage(opts.vendorCtx, m.content);
                             if (imgR.mediaUrl) {
                                 m.content = `${m.content}\n[图片] ${imgR.mediaUrl}`;
-                                log.info(`[WPP v1.3.74] image enrich ok: msgId=${m.msgId} url=${imgR.mediaUrl}`);
+                                log.debug(`[WPP v1.3.74] image enrich ok: msgId=${m.msgId} url=${imgR.mediaUrl}`);
                             }
                         }
                         catch (e) {
@@ -102,10 +103,10 @@ export function createWppInboundHandler(opts) {
                                     imgR = await trackEnrich(`${m.accountId}:${m.fromWxid}`, () => enrichImageMessageFromV1Cdn(opts.vendorCtx, v1Info.cdnDownloadCtx, v1Info.md5));
                                     if (imgR.mediaUrl) {
                                         m.content = `${m.content}\n[图片] ${imgR.mediaUrl}`;
-                                        log.info(`[WPP v1.2.5 IMAGE-CDN-DOWNLOAD] image enrich ok: msgId=${m.msgId} url=${imgR.mediaUrl} size=${imgR.mediaSize}`);
+                                        log.debug(`[WPP v1.2.5 IMAGE-CDN-DOWNLOAD] image enrich ok: msgId=${m.msgId} url=${imgR.mediaUrl} size=${imgR.mediaSize}`);
                                     }
                                     else {
-                                        log.info(`[WPP v1.2.5 IMAGE-CDN-DOWNLOAD] miss (fallback DownloadImg): msgId=${m.msgId} err=${imgR.error}`);
+                                        log.debug(`[WPP v1.2.5 IMAGE-CDN-DOWNLOAD] miss (fallback DownloadImg): msgId=${m.msgId} err=${imgR.error}`);
                                         imgR = null;
                                     }
                                 }
@@ -120,7 +121,7 @@ export function createWppInboundHandler(opts) {
                                     imgR = await enrichImageMessageFromV1(opts.vendorCtx, v1Info.localId, v1Info.toWxid, v1Info.md5, v1Info.dataLen);
                                     if (imgR.mediaUrl) {
                                         m.content = `${m.content}\n[图片] ${imgR.mediaUrl} (注: vendor v1 schema 推送, 仅下载首 64KB, 大图部分可能截断)`;
-                                        log.info(`[WPP v1.2.0 V1-SCHEMA-ENRICH] image enrich ok: msgId=${m.msgId} localId=${v1Info.localId} url=${imgR.mediaUrl} size=${imgR.mediaSize}`);
+                                        log.debug(`[WPP v1.2.0 V1-SCHEMA-ENRICH] image enrich ok: msgId=${m.msgId} localId=${v1Info.localId} url=${imgR.mediaUrl} size=${imgR.mediaSize}`);
                                     }
                                     else {
                                         log.warn(`[WPP v1.3.74] v1 schema image enrich returned no url: msgId=${m.msgId} localId=${v1Info.localId} error=${imgR.error}`, { msgId: m.msgId });
@@ -468,6 +469,29 @@ export function createWppInboundHandler(opts) {
                     void processAffectionMessage(m.chatroomId ?? m.peerId, m.fromWxid ?? "", content, m.fromNickname ?? "", opts.affection, { ...resolveJudgeCreds() }, Date.now()).catch(() => { });
                 }
             }
+            // v1.6.x HEARTFLOW-FEEDBACK: 接话观察窗回填 (engaged) —
+            //   对每批内「人类群消息」(非 blocked/非系统/非 bot 自己) 按群去重, fire-and-forget markHfEngaged:
+            //   把该群仍开窗未定的心流回复 ledger 立即收敛为 engaged (UPDATE 走 idx_hf_open, 通常 0-1 行)
+            //   失败静默降级 (窗口留待 sweep 到期按 ignored 关, 语义仍正确). 只在 heartflow enabled 时跑.
+            if (opts.heartflow?.enabled) {
+                const seenGroups = new Set();
+                for (const m of batch) {
+                    const tr = persistResults.get(m);
+                    if (tr?.via === "blocked")
+                        continue;
+                    if (m.peerKind !== "group")
+                        continue;
+                    if (m.msgType === 10000)
+                        continue; // 系统通知不算接话
+                    if (!!opts.triggerCtx.botWxid && m.fromWxid === opts.triggerCtx.botWxid)
+                        continue; // bot 自己不算
+                    const groupId = m.chatroomId ?? m.peerId;
+                    if (seenGroups.has(groupId))
+                        continue;
+                    seenGroups.add(groupId);
+                    void markHfGroupEngaged(m.accountId, groupId, Math.floor(Date.now() / 1000));
+                }
+            }
             const triggerResults = persistResults; // Step 2 已算 (same ctxForTrigger + shouldTrigger)
             const dispatched = [];
             for (const [m, t] of triggerResults) {
@@ -524,6 +548,9 @@ export function createWppInboundHandler(opts) {
                         const hfCfg = opts.heartflow;
                         try {
                             const nowMs = Date.now();
+                            // v1.6.x HEARTFLOW-FEEDBACK: 该群若有 learned 阈值且 ≠ 账号级 → shallow clone override (judge prompt 与判定同用 effCfg)
+                            const override = resolveThresholdOverride(m.accountId, chatId, hfCfg);
+                            const effCfg = override === undefined ? hfCfg : { ...hfCfg, replyThreshold: override };
                             const st = getChatState(chatId, hfCfg, nowMs);
                             const judgeResult = await judgeHeartflow({
                                 chatId,
@@ -535,14 +562,33 @@ export function createWppInboundHandler(opts) {
                                 lastBotReply: lastBotReply(chatId) ?? "",
                                 secondsSinceLastReply: secondsSinceLastReply(chatId, nowMs),
                                 energy: st.energy,
-                            }, hfCfg, {
+                            }, effCfg, {
                                 ...resolveJudgeCreds(),
                             });
                             // P1: 无论结果, 标记已 judge (频率闸生效)
                             markHeartflowJudged(chatId, nowMs);
                             if (judgeResult?.shouldReply) {
                                 m.trigger = "heartflow";
-                                recordActiveReply(chatId, hfCfg, nowMs);
+                                recordActiveReply(chatId, effCfg, nowMs);
+                                // v1.6.x HEARTFLOW-FEEDBACK: judge 通过落 ledger 行 (失败仅 warn 不阻断 dispatch)
+                                await persistHfJudged({
+                                    account_id: m.accountId,
+                                    inbound_msg_id: m.msgId,
+                                    new_msg_id: m.newMsgId ?? null,
+                                    group_id: chatId,
+                                    from_wxid: m.fromWxid ?? null,
+                                    msg_type: m.msgType == null ? null : String(m.msgType),
+                                    content_head: (m.content ?? "").replace(/\s+/g, " ").slice(0, 256) || null,
+                                    judge_overall: judgeResult.overallScore,
+                                    dim_r: judgeResult.dimensions.relevance,
+                                    dim_w: judgeResult.dimensions.willingness,
+                                    dim_s: judgeResult.dimensions.social,
+                                    dim_t: judgeResult.dimensions.timing,
+                                    dim_c: judgeResult.dimensions.continuity,
+                                    effective_threshold: effCfg.replyThreshold ?? 0.6,
+                                    energy: st.energy,
+                                    judged_at: Math.floor(nowMs / 1000),
+                                });
                                 dispatched.push(m);
                                 info(`[WPP HEARTFLOW] trigger: peer=${m.peerId} msgId=${m.msgId} score=${judgeResult.overallScore.toFixed(2)} reasoning=${judgeResult.reasoning.slice(0, 40) ?? ""}`);
                             }
@@ -600,7 +646,7 @@ export function createWppInboundHandler(opts) {
             // 无可触发 → 早退 (防空转)
             if (dispatched.length === 0)
                 return;
-            info(`inbound dispatch: ${dispatched.length}/${batch.length} triggered (vias: ${dispatched.map((d) => d.trigger).join(",")})`);
+            debug(`inbound dispatch: ${dispatched.length}/${batch.length} triggered (vias: ${dispatched.map((d) => d.trigger).join(",")})`);
             if (opts.enableDispatch !== false && opts.onDispatch) {
                 for (const m of dispatched) {
                     await opts.onDispatch(m, batch);
