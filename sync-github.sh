@@ -82,8 +82,9 @@ git checkout -q "$BRANCH"
 rsync -a --delete --exclude=.git /root/dev/wechatpadpro-openclaw/release/ "$MIRROR_DIR/"
 
 # 上传前最终敏感扫描 (双保险)
-# 排除: 部署引导文档引用 adminmax.knowhub.cloud (官方平台地址, 拿 tokenKey/authcode 必用) — 非个性化泄漏
-PERSONAL="q139198824|wxid_eezdbu1ytws422|wxid_dbdmq8riblxo12|71bed0f5|56Z8kt5ySirXyyGj|jsnjzhou|zhuqixia520520|益融|淮安|盱眙|接晓银|juhe\.chat|adminmax|knowhub|/root/silk"
+# 排除: 官方平台地址 adminmax.knowhub.cloud (产品公开名, 部署引导文档/默认配置引用, 拿 tokenKey/authcode 必用) — 非个性化泄漏, 已公开于仓库 HEAD
+# 2026-09-06 修正: 去掉过宽的 adminmax|knowhub — v1.5.3 起被误拦 (官方平台名就在 dist/api/client.js dist/core/constants.js openclaw.plugin.json 默认值里, 与 build-release.sh 权威门对齐)
+PERSONAL="q139198824|wxid_eezdbu1ytws422|wxid_dbdmq8riblxo12|71bed0f5|56Z8kt5ySirXyyGj|jsnjzhou|zhuqixia520520|益融|淮安|盱眙|接晓银|juhe\.chat|/root/silk"
 LEAK=$(grep -rlE "$PERSONAL" . --exclude-dir=.git 2>/dev/null | grep -vE 'vendor/README|GETTING_STARTED|DEPLOY|FACE-LOGIN|^\./README' | head -3)
 if [ -n "$LEAK" ]; then
   echo "✗ 敏感残留, 阻止上传:"
