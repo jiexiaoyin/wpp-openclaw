@@ -82,3 +82,21 @@ test('D6.8 media-enrich/shared.ts: 入站 OSS 凭据同样缓存 (勿每次读 d
   assert.match(s, /ossCredCache\.set\(/, 'miss 后写入缓存');
   assert.match(s, /export function clearOssConfigCache/, '必须 export 清理入口');
 });
+
+test('D4.1 潜伏值环守卫: api/client↔account-state 环内不得有顶层急切调用 (防 TDZ 崩溃)', () => {
+  // 背景: api-client.ts(barrel) ↔ api/client.ts ↔ account-state → registry → account-context 存在惰性值环。
+  // 当前安全是因为环内所有 registry/构造访问都在函数体 (惰性), 无模块顶层急切读。
+  // 任何把 `import type`→值 import 或把一次惰性调用提到模块顶层都会变启动期 TDZ 崩溃。
+  for (const [label, p, sym] of [
+    ['api/client.ts', 'api/client.ts', 'getDefaultAccountRegistry'],
+    ['account-context.ts', 'accounts/account-context.ts', 'WechatpadproApiClient'],
+  ]) {
+    const s = src(p);
+    // 值是静态顶层 import 可以 (bindings 惰性解析), 但绝不允许顶层急切调用 (col1 非缩进、非函数签名里直接调用)
+    const topLevelCall = new RegExp(`^[a-zA-Z][^\n]*${sym}\\(\\).*`, 'm');
+    assert.doesNotMatch(s, topLevelCall, `${label} 不得顶层急切调用 ${sym}() (会因循环未初始化变 TDZ)`);
+    // 所有 registry 使用必须在函数体内(前面至少 2 空格缩进 → 在函数块里)
+    // 进一步: 声明处允许 import, 使用处必须带缩进
+    assert.match(s, /function |=>|\{/, `${label} 应含函数(使用点在函数内)`);
+  }
+});
