@@ -8,24 +8,37 @@ import { join } from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { execAsync } from "../util/exec.js";
+import { LruCache } from "../core/lru.js";
 import { logObj as log, formatErr } from "../core/logger.js";
 import { buildOssKey } from "../inbound/media-enrich/shared.js";
 const OSS_CREDENTIALS_PATH = process.env.OSS_CREDENTIALS_PATH ||
     join(os.homedir(), ".openclaw", "credentials", "oss-credentials.json");
+// v1.5.5 D6-P2: 自发送媒体热路径也缓存 OSS 凭据 (只读 disk 一次/30s, 同 shared.ts/media-enrich)
+//  key = 已解析凭据路径 (含测试注入), 故 maxSize 用 2 覆盖默认+测试两条
+const ossCredCache = new LruCache({ maxSize: 2, ttlMs: 30_000 });
+/** 测试/凭据轮换时强制重读 */
+export function clearOssConfigCache() {
+    ossCredCache.clear();
+}
 function loadOssConfig(credentialsPath) {
     // v1.3.22: 支持运行时传 credentialsPath (测试注入; 生产默认 OSS_CREDENTIALS_PATH)
     const p = credentialsPath ?? process.env.OSS_CREDENTIALS_PATH ?? OSS_CREDENTIALS_PATH;
+    const cached = ossCredCache.get(p);
+    if (cached)
+        return cached;
     try {
         const raw = readFileSync(p, "utf8");
         const d = JSON.parse(raw);
         if (!d.accessKeyId || !d.accessKeySecret || !d.bucket)
             return null;
-        return {
+        const oss = {
             accessKeyId: d.accessKeyId,
             accessKeySecret: d.accessKeySecret,
             bucket: d.bucket,
             endpoint: d.endpoint || "oss-cn-hangzhou.aliyuncs.com",
         };
+        ossCredCache.set(p, oss);
+        return oss;
     }
     catch {
         return null;

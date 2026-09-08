@@ -66,3 +66,19 @@ test('D6.6 dist 同步: 编译产物含相同 LRU/Map 热路径 (防 dist 与 sr
   assert.match(affDist, /groupStates/, 'dist/inbound/affection.js 必须含群状态容器');
   assert.ok(cfgDist.length > 0 && affDist.length > 0, 'dist 产物非空');
 });
+
+test('D6.7 media-oss.ts: OSS 凭据读取必须缓存 (勿每次 upload 重读 disk)', () => {
+  const s = src('dispatch/media-oss.ts');
+  assert.match(s, /ossCredCache = new LruCache</, 'media-oss 必须实例化 LruCache');
+  assert.match(s, /ossCredCache\.get\(/, 'loadOssConfig 先查缓存');
+  assert.match(s, /ossCredCache\.set\(/, 'miss 后写入缓存');
+  assert.match(s, /clearOssConfigCache/, '必须暴露清理入口 (凭据轮换/测试)');
+});
+
+test('D6.8 media-enrich/shared.ts: 入站 OSS 凭据同样缓存 (勿每次读 disk)', () => {
+  const s = src('inbound/media-enrich/shared.ts');
+  assert.match(s, /ossCredCache = new LruCache</, 'shared 必须实例化 LruCache');
+  assert.match(s, /ossCredCache\.get\(/, 'loadOssConfig 先查缓存');
+  assert.match(s, /ossCredCache\.set\(/, 'miss 后写入缓存');
+  assert.match(s, /export function clearOssConfigCache/, '必须 export 清理入口');
+});

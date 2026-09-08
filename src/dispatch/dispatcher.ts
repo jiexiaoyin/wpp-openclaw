@@ -24,7 +24,7 @@ import { sendText } from "./outbound.js";
 import { quoteReply } from "../send/quote-reply.js";
 import { buildQuoteContext } from "./reply-helpers.js";
 import type { WppInboundMessage } from "../types.js";
-import { CHANNEL_ID, GROUP_CONTEXT_WINDOW, GROUP_CONTEXT_MAX_IMAGES } from "../core/constants.js";
+import { CHANNEL_ID, GROUP_CONTEXT_WINDOW, GROUP_CONTEXT_MAX_IMAGES, MsgType } from "../core/constants.js";
 import { getMessages, getMessageByMsgIdOrNewId } from "../storage/db/messages.js";
 import { waitForPendingEnrich } from "../inbound/handler.js";
 import { extractReferencedFromReplyContext, extractReferencedFromApp } from "../inbound/parser/quote.js";
@@ -867,7 +867,7 @@ async function dispatchOne(
 
   // 文件消息 (v1 schema, handler 已注入 [文件] + [系统提示-文件限制]) → 绕过 AI 直接回固定模板:
   // 文件内容读不了, AI 自由发挥无价值; 固定模板 100% 不出错、零模型调用、响应最快
-  if (msg.msgType === 49) {
+  if (msg.msgType === MsgType.APP) {
     const autoReply = buildFileAutoReply(msg.content);
     if (autoReply?.isFileMsg && autoReply.replyText) {
       try {

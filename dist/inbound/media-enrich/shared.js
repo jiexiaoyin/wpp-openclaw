@@ -6,8 +6,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { LruCache } from "../../core/lru.js";
 const OSS_CREDENTIALS_PATH = process.env.OSS_CREDENTIALS_PATH ||
     path.join(os.homedir(), ".openclaw", "credentials", "oss-credentials.json");
+// v1.5.5 D6-P2: OSS 凭据文件低频变动但每次上传重读 disk → TTL 缓存 (30s 陈旧窗, 同 config.ts 权衡)
+const ossCredCache = new LruCache({
+    maxSize: 2,
+    ttlMs: 30_000,
+});
+/** 测试/热载时清缓存强制重读 (凭据轮换或单测注入) */
+export function clearOssConfigCache() {
+    ossCredCache.clear();
+}
 /**
  * v1.3.34 OSS-STRUCTURE (2026-08-11 老板拍板): OSS key 统一格式 `wpp/{account}/{type}/{date}/{filename}`
  *   账号隔离 + 文件类型 + 日期归档 (方便检索/清理)。
@@ -32,17 +42,23 @@ export function sanitizeFilenamePart(input, fallbackLen = 16) {
     return crypto.randomBytes(Math.ceil(fallbackLen / 2)).toString("hex").slice(0, fallbackLen);
 }
 export function loadOssConfig() {
+    // D6-P2 缓存命中直接返, 减少媒体热路径每次 disk I/O
+    const cached = ossCredCache.get(OSS_CREDENTIALS_PATH);
+    if (cached)
+        return cached;
     try {
         const raw = fs.readFileSync(OSS_CREDENTIALS_PATH, "utf8");
         const d = JSON.parse(raw);
         if (!d.accessKeyId || !d.accessKeySecret || !d.bucket)
             return null;
-        return {
+        const oss = {
             accessKeyId: d.accessKeyId,
             accessKeySecret: d.accessKeySecret,
             bucket: d.bucket,
             endpoint: d.endpoint || "oss-cn-hangzhou.aliyuncs.com",
         };
+        ossCredCache.set(OSS_CREDENTIALS_PATH, oss);
+        return oss;
     }
     catch {
         return null;
