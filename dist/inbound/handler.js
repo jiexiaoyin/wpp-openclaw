@@ -1,5 +1,6 @@
 // src/inbound/handler.ts - 主入口 (debouncer + 4-way triggers + enrich)
 import { info, warn, debug, logObj as log, formatErr } from "../core/logger.js";
+import { MsgType } from "../core/constants.js";
 import { WppInboundDebouncer, } from "./debouncer.js";
 import { shouldTrigger, } from "./triggers.js";
 import { enrichBatch } from "./enrich.js";
@@ -77,7 +78,7 @@ export function createWppInboundHandler(opts) {
             // 先 enrich (DB 也带 OSS URL) 再 save; enrich 失败不阻塞 (非致命)
             for (const m of batch) {
                 // 图片: v0 schema (content 含 <img> XML) 走 CdnDownloadImage 完整大图; v1 schema (无 XML) 走 DownloadImg 64KB
-                if (m.msgType === 3 && opts.vendorCtx) {
+                if (m.msgType === MsgType.IMAGE && opts.vendorCtx) {
                     const v0Path = m.content.includes("<img");
                     if (v0Path) {
                         try {
@@ -135,7 +136,7 @@ export function createWppInboundHandler(opts) {
                     }
                 }
                 // 视频: msgType=43 → 新版 video.download_context → DownloadVideo (优先); 旧 videomsg XML 兜底
-                if (m.msgType === 43 && opts.vendorCtx) {
+                if (m.msgType === MsgType.VIDEO && opts.vendorCtx) {
                     let vR = null;
                     const v1Video = isV1SchemaVideo(m.raw);
                     if (v1Video.isV1 && v1Video.videoCtx) {
@@ -170,7 +171,7 @@ export function createWppInboundHandler(opts) {
                     }
                 }
                 // 名片: msgType=42 (contact_card) → 从 push_content 提取名片名 (如 "[名片]龙脉") 注入 content, AI 知道是谁的名片
-                if (m.msgType === 42) {
+                if (m.msgType === MsgType.CARD) {
                     const pushContent = m.raw?.push_content;
                     const cardMatch = pushContent?.match(/\[名片\]\s*([^\s:：]+)/);
                     const cardName = cardMatch?.[1]?.trim();
@@ -183,7 +184,7 @@ export function createWppInboundHandler(opts) {
                     }
                 }
                 // 语音: msgType=34 → 下载 + OSS + SiliconFlow STT 转写文字注入 content (AI 看到文本)
-                if (m.msgType === 34 && opts.vendorCtx) {
+                if (m.msgType === MsgType.VOICE && opts.vendorCtx) {
                     let vR = null;
                     // 路径 1 (v1.2.6 首选): 新版 voice.download_context → DownloadVoiceBinary
                     const v1Voice = isV1SchemaVoice(m.raw);
@@ -230,7 +231,8 @@ export function createWppInboundHandler(opts) {
                 //       v1 schema 无下载参数 (见下方 fallback)
                 const isV0FileContent = m.content.includes("<appmsg") &&
                     (m.content.includes("<type>6</type>") || m.content.includes("<type>8</type>"));
-                if (opts.vendorCtx && (m.msgType === 6 || (m.msgType === 49 && isV0FileContent))) {
+                // L322: m.msgType === 6 → v0 老文件 msgType, 不在 vendor MsgType 枚举 (保持裸数字)
+                if (opts.vendorCtx && (m.msgType === 6 || (m.msgType === MsgType.APP && isV0FileContent))) {
                     try {
                         const fR = await enrichFileMessage(opts.vendorCtx, m.content);
                         if (fR.mediaUrl) {
@@ -248,7 +250,7 @@ export function createWppInboundHandler(opts) {
                         log.warn(`[WPP v1.3.74] file enrich exception: ${formatErr(e)}`, { msgId: m.msgId });
                     }
                 }
-                else if (m.msgType === 49) {
+                else if (m.msgType === MsgType.APP) {
                     // v1 schema 文件 (kind=app, app.category=file)
                     //   失败 → v1.2.0 MCP 兜底 → 最后确定性回复 (禁 AI 猜路径读文件)
                     const v1File = isV1SchemaFile(m.raw);
@@ -308,7 +310,7 @@ export function createWppInboundHandler(opts) {
                     }
                 }
                 // 引用消息: 查 DB 被引用消息, 把原媒体 OSS URL 注入 content → AI 看到原图/原资源
-                if (m.msgType === 49) {
+                if (m.msgType === MsgType.APP) {
                     let quotedMsgId = "";
                     try {
                         const appRef = extractReferencedFromApp(m.raw);
@@ -402,7 +404,7 @@ export function createWppInboundHandler(opts) {
                         continue;
                     if (m.peerKind !== "group")
                         continue;
-                    if (m.msgType === 10000)
+                    if (m.msgType === MsgType.SYSTEM)
                         continue; // 系统通知不记
                     recordRawMessage(m.chatroomId ?? m.peerId, {
                         senderName: m.fromNickname ?? m.fromWxid ?? "未知",
@@ -423,7 +425,7 @@ export function createWppInboundHandler(opts) {
                         continue;
                     if (m.peerKind !== "group")
                         continue;
-                    if (m.msgType === 10000)
+                    if (m.msgType === MsgType.SYSTEM)
                         continue; // 系统通知不采
                     const groupId = m.chatroomId ?? m.peerId;
                     const content = m.content ?? "";
@@ -459,7 +461,7 @@ export function createWppInboundHandler(opts) {
                         continue;
                     if (m.peerKind !== "group")
                         continue;
-                    if (m.msgType === 10000)
+                    if (m.msgType === MsgType.SYSTEM)
                         continue; // 系统通知不处理
                     if (m.fromWxid === opts.triggerCtx.botWxid)
                         continue; // 自己消息不累计
@@ -481,7 +483,7 @@ export function createWppInboundHandler(opts) {
                         continue;
                     if (m.peerKind !== "group")
                         continue;
-                    if (m.msgType === 10000)
+                    if (m.msgType === MsgType.SYSTEM)
                         continue; // 系统通知不算接话
                     if (!!opts.triggerCtx.botWxid && m.fromWxid === opts.triggerCtx.botWxid)
                         continue; // bot 自己不算
@@ -499,7 +501,7 @@ export function createWppInboundHandler(opts) {
                 if (isRedPacketMessage(m))
                     continue;
                 // v1.3.72 系统通知 (msg_type=10000, 含红包领取/转账/安全提醒) 不触发 AI (老板 2026-08-20): 系统消息无需 AI 回复
-                if (m.msgType === 10000)
+                if (m.msgType === MsgType.SYSTEM)
                     continue;
                 // v1.3.39 FILEHELPER: filehelper 命令不 dispatch (只走命令回调, 不进 AI)
                 if (m.peerId === "filehelper" && /^\s*\//.test(m.content))

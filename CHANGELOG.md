@@ -4,6 +4,18 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.5.5-dev] 多维度审阅修复 + D6 性能守卫 (2026-09-08)
+
+> 注: v1.4.1 → v1.5.4 的变更记录在本体上线时已落 git commit (见 `git log`), 但 CHANGELOG.md 未逐版同步, 将于后续版本批量补齐。此处记录 2026-09-08 审阅驱动的当次修复。
+
+- **fix (heartflow-learn)**: dispatcher send 后落账 `persistHfSendOutcome` (仅 `msg.trigger==="heartflow"`, fire-and-forget) — 修复 heartflow-feedback.test.mjs test#9 长期未实现断言。commit `8b2d291`
+- **fix (heartflow)**: intent-llm.ts DeepSeek 调用补 `thinking:{type:"disabled"}` (源码与 dist 同步) + 加 send/group.ts PascalCase 7 案。commit `431eeaa`
+- **test (perf D6)**: 新增 `tests/unit/perf-heat-path.test.mjs` 6 案 — config LruCache / affection 内存 Map / heartflow-learn 阈值 / lru TTL / dist 同步 热路径回归守卫。commit `53b2226`
+- **perf (D6-P2)**: OSS 凭据读取加入 LruCache TTL 缓存 (30s), `media-oss.ts` + `media-enrich/shared.ts` 各 + `clearOssConfigCache()` 供测试/凭据轮换, 消除自发送/入站媒体热路径每次 disk I/O。
+- **test**: 103 pass / 0 fail / 2 skip (2 skip 为显式 HMAC #SKIP)
+
+> ⚠️ 部署注: 2026-09-08 侧 dev 修复**尚未 deploy + restart 网关**, 待老板统一拍板后 `systemctl --user restart openclaw-gateway` 生效。
+
 ## [v1.4.0] 心流机制修复 + 4 层兜底链配置化 + 消除 plugin model hardcode
 - 2026-08-25 (老板: 修复心流 3 次重试死循环 + 兜底默认从 cfg 链动态读取, 缺失抛错)
 - **bug fix (09:38 老板拍 C 方案)**:
