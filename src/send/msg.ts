@@ -99,8 +99,18 @@ export async function persistOutboundMsg(
     // v1.3.59 P0-1 (2026-08-13 完整审阅): Code=0/200 只是 HTTP 层, 真正成功看 BaseResponse.ret===0
     //   否则 file/link 等 vendor 返 Code=0+ret=-2 时写入幽灵 outbound 记录 (污染上下文/引用)
     if (resp.Code !== 0 && resp.Code !== 200) return; // 发送失败不入库
-    const baseRet = (resp.Data as { BaseResponse?: { ret?: number } } | undefined)?.BaseResponse?.ret;
-    if (baseRet !== undefined && baseRet !== 0) return; // Code=0 但 ret≠0 → 实际失败, 不入库
+    const data = resp.Data as { BaseResponse?: { ret?: number }; List?: Array<{ Ret?: number }> } | undefined;
+    // v1.5.6 SEND-LIST-RET (2026-09-09 华为晨报 30362 ret=-2 复盘): vendor 逐条结果在 Data.List[].Ret
+    //   (Code=0 + BaseResponse.ret=0 但 List[0].Ret=-2 → 消息实际拒收). 任一条 Ret!=0 → 不入库防幽灵记录
+    if (Array.isArray(data?.List) && data.List.length > 0) {
+      for (const item of data.List) {
+        const itemRet = (item as { Ret?: number }).Ret;
+        if (itemRet !== undefined && itemRet !== 0) return;
+      }
+    } else {
+      const baseRet = data?.BaseResponse?.ret;
+      if (baseRet !== undefined && baseRet !== 0) return; // Code=0 但 ret≠0 → 实际失败, 不入库
+    }
     const ids = extractOutboundMsgIds(resp);
     await saveMessage({
       account_id: ctx.accountId,
