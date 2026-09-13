@@ -4,6 +4,40 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.6.0] vendor swagger 全量对齐 (容器 v09102, 2026-09-13)
+
+> 起因: 老板「看下我 wechatpadpro 容器中的 swagger 接口文档, 我的项目接口应该需要更新及新整了, 先帮我比对比对」→「继续完整修正」。
+> 基准 = 容器 `http://127.0.0.1:28062/swagger.json`（323 路径 / 348 definitions, md5 `bccc5af02a232eaf52df067ba87859be`）。
+> 全量比对报告: `../wpp-swagger-diff-20260913.md`。
+
+### Fixed (A: 项目在调、厂商已下线 ⇒ 必 404)
+- **`/Search/Services`、`/Search/Service/{name}`**: 厂商已下线（能力合并进 `/Search/Capabilities` + `/Search/Query`）⇒ 删除 `search.services()` / `search.service()` 及 `searchServices` / `searchService` 两个 agent 工具；语义由 `capabilities()` 与 `query(q, category)` 覆盖。
+
+### Added (B: 接 12 个厂商新能力)
+- **friendcircle**: `BatchDownload` / `BatchDownloadStatus` / `BatchDownloadFile`（批量导出三拍；文件走新增的 `getWppBinary`，`getWppJson` 会 `text()` 解析毁掉二进制）、`AutoForward` / `AutoForwardStatus`（自动跟发，发布类走 `assertFriendCirclePublishAllowed`）
+- **friend**: `AutoAccept`（自动通过好友申请，默认关闭、无默认放行）、`GetFriendRequestList`
+- **label**: `UpdateOrder`；**tenpay**: `CreatePreTransfer`（单位分，只下预订单不扣款）；**tools**: `DownloadMiniProgramCover`
+- **other（新模块 `src/send/other.ts` + `other-meta.ts`）**: `GetUserRankLikeCount`
+- **msg**: `SendApp`（⚠️ 语义已由「群发」改为定向 App 消息，但 **不注册 agent 工具**且 `toWxid` 为必传形参 — 见 `send/msg.ts` 注释）
+
+### Fixed (C: 字段名)
+- `OfficialAccounts/OauthAuthorize` 补 swagger 必填 `appid`；`Label/UpdateName` 的 `labelName` → `NewName`（大小写不敏感也救不了的真名差异）
+- 其余为大小写差（`appId` vs `appid` 等）— vendor 是 Go, `encoding/json` 大小写不敏感匹配, **非缺陷**, 不改
+- **存疑未改**: `OfficialAccounts/Follow` / `Quit` — swagger 引用的是通用占位 `DefaultParamDoc`（只有 `appid`, 与 `Quit` 共用）而项目发语义化的 `{biz, operation}`, 冲突且无活体证据 ⇒ 保留原样 + 就地注释
+
+### ⚠️ Fixed (纠正 v1.4.1 起的端点误绑, 需老板活账号复测)
+- **`/Tools/setproxy` 从来就是「设置/删除代理IP」**(必填 `proxy`, 传空串恢复直连), 厂商没换过语义; 步数端点一直是 `/Tools/SetStep`(必填 `step`), 两者并存。
+- **误绑由来 (commit 7795b4a v1.4.1)**: 当时记「SetStep 有 vendor bug (`Step.go:107` index out of range panic → HTTP 500)」, 遂把步数改发 setproxy 作权宜, 并附观察「2026-08-20 发 `{steps}` ⇒ Code:1 可用」。**该观察实为反证**: setproxy 只读 `proxy`, 未知字段 `steps` 被 Go 静默忽略 ⇒ `proxy` 取零值空串 ⇒ **恢复直连**而厂商照常回成功码 ⇒ 那次调用既没改步数、还可能把账号出口代理清了。
+- **现改正**: `setStep` → `/Tools/SetStep`; setproxy 按真实语义单列 `setProxy(proxy)`。
+- ⚠️ **待老板活账号确认**: ① `SetStep` 的 Step.go:107 panic 在 v09102 是否已修 (swagger 只列 200, 无 422/500 文档); ② 有无账号因历史上那几次调用被静默改成直连 —— 厂商**无「查代理」端点**(`/Login/GetLoginStatus` 明写不返回代理凭据), 只能靠 setproxy 回写。
+
+### Added (回归门, 防再次静默漂移)
+- `tests/fixtures/vendor-swagger-endpoints.json` — swagger 路径快照入仓（`tools/gen-swagger-snapshot.mjs` 可重生成, 幂等）
+- `tests/unit/wpp-swagger-alignment.test.mjs` — 4 道断言（A=0 / 白名单无死登记 / swagger 端点必须接或显式排除 / 内联 body 不缺必填字段）。四道均做过**反向注入**验证; 过程中修掉自身两个盲区（注释里的路径被当调用 → 先 `stripComments`; 对象简写 `{keyword}` 取不到键名）。
+- **测试**: 131 个 (129 pass / 0 fail / 2 skip，含本批新增 4 案)；`tsc` 0 错；`dist/` 已重建
+
+> ⚠️ 部署注: 本次仅改源码 + 重建 `dist/`, **未 deploy 到 `/root/.openclaw/extensions/wechatpadpro/`, 未重启网关**。
+
 ## [v1.5.5-dev] 多维度审阅修复 + D6 性能守卫 (2026-09-08)
 
 > 注: v1.4.1 → v1.5.4 的变更记录在本体上线时已落 git commit (见 `git log`), 但 CHANGELOG.md 未逐版同步, 将于后续版本批量补齐。此处记录 2026-09-08 审阅驱动的当次修复。

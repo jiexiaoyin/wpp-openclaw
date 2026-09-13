@@ -100,12 +100,9 @@ export const SEARCH_META = {
         Type.Object({}),
         () => getSearchApi().capabilities(),
     ],
-    /** /Search/Services — GET 高级搜索能力目录 */
-    searchServices: [
-        "查看高级搜索能力目录.",
-        Type.Object({}),
-        () => getSearchApi().services(),
-    ],
+    // v1.6.0 SWAGGER-323: `searchServices` 与 `searchService` 已删.
+    // 厂商下线了 /Search/Services 与 /Search/Service/{name}, 这两个工具此前必 404;
+    // 能力分别由上面的 searchCapabilities 与下面的 searchQuery(category) 完全覆盖.
     /** /Search/Gateway — 兼容旧版搜一搜网关 */
     searchGateway: [
         "兼容旧版搜一搜网页网关.",
@@ -120,15 +117,6 @@ export const SEARCH_META = {
             category: Type.Optional(Type.String()),
         }),
         (query, category) => getSearchApi().query(query, category ?? ""),
-    ],
-    /** /Search/Service/{name} — 高级搜索能力调用 */
-    searchService: [
-        "调用高级搜索能力 (name 是能力名).",
-        Type.Object({
-            name: Type.String({ description: "能力名" }),
-            query: Type.Optional(Type.String()),
-        }),
-        (name, query) => getSearchApi().service(name, query ?? ""),
     ],
     /** /Search/Channels/Detail — 视频号内容详情 (v1.3.67 新 API) */
     channelsDetail: [

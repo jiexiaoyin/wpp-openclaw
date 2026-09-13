@@ -54,9 +54,9 @@ export const WXAPP_META = {
     ],
     /** /Wxapp/GetUserOpenId */
     getWxAppUserOpenId: [
-        "查询小程序用户的 openId.",
-        Type.Object({ appId: Type.String() }),
-        (appId) => getWxappApi().getUserOpenId(appId),
+        "查询小程序用户的 openId. toWxId=目标用户 wxid/username.",
+        Type.Object({ toWxId: Type.String({ description: "目标用户 wxid" }), appid: Type.String() }),
+        (toWxId, appid) => getWxappApi().getUserOpenId(toWxId, appid),
     ],
     /** /Wxapp/Verifyplugin */
     verifyPlugin: [
@@ -66,15 +66,29 @@ export const WXAPP_META = {
     ],
     /** /Wxapp/GetUnionPay */
     getWxAppUnionPay: [
-        "云闪付支付.",
-        Type.Object({ orderId: Type.String() }),
-        (orderId) => getWxappApi().getUnionPay(orderId),
+        "云闪付支付. 参数来自小程序支付下单结果.",
+        Type.Object({
+            appid: Type.String(),
+            sessionid: Type.String(),
+            timeStamp: Type.String(),
+            nonceStr: Type.String(),
+            package: Type.String(),
+            paySign: Type.String(),
+        }),
+        (appid, sessionid, timeStamp, nonceStr, pkgs, paySign) => getWxappApi().getUnionPay({ appid, sessionid, timeStamp, nonceStr, package: pkgs, paySign }),
     ],
     /** /Wxapp/Wxapp/GetpullPay */
     getWxAppPullPay: [
-        "推送小程序支付请求.",
-        Type.Object({ appId: Type.String() }),
-        (appId) => getWxappApi().getPullPay(appId),
+        "确认小程序支付. 参数来自小程序支付下单结果.",
+        Type.Object({
+            appid: Type.String(),
+            sessionid: Type.String(),
+            timeStamp: Type.String(),
+            nonceStr: Type.String(),
+            package: Type.String(),
+            paySign: Type.String(),
+        }),
+        (appid, sessionid, timeStamp, nonceStr, pkgs, paySign) => getWxappApi().getPullPay({ appid, sessionid, timeStamp, nonceStr, package: pkgs, paySign }),
     ],
     /** /Wxapp/DeleteOauthApp — 移除小程序授权 (v1.3.67 新 API) */
     deleteOauthApp: [

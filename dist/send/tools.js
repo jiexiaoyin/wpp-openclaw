@@ -35,25 +35,61 @@ export function makeWppTools(ctx) {
         downloadVoice: (fromUserName, msgId, length, bufid) => dispatch("/Tools/DownloadVoice", { fromUserName, msgId, length, bufid: bufid ?? "" }),
         /** /Tools/GeneratePayQCode — GET 生成支付二维码 */
         generatePayQCode: () => getWppJson(ctx.baseUrl, "/Tools/GeneratePayQCode", opts),
-        /** /Tools/GetA8Key */
-        getA8Key: (url) => dispatch("/Tools/GetA8Key", { url }),
+        /** /Tools/GetA8Key — swagger Tools.GetA8KeyParamDoc {reqUrl*, codeType, codeVersion, cookieBase64, flag, netType, opCode, scene}
+         *  v1.6.0: 旧码发 `url`, 厂商要的是 `reqUrl` (非大小写差异). 其余为可选透传. */
+        getA8Key: (url, extra) => dispatch("/Tools/GetA8Key", { reqUrl: url, ...(extra ?? {}) }),
         /** /Tools/GetBandCardList */
         getBandCardList: () => dispatch("/Tools/GetBandCardList", {}),
         /** /Tools/GetBoundHardDevices */
         getBoundHardDevices: () => dispatch("/Tools/GetBoundHardDevices", {}),
         /** /Tools/GetCdnDns */
         getCdnDns: () => dispatch("/Tools/GetCdnDns", {}),
-        /** /Tools/HelperVerification */
-        helperVerification: (code) => dispatch("/Tools/HelperVerification", { code }),
+        /** /Tools/HelperVerification — 辅助验证手机号
+         *  swagger Tools.HelperVerificationParamDoc {gcc*, mobile*}. v1.6.0: 旧码发单个 `code` (该字段
+         *  在 swagger 里根本不存在) — 改为国家码 + 手机号. */
+        helperVerification: (gcc, mobile) => dispatch("/Tools/HelperVerification", { gcc, mobile }),
         /** /Tools/OauthSdkApp */
         oauthSdkApp: (appId) => dispatch("/Tools/OauthSdkApp", { appId }),
-        /** /Tools/ThirdAppGrant */
-        thirdAppGrant: (appId, scope) => dispatch("/Tools/ThirdAppGrant", { appId, scope }),
+        /** /Tools/ThirdAppGrant — 第三方 APP 授权
+         *  swagger Tools.ThirdAppGrantParamDoc {url*, appid*}. v1.6.0: 旧码发 {appId, scope} —
+         *  `appId` 能靠大小写不敏感对上 `appid`, 但必填的 `url` 完全没发. */
+        thirdAppGrant: (url, appid) => dispatch("/Tools/ThirdAppGrant", { url, appid }),
         /** /Tools/UploadFile — swagger Tools.UploadParamDoc {base64*} */
         uploadFile: (base64) => dispatch("/Tools/UploadFile", { base64 }),
-        /** /Tools/setproxy — 修改微信步数. 保持用 setproxy (实测 2026-08-20 新 vendor Code:1 可用).
-         *  新端点 /Tools/SetStep 有 vendor bug (Step.go:107 index out of range panic → HTTP 500), 勿切. */
-        setStep: (steps) => dispatch("/Tools/setproxy", { steps }),
+        /**
+         * ⚠️ v1.6.0 SWAGGER-323 — **纠正一个从 v1.4.1 起就错的端点绑定**.
+         *
+         * 事实 (老板 2026-09-13 亲口确认 + 容器 swagger 双向印证):
+         *   `/Tools/setproxy` = **设置/删除代理IP** (必填 `proxy`, 传空串恢复直连) —— **本来就是**,
+         *   厂商从没换过语义; `/Tools/SetStep` = 修改微信步数 (必填 `step`)。两个端点一直并存。
+         *
+         * 误绑由来 (commit 7795b4a v1.4.1):
+         *   当时记「新端点 SetStep 有 vendor bug (Step.go:107 index out of range panic → HTTP 500)」,
+         *   于是把步数改发到 setproxy 作**权宜**, 并附一条观察「实测 2026-08-20 发 `{steps}` ⇒ Code:1 可用」。
+         *   现在看这条观察恰恰是反证: setproxy 只读 `proxy`, 未知字段 `steps` 被 Go 静默忽略 ⇒ `proxy` 取零值
+         *   空串 ⇒ **恢复直连**, 厂商照常回成功码。所以那次调用**既没改步数、还可能把账号的出口代理清了**。
+         *   (与该观察完全自洽 ⇒ 当年并无「步数可用」这回事。)
+         *
+         * 现改正: 步数回 `/Tools/SetStep`, setproxy 按其真实语义单列成 setProxy。
+         * ⚠️ 仍待老板在活账号确认两点: ① `SetStep` 的 Step.go:107 panic 在 v09102 是否已修 (swagger 只列 200);
+         *    ② 有没有账号因历史上那几次调用被静默改成了直连 (厂商无「查代理」端点, 只能靠 setproxy 回写)。
+         */
+        setStep: (steps) => dispatch("/Tools/SetStep", { step: steps }),
+        /** /Tools/setproxy — 设置/删除代理IP (swagger Tools.SetProxyParamDoc {proxy*}).
+         *  传空字符串恢复直连; 格式 host:port. */
+        setProxy: (proxy) => dispatch("/Tools/setproxy", { proxy }),
+        /**
+         * /Tools/DownloadMiniProgramCover — 下载小程序卡片封面 (v1.6.0 SWAGGER-323 新端点).
+         * swagger: Tools.CdnDownloadImageParamDoc {url | file_no+file_aes_key} (usedBy=2, 与 CdnDownloadImage 同形).
+         * 用法: 把 WS/Webhook 小程序消息里 `app.cover_image.download_context` **原样**作为请求体
+         *   (它自带 url 或 file_no+file_aes_key), 服务端返回 Data.Image = base64 封面图。
+         * 提供一个 `downloadContext` 便捷入口 + 三个显式字段入口 (缺 url 时用 file_no/file_aes_key)。
+         */
+        downloadMiniProgramCover: (p) => dispatch("/Tools/DownloadMiniProgramCover", {
+            ...(p.url ? { url: p.url } : {}),
+            ...(p.fileNo ? { file_no: p.fileNo } : {}),
+            ...(p.fileAesKey ? { file_aes_key: p.fileAesKey } : {}),
+        }),
         /**
          * v1.3.25 SWAGGER-254: /Tools/DownloadFileBinary — 完整下载微信文件 (二进制).
          * swagger Tools.BinaryFileDownloadParamDoc {app_id, attach_id*, data_len*, file_name, section, user_name*}

@@ -23,6 +23,7 @@ import { makeWppTranslate } from "./translate.js";
 import { makeWppCustomized } from "./customized.js";
 import { makeWppWebhook } from "./webhook.js";
 import { makeWppXiaoWei } from "./xiaowei.js"; // v1.3.69 预开发: 小微智能体 (默认不启用)
+import { makeWppOther } from "./other.js"; // v1.6.0 SWAGGER-323: 厂商新增 Other tag (运动排行)
 
 // 同时作为 re-export 入口 (供 misc-meta 用)
 export {
@@ -47,6 +48,7 @@ export {
   makeWppCustomized,
   makeWppWebhook,
   makeWppXiaoWei,
+  makeWppOther,
 };
 
 /**
@@ -79,6 +81,7 @@ export function makeWppSend(ctx: WppAccountCtx) {
     customized: makeWppCustomized(ctx),
     webhook: makeWppWebhook(ctx),
     xiaoWei: makeWppXiaoWei(ctx), // v1.3.69 预开发: 小微智能体 (默认不启用)
+    other: makeWppOther(ctx), // v1.6.0 SWAGGER-323: 厂商新增 Other tag (运动排行)
   };
 }
 
@@ -137,7 +140,8 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Msg/Quote",
     "/Msg/Revoke",
     "/Msg/ShareLink",
-    // v1.3.25 SWAGGER-254: SendApp 注册 (仅登记, 群发端点勿调)
+    // v1.6.0 SWAGGER-323: 本端点 swagger 已改为定向 App 消息 (SendAppMsgParamDoc {ToWxid,Type,Xml},
+    //   与 ShareLink 同 definition), 不再是当年的群发定义 — 见 send/msg.ts sendAppMsg 的说明.
     "/Msg/SendApp",
     "/Msg/SendCDNFile",
     "/Msg/SendCDNImg",
@@ -198,6 +202,9 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Friend/Upload",
     // v1.3.67 新 vendor API
     "/Friend/GetGHList",
+    // v1.6.0 SWAGGER-323: 好友申请自动化
+    "/Friend/AutoAccept",
+    "/Friend/GetFriendRequestList",
   ],
   user: [
     "/User/BindQQ",
@@ -269,6 +276,12 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/FriendCircle/SetFriendCircleDays",
     // v1.3.67 新 vendor
     "/FriendCircle/ActiveTasks",
+    // v1.6.0 SWAGGER-323: 批量导出 (3) + 自动跟发 (2)
+    "/FriendCircle/BatchDownload",
+    "/FriendCircle/BatchDownloadStatus",
+    "/FriendCircle/BatchDownloadFile",
+    "/FriendCircle/AutoForward",
+    "/FriendCircle/AutoForwardStatus",
   ],
   search: [
     "/Search/AI",
@@ -290,11 +303,11 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Search/Underlines",
     "/Search/WeChatIndex",
     // v1.3.25 SWAGGER-254: 新增 5 个通用搜索
+    // v1.6.0 SWAGGER-323: `/Search/Services` 与 `/Search/Service/{name}` 已从厂商 swagger 下线
+    //   (旧「高级搜索能力目录/调用」一套合并进 Capabilities + Query) — 已从本清单与代码中移除.
     "/Search/Capabilities",
     "/Search/Gateway",
     "/Search/Query",
-    "/Search/Service/{name}",
-    "/Search/Services",
     // v1.3.67 新 vendor: 视频号深度 API
     "/Search/Channels/Detail",
     "/Search/Channels/Comments",
@@ -367,6 +380,10 @@ export const WPP_VENDOR_ENDPOINTS = {
     // v1.3.25 SWAGGER-254: 新增 2 个 (media-enrich 已用, 补注册)
     "/Tools/DownloadFileBinary",
     "/Tools/DownloadVoiceBinary",
+    // v1.6.0 SWAGGER-323: 纠正误绑 — setproxy 本来就是代理IP, 步数端点一直是 SetStep;
+    //   setproxy 本就在上面白名单里 (没变), 这里补的是真正该用的 SetStep. 详见 send/tools.ts.
+    "/Tools/SetStep",
+    "/Tools/DownloadMiniProgramCover",
   ],
   tenPay: [
     "/TenPay/GeMaSkdPayQCode",
@@ -385,6 +402,8 @@ export const WPP_VENDOR_ENDPOINTS = {
     // v1.3.67 新 vendor: 红包增强
     "/TenPay/OpenHongBaoWithParams",
     "/TenPay/ReceivewxhbWithoutEncryption",
+    // v1.6.0 SWAGGER-323: 转账预订单 (不扣款, 配合 ConfirmPreTransferApi)
+    "/TenPay/CreatePreTransfer",
   ],
   favorites: ["/Favor/Del", "/Favor/GetFavInfo", "/Favor/GetFavItem", "/Favor/Sync"],
   label: [
@@ -395,6 +414,8 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/Label/UpdateName",
     // v1.3.67 新 vendor
     "/Label/GetWXFriendListByLabel",
+    // v1.6.0 SWAGGER-323
+    "/Label/UpdateOrder",
   ],
   voice: [
     "/Voice/MessageTranscribe",
@@ -441,4 +462,6 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/XiaoWei/RedDots/Query",
     "/XiaoWei/RedDots/Read",
   ],
+  // v1.6.0 SWAGGER-323: 厂商新增 Other tag (v09102 只有一个端点)
+  other: ["/Other/GetUserRankLikeCount"],
 } as const;
