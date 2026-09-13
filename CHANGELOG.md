@@ -4,6 +4,108 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.6.3] 小程序卡片补上缩略图 + schema.sql 静默失效修复 (2026-09-13)
+
+> 起因两件, 都是老板实测/拍板发现的:
+> ① **v1.6.2 换现代卡片后卡片没有图** (老板连问两轮「还是没有图片呢？啥情况」)。定位结论:
+>    真卡片的图**只**来自 `<appattach>` 里的微信 CDN blob; 只给 `<weappiconurl>`(或厂商结构化接口
+>    的 `thumbUrl`) 客户端就是**灰块**; 而原卡片的旧凭据已失效 (`/Tools/CdnDownloadImage` 返
+>    `-8 … -5103017`) ⇒ 谁也没法「继承」, 只能**自己上传一份换新凭据**。
+> ② 补线上扩展缺失的 `db/schema.sql` 时牵出一个更深的问题: 启动日志恒为 `0 statements applied`。
+
+### Added
+- **缩略图自举 (XCX-THUMB)**: `sendXCX` 走现代卡片时先把 `thumbUrl` 上传到微信 CDN
+  (`/Msg/UploadImg`, 落地会话 = **`filehelper`**, 客户会话里看不见), 拿回 `Fileid`/`Aeskey` 合成
+  `<appattach>` 六节点 (`cdnthumburl`/`cdnthumbaeskey`/`cdnthumbmd5`/`cdnthumblength`/`cdnthumbwidth`/`cdnthumbheight`)
+  + 顶层 `<md5>`, 与真卡片**逐节点同构** (凭据格式同源: 与真卡片 `cdnthumburl` 同前缀 `305f020100044b3049`,
+  且实测能被 `CdnDownloadImage` 取回 ⇒ 收件人客户端也能取)。
+- **`extractCdnThumbRef` / `cdnThumbRefFromUpload` / `imagePixelSize` / `splitSchemaStatements`**: 均为纯函数,
+  便于单测 (真打厂商那段只剩 IO + 错误处理)。
+- 上传**任何一步失败都非致命**: 返 null ⇒ 卡片照发 (只是没图), 不阻塞消息; 每次失败都留 `warn` 便于回溯。
+
+### Fixed
+- **`applySchemaSql` 切分 bug (静默失效)**: 旧实现 `split(/;\s*\n/)` 后 `.filter(s => !s.startsWith("--"))`,
+  而 `db/schema.sql` **每个语句上方都有 `--` 注释行** ⇒ 每个 chunk 都以注释开头 ⇒ **11 条 CREATE TABLE
+  全部被丢掉**, 日志恒报 `0 statements applied` 且不报错。今天无害 (表早就在), 但**将来 schema 加列/加表
+  会静默不生效**。改为**先按行剥注释再按 `;` 切**, 并加「文件非空却切出 0 条 ⇒ warn 吵出来」的防线。
+
+### 排查过程中确认的事实 (已写进单测, 防回归)
+- 厂商结构化接口 `/Msg/SendAppMessage` (kind=mini_program) 与手搓 XML **都**拿不到图 —— 不是"格式写错了",
+  是缺 `<appattach>` 无论如何都没图 (老板三轮实测)。
+- `/Msg/UploadImg` 的响应字段名是厂商 Go 结构体原样序列化 (`Fileid`/`Aeskey`/`TotalLen`),
+  **不在 swagger 里** (swagger 只写示例 `file_id`/`url`, 完全对不上) —— 实测得出, 故对它加了 hex 校验,
+  占位符/空对象一律拒 (否则会把占位符发上线, 卡片变灰块且难查)。
+
+## [v1.6.2] 小程序卡片出站: 可直达内部页面 (XCX-PAGEPATH, 2026-09-13)
+
+> 起因: 老板要「把刚收到的那张国补领券卡片 (`?activity_id=320800`) 转发回来」⇒ 用 `/Msg/SendXCX`
+> 发出去才发现**做不到具体页面**: 旧实现 `buildAppMsgXml` 是 legacy `appmsg type=2001` + `<mmapp><url>`,
+> 微信按 url 走 webview ⇒ 卡片只到小程序首页; 而**真卡片是 `type=33` + `<weappinfo>{pagepath,appid,username}`**,
+> 由客户端自己拉起对应页面 (模板取自产线真报文 `app.raw_xml`, 该卡片确认能正常打开)。
+
+### Added
+- **`buildMiniProgramCardXml`** (`src/send/msg.ts`): 现代卡片 XML, 逐节点对齐真报文 ——
+  `weappinfo{pagepath,weappiconurl,version,appid,type=2,username}` + `sourceusername`(= appid)
+  + 顶层 `type=33` + `sourcedisplayname`/`des`。值一律 XML 转义 (真卡片 icon url 里就带 `&amp;`)。
+- **`buildXCXContent`**: 唯一分叉点 —— 给了 `pagePath` 走现代卡片, **不给则 legacy 输出逐字节不变**
+  (单测锁死, 老调用方零回归)。
+- **`sendXCX` 扩到 8 参**: `(…, thumbUrl?, pagePath?, username?)` —— `pagePath`/`username` 追加在**末尾**
+  (位置传参, 中间插入会让老调用方整体错位; 有单测锁这个顺序)。
+- **入站注记补 `username`**: `[小程序] 名称 (appid wx…, gh_…@app)`。它是「小助理按原样转发同一张卡片」
+  的必备参数, 且只存在于 `raw_payload`, 不打进 prompt 模型无从得知 ⇒ 转发能力等于无法使用。
+- **透传链**: `sendMessage` 统一入口 (`type=miniprogram` + `pagePath`/`username`)、`sendMiniProgram`
+  直达工具 (`pagePath`/`xcxUsername`)、`dispatch/send-message.ts` 路由。审计行同时带上页面路径
+  (`[小程序] 标题 (页面 pages/…?activity_id=320800)`), 否则一堆卡片入库后分不清首页与活动页。
+
+### Fixed
+- `sendMiniProgram` 工具声明了 `thumbUrl` 却**从不透传** (模型给缩略图 URL 是无效的) —— 一并修掉。
+
+### Known issue (未验, 待产线实测)
+- ⚠️ 真卡片的缩略图来自 `<appattach>` 里的微信 CDN blob (实测已失效, `-5103017`), 我们造不出新 blob ⇒
+  **刻意不给 appattach**, 缩略图由 `<weappiconurl>` 兜底。若微信仍显示灰块, 需再试 `<appattach/>` 空节点变体。
+- `<version>` 缺省**不输出** (真卡片的 `31` 是发送方客户端的小程序版本号, 我们无从得知; 省略时由微信按
+  最新版本解析, 比编一个号安全), 可用参数覆盖。
+
+## [v1.6.1] 小程序卡片入站识别 (msgType=49, 2026-09-13)
+
+> 起因: 老板转发国补小程序卡片给小助理, 小助理只看到一行标题并回「转发时只带了文字」。
+> **该归因是错的** —— 实测生产 DB 三条 49 消息的 `raw_payload` 里 `app` 块字段齐全
+> (`mini_program.app_id` / `page_path` / `description` / `cover_image.download_context` / `raw_xml`),
+> 是入站链路除接龙 (`category=app_message`) 外对 49 无任何解析, `app` 块只落 raw_payload 审计 ⇒ 从不进 LLM。
+
+### Added
+- **`src/inbound/app-card.ts`** (新模块): `isMiniProgramCard` / `parseMiniProgramCard` /
+  `formatMiniProgramCard` / `planMiniProgramAssetAttempts` / `enrichMiniProgramAsset`。
+  `handler.ts` 在 Step 1 (enrich 循环, **落库之前**) 把卡片文本化追加进 `m.content` ⇒ 入库 + 进 prompt:
+  ```
+  [小程序] 国家消费品换新补贴微信端 (appid wx8386cf8f5e76d36a)
+  页面路径: pages/index/index.html?activity_id=320800
+  ```
+  判定用 `app.category === "mini_program"` **精确匹配** —— 接龙 (`app_message`) / 文件 (`file`) /
+  引用 (`quote`) / 转账 (`payment_notice`) 均不命中 (单测反向注入验过)。
+- **封面自动下载 + 降级**: `download_context` (直链优先, 否则 `file_no`+`file_aes_key`) → 失败再退到
+  `app.icon_url`, 传 OSS `wpp/{account}/miniprogram/{date}/`。标签**分开**: `[小程序封面]` / `[小程序图标]`
+  (混标会让模型以为看到了卡片大图)。失败一律非致命, 不阻塞入库与派发。
+
+### Known side effect (既有行为延伸, 本次未改)
+- 注记写回 `m.content` ⇒ 引用回复时 `originalContent` (= `msg.content`) 会把注记带进 refermsg,
+  微信里被引用气泡显示为「标题 + [小程序] 小程序名 (appid …) + 页面路径」。**图片早有同样行为**
+  (`[图片] <URL>` 一并进 refermsg), 本次沿用同一约定未做特殊化。若要干净引用气泡, 需单独引入
+  「引用用原始 content」通道 —— 影响全 msgType, 不在本次范围。
+
+### Known issue (厂商侧, 非本项目缺陷)
+- ⚠️ **封面 CDN 分支恒失败**: 对真报文两条消息的 `download_context` 调
+  `/Tools/DownloadMiniProgramCover` 恒返 `Code:-8 / 异常：小程序封面下载失败：CDN 返回错误码 -5103017×8`。
+  同凭证打通用 `/Tools/CdnDownloadImage` **同样 -5103017** ⇒ 不是本端点的问题, 是封面 blob 在微信 CDN 侧取不到
+  (过期或该 variant 不受支持)。**后果 = 实际落到 `[小程序图标]` (140×140 PNG, 实测 14884B 可下)**。
+  待验: 卡片刚转发时立即下载是否可成 (若可 ⇒ 是 TTL, 需要"收到即下"策略)。
+
+### Added (tests)
+- `tests/unit/app-card.test.mjs` (7 例) + `tests/fixtures/miniprogram-card.json`
+  (**生产 DB `wpp_messages.id=30869` 的 `raw_payload.app` 逐字段保真**, 只删同源大体积 `raw_xml_json`)。
+  ⚠️ 守卫断言用**逐字精确行匹配**而非「符号存在」—— 反向注入实测: 把守卫改成
+  `if (false && … && isMiniProgramCard(m.raw))` 时裸 `match` 断言**照样 PASS** (符号还在源码里)。
+
 ## [v1.6.0] vendor swagger 全量对齐 (容器 v09102, 2026-09-13)
 
 > 起因: 老板「看下我 wechatpadpro 容器中的 swagger 接口文档, 我的项目接口应该需要更新及新整了, 先帮我比对比对」→「继续完整修正」。

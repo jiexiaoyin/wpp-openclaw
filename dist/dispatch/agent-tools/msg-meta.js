@@ -127,18 +127,23 @@ export const MSG_META = {
     ],
     /** /Msg/SendXCX */
     sendMiniProgram: [
-        "发送小程序卡片.",
+        "发送小程序卡片. 传 pagePath 可直达小程序内部页面 (卡片点开即该页); xcxUsername 形如 gh_xxx@app, 与 pagePath 配套使用 (从入站小程序卡片注记里可读到). 只给 5 个基础参数则发的是打开首页/链接的普通卡片.",
         Type.Object({
             toWxid: Type.String(),
             xcxTitle: Type.String(),
             xcxDesc: Type.String(),
+            /** legacy 卡片 (无 pagePath) 用它作 webview 地址; 现代卡片不用 */
             xcxUrl: Type.String(),
             xcxAppId: Type.String(),
             thumbUrl: Type.Optional(Type.String()),
+            /** v1.6.2: 小程序内部页面路径, 如 pages/index/index.html?activity_id=320800 */
+            pagePath: Type.Optional(Type.String()),
+            /** v1.6.2: 小程序 username gh_xxx@app */
+            xcxUsername: Type.Optional(Type.String()),
         }),
-        // 原版 api.sendXCX(toWxid, xcxTitle, xcxDesc, xcxUrl, xcxAppId, thumbUrl) — 但 api.sendXCX 签名不同
-        // 历史不一致, 不优化
-        (toWxid, xcxTitle, xcxDesc, xcxUrl, xcxAppId, _thumbUrl) => getMsgApi().sendXCX(toWxid, xcxTitle, xcxDesc, xcxUrl, xcxAppId),
+        // v1.6.2 XCX-PAGEPATH: thumbUrl 原样透传 (旧版把它丢掉了 —— schema 声明了却不用, 模型给图标画像是无效的);
+        //   pagePath/xcxUsername 走现代卡片, 不传则行为与旧版一致。
+        (toWxid, xcxTitle, xcxDesc, xcxUrl, xcxAppId, thumbUrl, pagePath, xcxUsername) => getMsgApi().sendXCX(toWxid, xcxTitle, xcxDesc, xcxUrl, xcxAppId, thumbUrl, pagePath, xcxUsername),
     ],
     /** /Msg/ShareCard */
     sendContactCard: [
@@ -198,7 +203,7 @@ export const MSG_META = {
      * v1.3.18 P1-核心1: 保持 dynamic import (v1.3.17 已修)
      */
     sendMessage: [
-        "统一发送消息. toWxid 目标(群id或对方wxid), type 类型(text/image/video/voice/file/link/card/location/miniprogram/emoji), content 内容或URL. 文本用 content 正文; 图片/视频/语音/文件用 content 填 OSS/公网URL; 链接用 title+desc+content(URL); 名片用 cardWxid+cardNickname; 位置用 latitude+longitude+label. 推荐优先用此工具.",
+        "统一发送消息. toWxid 目标(群id或对方wxid), type 类型(text/image/video/voice/file/link/card/location/miniprogram/emoji), content 内容或URL. 文本用 content 正文; 图片/视频/语音/文件用 content 填 OSS/公网URL; 链接用 title+desc+content(URL); 名片用 cardWxid+cardNickname; 位置用 latitude+longitude+label; 小程序用 appId+title+desc, 要直达内部页面再加 pagePath+username. 推荐优先用此工具.",
         Type.Object({
             toWxid: Type.String(),
             type: Type.String({ description: "text/image/video/voice/file/link/card/location/miniprogram/emoji" }),
@@ -216,8 +221,11 @@ export const MSG_META = {
             durationMs: Type.Optional(Type.Number({ description: "voice/video: 时长毫秒" })),
             size: Type.Optional(Type.Number({ description: "emoji: 大小字节" })),
             ats: Type.Optional(Type.Array(Type.String(), { description: "text: 群@ wxid列表" })),
+            // v1.6.2 XCX-PAGEPATH: 追加在末尾 ⇒ 前面参数位置不变 (这个工具是位置传参, 中间插会全错位)
+            pagePath: Type.Optional(Type.String({ description: "miniprogram: 内部页面路径, 给了才能开具体页面" })),
+            username: Type.Optional(Type.String({ description: "miniprogram: 小程序username gh_xxx@app" })),
         }),
-        async (toWxid, type, content, fileName, title, desc, thumbUrl, appId, latitude, longitude, label, cardWxid, cardNickname, durationMs, size, ats) => {
+        async (toWxid, type, content, fileName, title, desc, thumbUrl, appId, latitude, longitude, label, cardWxid, cardNickname, durationMs, size, ats, pagePath, username) => {
             const { sendMessage } = await import("../../dispatch/send-message.js");
             const r = await sendMessage({
                 accountId: getCurrentAccountId() ?? "default",
@@ -228,6 +236,7 @@ export const MSG_META = {
                 latitude, longitude, label,
                 cardWxid, cardNickname,
                 durationMs, size, ats,
+                pagePath, username,
             });
             return r.ok
                 ? JSON.stringify({ ok: true, msgId: r.msgId, newMsgId: r.newMsgId, createTime: r.createTime })

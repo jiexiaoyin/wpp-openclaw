@@ -11,6 +11,7 @@ import { extractPairCode } from "../pairing-store.js";
 import { getMessageById } from "../storage/db/messages.js";
 import { getMessageByMsgIdOrNewId } from "../db.js";
 import { parseRelayText, isRelayMessage } from "./relay.js";
+import { isMiniProgramCard, parseMiniProgramCard, formatMiniProgramCard, enrichMiniProgramAsset } from "./app-card.js";
 import { isRedPacketMessage, processRedPacket } from "./hongbao.js";
 import { extractAtUserList } from "./parser/mention.js";
 import { payloadToAllInboundMessages } from "./parser.js";
@@ -307,6 +308,34 @@ export function createWppInboundHandler(opts) {
                     }
                     catch (e) {
                         warn(`quote svrid capture err (non-fatal): ${formatErr(e)}`);
+                    }
+                }
+                // v1.6.1 MINIPROGRAM-CARD: 小程序卡片 (49 + app.category=mini_program) 文本化 + 封面入 OSS。
+                //   此前该类型无任何解析 ⇒ 模型只看到厂商 content 字段 (= 标题), 会误判「转发时只带了文字」。
+                if (m.msgType === MsgType.APP && isMiniProgramCard(m.raw)) {
+                    try {
+                        const card = parseMiniProgramCard(m.raw);
+                        if (card) {
+                            let assetUrl;
+                            let assetKind;
+                            if (opts.vendorCtx && card.cover) {
+                                const r = await trackEnrich(`${m.accountId}:${m.fromWxid}`, () => enrichMiniProgramAsset(opts.vendorCtx, card.cover));
+                                assetUrl = r.mediaUrl ?? undefined;
+                                assetKind = r.kind;
+                                if (!assetUrl) {
+                                    log.info(`[WPP v1.6.1 MINIPROGRAM-CARD] cover miss (non-fatal): msgId=${m.msgId} err=${r.error}`);
+                                }
+                            }
+                            m.content = `${m.content}\n${formatMiniProgramCard(card, {
+                                coverUrl: assetKind === "cover" ? assetUrl : undefined,
+                                iconUrl: assetKind === "icon" ? assetUrl : undefined,
+                                omitTitle: !card.title || m.content.includes(card.title),
+                            })}`;
+                            log.info(`[WPP v1.6.1 MINIPROGRAM-CARD] ok: msgId=${m.msgId} appid=${card.appId ?? "?"} page=${card.pagePath ?? "?"} asset=${assetKind ?? "无"}`);
+                        }
+                    }
+                    catch (e) {
+                        warn(`[WPP v1.6.1 MINIPROGRAM-CARD] enrich failed (non-fatal): ${formatErr(e)}`, { msgId: m.msgId });
                     }
                 }
                 // 引用消息: 查 DB 被引用消息, 把原媒体 OSS URL 注入 content → AI 看到原图/原资源

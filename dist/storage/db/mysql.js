@@ -82,6 +82,30 @@ function firstRow(rows) {
     return rows.length > 0 && rows[0] !== undefined ? rows[0] : null;
 }
 /**
+ * 把 schema.sql 切成可执行语句 (纯函数, 可单测)。
+ *
+ * ⚠️ v1.6.3 修的真 bug: 旧实现是 `split(/;\s*\n/)` 之后 `.filter((s) => !s.startsWith("--"))`,
+ *   而本仓 db/schema.sql **每个语句上方都有一行 `--` 注释** ⇒ 每个 chunk 都以注释开头 ⇒
+ *   **11 条 CREATE TABLE 全被丢掉**, 日志恒为 `0 statements applied` 且**一声不响**
+ *   (今天无害因为表早就在; 将来 schema 加列/加表会静默不生效 —— 最坏的一类失效)。
+ *   根因是「用 chunk 开头来判断整块」: 切分单位是语句, 注释却按行贴。故改成**先按行去注释**再切 `;`。
+ *
+ * 限制 (与 schema.sql 的实际内容一致, 单测盯着): 不处理块注释 `/* *\/`, 也不处理字符串里的 `;`
+ *   —— 本文件里没有; 若将来出现, 下面的单测会先炸而不是静静切错。
+ */
+export function splitSchemaStatements(sql) {
+    return sql
+        .split("\n")
+        .map((line) => {
+        const i = line.indexOf("--");
+        return i >= 0 ? line.slice(0, i) : line; // 行注释: `--` 到行尾 (含行尾贴注释)
+    })
+        .join("\n")
+        .split(";")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+}
+/**
  * Read schema.sql from plugin root db/schema.sql, split by `;` and execute each.
  * 已 IF NOT EXISTS, idempotent.
  */
@@ -95,10 +119,12 @@ async function applySchemaSql(pool) {
         return;
     }
     const sql = await readFile(schemaPath, "utf8");
-    const stmts = sql
-        .split(/;\s*\n/)
-        .map((s) => s.trim())
-        .filter((s) => s && !s.startsWith("--"));
+    const stmts = splitSchemaStatements(sql);
+    // 静默失效防线: 文件明明有内容却切不出语句 ⇒ 一定是解析坏了, 必须吵出来
+    if (stmts.length === 0 && sql.trim().length > 0) {
+        warn(`applySchemaSql: 解析出 0 条语句但 ${schemaPath} 非空 (${sql.length} 字节) —— 切分逻辑有问题, schema 未生效!`);
+        return;
+    }
     for (const stmt of stmts) {
         await pool.query(stmt);
     }

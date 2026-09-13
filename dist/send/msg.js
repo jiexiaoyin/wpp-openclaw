@@ -1,4 +1,5 @@
 // src/send/msg.ts - Msg tag (send text/image/video/voice/file/etc.)
+import { createHash } from "node:crypto";
 import { postWppJson } from "../api/client.js";
 import { ctxToCallOpts } from "./factory.js";
 import { saveMessage } from "../db.js";
@@ -46,7 +47,13 @@ function outboundContentFor(ep, body) {
         case "/Msg/ShareCard": return `[名片] ${body.CardNickName ?? ""}`;
         case "/Msg/ShareLink": return `[链接] ${extractXmlTitle(body.Xml)}`;
         case "/Msg/ShareLocation": return `[位置] ${body.Label ?? body.Poiname ?? ""}`;
-        case "/Msg/SendXCX": return `[小程序] ${extractXmlTitle(body.Content)}`;
+        case "/Msg/SendXCX": {
+            // v1.6.2: 现代卡片 (type=33) 带 pagepath ⇒ 审计行要能看出「发的是哪个页面」,
+            //   否则一堆 [小程序] 标题入库后无法区分首页与活动页 (引用/排查都要靠这行)。
+            const m = typeof body.Content === "string" ? body.Content.match(/<pagepath>([\s\S]*?)<\/pagepath>/) : null;
+            const pagePath = m?.[1]?.trim();
+            return `[小程序] ${extractXmlTitle(body.Content)}${pagePath ? ` (页面 ${pagePath})` : ""}`;
+        }
         default: return "";
     }
 }
@@ -169,6 +176,143 @@ export function buildAppMsgXml(username, title, desc, mmPayload) {
         `<fromusername>${escapeXml(username)}</fromusername>` +
         `</appmsg>`);
 }
+/** 16 进制串 (fileid/aeskey 都是), 用来挡住厂商返回空对象/占位符这类情况 */
+function isHex(s, minLen) {
+    return typeof s === "string" && s.length >= minLen && /^[0-9a-fA-F]+$/.test(s);
+}
+/**
+ * 从 /Msg/UploadImg 的响应体里取出 CDN 凭据。
+ * ⚠️ 字段名是厂商 Go 结构体的原样序列化: `Fileid` / `Aeskey` / `TotalLen` (不是 fileId/aesKey),
+ *   且**不在** swagger 里 (swagger 只写了示例 `file_id`/`url`) —— 是实测出来的 (2026-09-13)。
+ * 取值失败返 null (调用方按"没有缩略图"处理, 不抛)。
+ */
+export function extractCdnThumbRef(data) {
+    const d = data && typeof data === "object" ? data : undefined;
+    if (!d)
+        return null;
+    const fileIdRaw = d.Fileid ?? d.FileId ?? d.fileid;
+    const aesKeyRaw = d.Aeskey ?? d.AesKey ?? d.aeskey;
+    const fileId = typeof fileIdRaw === "string" ? fileIdRaw : undefined;
+    const aesKey = typeof aesKeyRaw === "string" ? aesKeyRaw : undefined;
+    if (!isHex(fileId, 16) || !isHex(aesKey, 16))
+        return null;
+    const lenRaw = d.TotalLen ?? d.totalLen;
+    const length = typeof lenRaw === "number" && lenRaw > 0 ? lenRaw : undefined;
+    return { fileId, aesKey, length };
+}
+/** 构造现代小程序卡片 XML (纯函数, 可单测; 与 buildAppMsgXml 并存互不影响) */
+export function buildMiniProgramCardXml(o) {
+    const desc = o.desc || o.sourceDisplayName || o.title;
+    const srcName = o.sourceDisplayName || o.desc || o.title;
+    // v1.6.3: 缩略图节点 —— 与真卡片逐节点对齐 (cdnthumbheight/md5/width/length/url/aeskey + 顶层 md5)。
+    //   只给 fileId+aesKey 也照发 (客户端靠这两个取图), 尺寸/md5 有则带上。
+    const attach = o.thumb
+        ? `<appattach>` +
+            // 节点顺序照抄真卡片 (height → md5 → width → length → url → aeskey)
+            (o.thumbHeight !== undefined ? `<cdnthumbheight>${o.thumbHeight}</cdnthumbheight>` : "") +
+            (o.thumb.md5 ? `<cdnthumbmd5>${o.thumb.md5}</cdnthumbmd5>` : "") +
+            (o.thumbWidth !== undefined ? `<cdnthumbwidth>${o.thumbWidth}</cdnthumbwidth>` : "") +
+            (o.thumb.length !== undefined ? `<cdnthumblength>${o.thumb.length}</cdnthumblength>` : "") +
+            `<cdnthumburl>${escapeXml(o.thumb.fileId)}</cdnthumburl>` +
+            `<cdnthumbaeskey>${escapeXml(o.thumb.aesKey)}</cdnthumbaeskey>` +
+            `</appattach>`
+        : "";
+    return (`<appmsg>` +
+        `<title>${escapeXml(o.title)}</title>` +
+        `<weappinfo>` +
+        `<pagepath>${escapeXml(o.pagePath)}</pagepath>` +
+        (o.iconUrl ? `<weappiconurl>${escapeXml(o.iconUrl)}</weappiconurl>` : "") +
+        (o.version !== undefined ? `<version>${o.version}</version>` : "") +
+        `<appid>${escapeXml(o.appId)}</appid>` +
+        `<type>2</type>` + // 2 = 小程序 (真卡片值; 1 = 小游戏)
+        (o.username ? `<username>${escapeXml(o.username)}</username>` : "") +
+        `</weappinfo>` +
+        `<sourceusername>${escapeXml(o.appId)}</sourceusername>` +
+        attach +
+        `<type>33</type>` + // 33 = 小程序卡片 (49 消息体里的 appmsg type)
+        `<sourcedisplayname>${escapeXml(srcName)}</sourcedisplayname>` +
+        `<des>${escapeXml(desc)}</des>` +
+        // 真卡片把缩略图 md5 也放在顶层 (与 cdnthumbmd5 同值)
+        (o.thumb?.md5 ? `<md5>${escapeXml(o.thumb.md5)}</md5>` : "") +
+        `</appmsg>`);
+}
+/** 图片像素尺寸 (cdnthumbwidth/height 用; 认不出返 undefined —— 纯布局提示, 不致命) */
+export function imagePixelSize(buf) {
+    // PNG: 8 字节签名 + 4 长度 + "IHDR" + 宽(4) 高(4) 大端
+    if (buf.length >= 24 && buf.readUInt32BE(0) === 0x89504e47) {
+        return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    }
+    // JPEG: 扫 SOFn 段
+    if (buf.length >= 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+        let i = 2;
+        while (i + 9 < buf.length) {
+            if (buf[i] !== 0xff) {
+                i++;
+                continue;
+            }
+            const marker = buf[i + 1];
+            if (marker === undefined)
+                break;
+            const len = buf.readUInt16BE(i + 2);
+            // SOF0-3 / SOF5-7 / SOF9-11 / SOF13-15 (跳过 DHT/DAC/RSTn 等)
+            if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+                return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+            }
+            if (len < 2)
+                break;
+            i += 2 + len;
+        }
+    }
+    return undefined;
+}
+/**
+ * 把 (上传的图片字节 + /Msg/UploadImg 的响应体) 合成 appattach 需要的完整凭据。
+ * 纯函数 ⇒ 单测可直接喂真 PNG 字节 + 真响应形状, 不必真打厂商 (uploadCdnThumb 只剩 IO + 错误处理)。
+ * 尺寸/md5 是客户端取图与排版用的; TotalLen 缺失时用本地字节数兜底 (同源同值)。
+ */
+export function cdnThumbRefFromUpload(buf, uploadData) {
+    const ref = extractCdnThumbRef(uploadData);
+    if (!ref)
+        return null;
+    const size = imagePixelSize(buf);
+    return {
+        ...ref,
+        length: ref.length ?? buf.length,
+        md5: createHash("md5").update(buf).digest("hex"),
+        ...(size ?? {}),
+    };
+}
+/**
+ * sendXCX 的 Content 构造 (纯函数 + 注入式上传, 便于单测).
+ *
+ * 规则: 给了 pagePath ⇒ 现代 type=33 卡片 (能开小程序内部页面, 且**先上传缩略图**拿 appattach
+ *   —— 没有 appattach 卡片就是灰块, 见 MiniProgramCardXmlOpts.thumb); 没给 ⇒ 保持 legacy type=2001
+ *   输出**逐字节不变** (老调用方零回归, 有测试锁), 且**不触发任何上传**。
+ */
+export async function buildXCXContent(toWxid, o, uploadThumb) {
+    if (o.pagePath) {
+        // 缩略图上传失败/没有 URL 都不算致命: 卡片照发 (只是没图), 绝不能因此把消息丢掉
+        const thumb = o.thumbUrl ? await uploadThumb(o.thumbUrl) : null;
+        return buildMiniProgramCardXml({
+            title: o.title,
+            desc: o.desc,
+            appId: o.appId,
+            pagePath: o.pagePath,
+            username: o.username,
+            iconUrl: o.thumbUrl,
+            sourceDisplayName: o.desc || o.title,
+            thumb: thumb ?? undefined,
+            thumbWidth: thumb ? thumb.width : undefined,
+            thumbHeight: thumb ? thumb.height : undefined,
+        });
+    }
+    return buildAppMsgXml(toWxid, o.title, o.desc, {
+        appid: o.appId,
+        sourcedisplayname: o.title,
+        url: o.url,
+        ...(o.thumbUrl ? { weappiconurl: o.thumbUrl } : {}),
+    });
+}
 function escapeXml(s) {
     return s
         .replace(/&/g, "&amp;")
@@ -190,6 +334,42 @@ export function makeWppMsg(ctx) {
                 await persistOutboundMsg(ctx, { ...meta, resp: r });
         }
         return r;
+    };
+    /** 缩略图上传的落地会话: 发到 filehelper (bot 自己的文件传输助手) —— 客户会话里看不见, 只借它把图落到微信 CDN */
+    const THUMB_UPLOAD_TARGET = "filehelper";
+    /**
+     * v1.6.3 XCX-THUMB: 把缩略图上传到微信 CDN, 换回 appattach 要的那组凭据 (fileid+aeskey+md5+尺寸)。
+     *
+     * 为什么非要这一步: 老板 2026-09-13 实测 —— 小程序卡片只给 `<weappiconurl>` (或厂商结构化接口的
+     *   thumbUrl) 时, 微信端显示的是**灰块**; 真卡片的图来自 `<appattach>` 里的 CDN blob, 而那组凭据只有
+     *   "把图上传到 CDN" 才拿得到。原卡片的旧凭据已失效 (`/Tools/CdnDownloadImage` 返 -5103017),
+     *   故必须自己上传一份。端点选 /Msg/UploadImg: 它响应里的 `Fileid`/`Aeskey` 与真卡片 appattach 的
+     *   `cdnthumburl`/`cdnthumbaeskey` **同格式** (前缀都是 305f020100044b3049), 且实测可被
+     *   /Tools/CdnDownloadImage 取回 ⇒ 收件人客户端也能取。
+     *
+     * 任何一步失败都返 null (调用方按"没图"发, 不阻塞消息)。
+     */
+    const uploadCdnThumb = async (thumbUrl) => {
+        try {
+            // 复用图片链路的 SSRF 安全取图 (host 白名单 + 15MB cap), 不自己写 fetch
+            const base64 = await resolveImageToBase64(thumbUrl);
+            const buf = Buffer.from(base64, "base64");
+            if (buf.length === 0) {
+                warn(`[WPP v1.6.3 XCX-THUMB] 缩略图为空: ${thumbUrl}`);
+                return null;
+            }
+            const r = await postWppJson(ctx.baseUrl, "/Msg/UploadImg", { Base64: base64, ToWxid: THUMB_UPLOAD_TARGET }, opts);
+            const ref = cdnThumbRefFromUpload(buf, r.Data);
+            if (!ref) {
+                warn(`[WPP v1.6.3 XCX-THUMB] UploadImg 未返回可用凭据 (Code=${r.Code} msg=${String(r.raw?.Message ?? "")}) ⇒ 卡片将无缩略图`);
+                return null;
+            }
+            return ref;
+        }
+        catch (e) {
+            warn(`[WPP v1.6.3 XCX-THUMB] 缩略图上传失败 (非致命, 卡片照发): ${formatErr(e)}`);
+            return null;
+        }
     };
     /**
      * v1.3.53 VOICE-DEGRADE: 下载 fileUrl → sendFileViaApp 发文件 (sendFile 复用 + 语音转码失败降级共用)。
@@ -328,15 +508,15 @@ export function makeWppMsg(ctx) {
                 VoiceTime: voiceTime,
             }, persist);
         },
-        /** /Msg/SendXCX — swagger Msg.DefaultParamDoc {Content, ToWxid}; Content=小程序xml (appmsg type=2001) */
-        sendXCX: (toWxid, xcxTitle, xcxDesc, xcxUrl, xcxAppId, thumbUrl) => dispatch("/Msg/SendXCX", {
+        /**
+         * /Msg/SendXCX — swagger Msg.DefaultParamDoc {Content, ToWxid}
+         * v1.6.2 XCX-PAGEPATH: 传了 pagePath ⇒ Content 走现代卡片 (type=33 + weappinfo, 可开小程序内部页面);
+         *   不传 ⇒ 维持 legacy type=2001 (老行为逐字节不变)。username 形如 `gh_xxx@app`, 从入站卡片注记里可拿到。
+         * v1.6.3 XCX-THUMB: 现代卡片先把 thumbUrl 上传到微信 CDN 换 appattach 凭据 (没有它卡片是灰块 —— 实测)。
+         */
+        sendXCX: async (toWxid, xcxTitle, xcxDesc, xcxUrl, xcxAppId, thumbUrl, pagePath, username) => dispatch("/Msg/SendXCX", {
             ToWxid: toWxid,
-            Content: buildAppMsgXml(toWxid, xcxTitle, xcxDesc, {
-                appid: xcxAppId,
-                sourcedisplayname: xcxTitle,
-                url: xcxUrl,
-                ...(thumbUrl ? { weappiconurl: thumbUrl } : {}),
-            }),
+            Content: await buildXCXContent(toWxid, { title: xcxTitle, desc: xcxDesc, url: xcxUrl, appId: xcxAppId, thumbUrl, pagePath, username }, uploadCdnThumb),
         }),
         /** /Msg/ShareCard — 分享名片 (v1.2.1 swagger-alignment: ShareCardParamDoc {CardAlias, CardNickName, CardWxId, ToWxid}) */
         shareCard: (toWxid, cardWxid, cardNickname, cardAlias) => dispatch("/Msg/ShareCard", {
