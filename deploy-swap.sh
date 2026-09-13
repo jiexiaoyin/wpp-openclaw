@@ -125,7 +125,7 @@ else
 fi
 
 # ============ 步骤 4: 拷贝 artifacts ============
-step "[4/7] 拷贝 dist/ + manifest + package.json + node_modules + config + accounts"
+step "[4/7] 拷贝 dist/ + manifest + package.json + node_modules + config + accounts + db"
 rm -rf "$DEPLOY"
 mkdir -p "$DEPLOY"
 cp -a dist "$DEPLOY/"
@@ -134,6 +134,16 @@ cp package.json "$DEPLOY/"
 cp -a node_modules "$DEPLOY/"
 cp config.json "$DEPLOY/"
 cp -a accounts "$DEPLOY/"
+# v1.6.5 (2026-09-13 事故): 上面那句 `rm -rf $DEPLOY` 会把**运行期资产**一起抹掉 —— 本次真实发生:
+#   21:24 启动还报 `applySchemaSql: 11 statements applied`, 21:36 部署完变成 `schema.sql not found, skipping`
+#   (v1.6.3 手工补进线上的 db/schema.sql 被整目录删除, 而拷贝清单里没有 db/) ⇒ 建表/加列静默失效.
+#   db/ 是运行时依赖 (applySchemaSql 读 $DEPLOY/db/schema.sql), 必须进拷贝清单.
+if [ -d db ]; then
+  cp -a db "$DEPLOY/"
+fi
+if [ ! -f "$DEPLOY/db/schema.sql" ]; then
+  fail "拷贝后缺 $DEPLOY/db/schema.sql — 部署会静默丢掉建表/加列 (源码仓 db/schema.sql 在吗?)"
+fi
 echo "    $DEPLOY 总量: $(du -sh "$DEPLOY" | cut -f1)"
 
 # ============ 步骤 5: jiti 缓存清理 ============

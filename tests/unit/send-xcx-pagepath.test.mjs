@@ -34,8 +34,20 @@ const REF = {
   height: 140,
 };
 
+const ORIGINAL = {
+  fileId:
+    '305f020100044b304902010002041b2d632702032dcf5b020441cb972402046aa6a1e0042463623334623237392d373939322d343634332d626234342d656236396339333336616362020405140803020100040d004c50bb000000000000000000',
+  aesKey: '7a4012a3c3bb6b3bd47b078be17914cd',
+  md5: '11c873226d10c81592e367b92823d412',
+  width: 720,
+  height: 576,
+  length: 665315,
+  version: 46,
+  iconUrl: 'https://mmbiz.qpic.cn/mmbiz_png/sE0uFQmOHVLBKphaz3Ao9E08xeIkXoI7ials440G6GiafNgIK2pS6QIJOYtH2sLqrMkiaH976ZtQfm9BbMmWEiaA3Q/640?wx_fmt=png&wxfrom=200',
+};
+
 const mod = await import(new URL('file:///root/dev/wechatpadpro-openclaw/dist/send/msg.js').href);
-const { buildMiniProgramCardXml, buildXCXContent, buildAppMsgXml, extractCdnThumbRef, imagePixelSize, cdnThumbRefFromUpload } = mod;
+const { buildMiniProgramCardXml, buildXCXContent, buildAppMsgXml, extractCdnThumbRef, imagePixelSize, cdnThumbRefFromUpload, parseThumbToken, formatThumbToken, THUMB_TOKEN_PREFIX } = mod;
 
 /** 记录调用并返回给定凭据的注入式上传器 */
 function spyUploader(ret) {
@@ -215,6 +227,67 @@ test('3. buildXCXContent: 有 pagePath ⇒ 现代卡片且先传缩略图; 无 �
   const empty = await buildXCXContent('wxid_me', { ...base, thumbUrl: ICON, pagePath: '', username: USERNAME }, up5);
   assert.equal(empty, expected, '空 pagePath 必须走 legacy');
   assert.equal(up5.calls.length, 0);
+});
+
+// ===== 3b. v1.6.4 凭据透传 (转发原卡片: 图必须与原卡片一致) =====
+// 背景: 老板 2026-09-13 实测「转发的小程序卡片图片不是收到的那张」。真相是: 原卡片的 appattach
+//   凭据在**微信客户端**手里是好的 (20:45 原样透传 ⇒ 老板看到的就是原图), 而厂商服务端下载口
+//   (/Tools/DownloadMiniProgramCover、/Tools/CdnDownloadImage) 对同样凭据恒返 -5103017。
+//   ⇒ 转发必须**透传原凭据**, 而不是下载+自己上传 (那只能拿到 140×140 图标当替代品)。
+test('3b. 令牌往返: formatThumbToken ↔ parseThumbToken 严格互逆 (含 version/iconUrl 缺省)', () => {
+  const t = formatThumbToken(ORIGINAL);
+  assert.ok(t.startsWith(THUMB_TOKEN_PREFIX), '令牌带前缀, 便于在注记里被认出');
+  // iconUrl 里有 ':' (https://) ⇒ 令牌格式必须能原样还原它, 否则转发会把 weappiconurl 切坏
+  assert.deepEqual(parseThumbToken(t), ORIGINAL, '往返必须逐字段相等 (含含冒号的 iconUrl)');
+
+  const noIcon = { fileId: ORIGINAL.fileId, aesKey: ORIGINAL.aesKey, width: 720, height: 576 };
+  const t2 = formatThumbToken(noIcon);
+  assert.deepEqual(parseThumbToken(t2), noIcon, '缺 md5/version/iconUrl 也要能往返');
+  // 只有 fileId+aesKey 的最小令牌
+  const min = { fileId: ORIGINAL.fileId, aesKey: ORIGINAL.aesKey };
+  assert.deepEqual(parseThumbToken(formatThumbToken(min)), min, '最小令牌往返');
+
+  // 不是令牌 / 凭据不合法 ⇒ null (调用方按"没图"处理, 不许把垃圾塞进 appattach)
+  assert.equal(parseThumbToken(undefined), null);
+  assert.equal(parseThumbToken(''), null);
+  assert.equal(parseThumbToken(ICON), null, '普通 URL 不是令牌');
+  assert.equal(parseThumbToken('xcxthumb:abc:def'), null, '字段不够');
+  assert.equal(parseThumbToken(`${THUMB_TOKEN_PREFIX}ZZZZ:${ORIGINAL.aesKey}`), null, 'fileId 非 hex');
+  assert.equal(parseThumbToken(`${THUMB_TOKEN_PREFIX}${ORIGINAL.fileId}:短`), null, 'aesKey 非 hex/太短');
+});
+
+test('3c. buildXCXContent: 令牌 ⇒ 原凭据直接进 appattach, 一个字节都不下载/上传', async () => {
+  const base = { title: '苏新消费', desc: '苏新消费', url: '', appId: 'wx8166b5f9f3ffa696' };
+  const token = formatThumbToken(ORIGINAL);
+
+  const up = spyUploader(REF);
+  const xml = await buildXCXContent(
+    'wxid_me',
+    { ...base, thumbUrl: token, pagePath: 'subPackages/lottery/pages/bannerActivity/bannerActivity.html?type=zt1', username: 'gh_671ee582e55c@app' },
+    up,
+  );
+  assert.equal(up.calls.length, 0, 'token 路线**不得**触发上传 (上传换来的是替代图, 就是本轮 bug 根因)');
+  for (const [node, v] of [
+    ['cdnthumburl', ORIGINAL.fileId],
+    ['cdnthumbaeskey', ORIGINAL.aesKey],
+    ['cdnthumbmd5', ORIGINAL.md5],
+    ['cdnthumbwidth', String(ORIGINAL.width)],
+    ['cdnthumbheight', String(ORIGINAL.height)],
+    ['cdnthumblength', String(ORIGINAL.length)],
+  ]) {
+    assert.ok(xml.includes(`<${node}>${v}</${node}>`), `${node} 必须是原卡片的值 (透传保真)`);
+  }
+  assert.ok(xml.includes(`<md5>${ORIGINAL.md5}</md5>`), '顶层 md5 也要透传 (真卡片两处同值)');
+  assert.ok(xml.includes(`<version>${ORIGINAL.version}</version>`), 'weappinfo.version 透传');
+  assert.ok(xml.includes(`<weappiconurl>${ORIGINAL.iconUrl.replace(/&/g, '&amp;')}</weappiconurl>`), 'iconUrl 透传 (含 & 要转义)');
+  assert.ok(!xml.includes(THUMB_TOKEN_PREFIX), '令牌串本身绝不许漏进 XML');
+
+  // 令牌非法 (前缀对但内容坏) ⇒ 既不上传也不带 appattach, 但卡片照发
+  const up2 = spyUploader(REF);
+  const bad = await buildXCXContent('wxid_me', { ...base, thumbUrl: 'xcxthumb:zzz:zzz', pagePath: PAGE, username: USERNAME }, up2);
+  assert.equal(up2.calls.length, 0, '坏令牌不得退化成"当成 URL 去取图"');
+  assert.ok(bad.includes(`<pagepath>${PAGE}</pagepath>`));
+  assert.ok(!bad.includes('appattach') && !bad.includes('weappiconurl'), '坏令牌不许漏进 XML 任何节点');
 });
 
 // ===== 4. sendXCX 接线 =====

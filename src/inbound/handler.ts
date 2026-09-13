@@ -19,7 +19,7 @@ import { extractPairCode } from "../pairing-store.js";
 import { getMessageById } from "../storage/db/messages.js";
 import { getMessageByMsgIdOrNewId } from "../db.js";
 import { parseRelayText, isRelayMessage } from "./relay.js";
-import { isMiniProgramCard, parseMiniProgramCard, formatMiniProgramCard, enrichMiniProgramAsset } from "./app-card.js";
+import { isMiniProgramCard, parseMiniProgramCard, formatMiniProgramCard, coverThumbToken, enrichMiniProgramAsset } from "./app-card.js";
 import { isRedPacketMessage, processRedPacket } from "./hongbao.js";
 import { extractAtUserList } from "./parser/mention.js";
 import { payloadToAllInboundMessages } from "./parser.js";
@@ -417,13 +417,15 @@ export function createWppInboundHandler(
                   log.info(`[WPP v1.6.1 MINIPROGRAM-CARD] cover miss (non-fatal): msgId=${m.msgId} err=${r.error}`);
                 }
               }
+              const token = coverThumbToken(card);
               m.content = `${m.content}\n${formatMiniProgramCard(card, {
                 coverUrl: assetKind === "cover" ? assetUrl : undefined,
                 iconUrl: assetKind === "icon" ? assetUrl : undefined,
+                coverToken: token,
                 omitTitle: !card.title || m.content.includes(card.title),
               })}`;
               log.info(
-                `[WPP v1.6.1 MINIPROGRAM-CARD] ok: msgId=${m.msgId} appid=${card.appId ?? "?"} page=${card.pagePath ?? "?"} asset=${assetKind ?? "无"}`,
+                `[WPP v1.6.1 MINIPROGRAM-CARD] ok: msgId=${m.msgId} appid=${card.appId ?? "?"} page=${card.pagePath ?? "?"} asset=${assetKind ?? "无"} token=${token ? "有" : "无"}`,
               );
             }
           } catch (e) {

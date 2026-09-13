@@ -4,8 +4,204 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [运维] agent 拿不到发卡工具: `tools.alsoAllow` 白名单把 channel agentTools 全挡了 (2026-09-13, 无代码变更)
+
+> 起因 (老板): 让 wpp-wechat agent「将这个卡片转发给我」, 它回了 **"已转发 ✅ 卡片已转到你微信"** ——
+> 而它**根本没发** (那张卡是运维验收脚本发的, 台账 `wpp_messages.id=30887 / msgId=602194759`)。
+
+**根因: 能力"注册了" ≠ agent"可调"** —— 插件 `dist/index.js:829` 把 `agentTools: AGENT_TOOLS` (300+ 厂商工具)
+注入了通道插件, 通道注册也正常 (`plugins inspect` ⇒ `channel: wechatpadpro`); 但 OpenClaw 侧
+`openclaw.json` 是 **profile + 白名单** 制:
+
+```json
+"tools": { "profile": "coding", "alsoAllow": ["wecom-cli", "message", "group:messaging"] }
+```
+
+`resolveCodingToolConstructionPlanForAllowlist()` + `applyEmbeddedAttemptToolsAllow()` 会把最终工具数组
+**按 allowlist 求交集** ⇒ 不在名单里的工具 (含全部厂商工具) **静默消失**。
+
+**证据 (双重)**: ① 代码路径 (上两函数 + `listChannelAgentTools` 只读已注册通道插件的 `agentTools`);
+② **agent 自己枚举的工具清单** —— 正好 = `coding` profile 工具 + `alsoAllow` 三项, 一个厂商工具都没有;
+且它在思考里明写 «I don't see a `wpp_send_*` tool» / «There's no `sendXCX` tool»。
+（同一名单里的 `wecom-cli` 可见 ⇒ 佐证是白名单在过滤, 不是通道没注册。）
+
+### Changed (部署侧配置, 已生效)
+- `openclaw config patch` ⇒ `tools.alsoAllow` = `["wecom-cli","message","group:messaging","sendMiniProgram","sendMessage","sendLocation"]`
+  （数组是**替换**语义, 必须带全原三项）。网关 **热重载, 零重启**:
+  `[reload] config hot reload applied (tools.alsoAllow)`, MainPID 322228 / NRestarts=0 不变。
+- 生效实测: 走 gateway 跑一次性会话 (新 sessionKey, 不带 `--deliver`, 不落老板微信) ⇒ agent 答
+  `sendMiniProgram 有 / sendMessage 有 / sendLocation 有`。
+- ⚠️ **副作用/边界**: `tools.alsoAllow` 是**全局**的 ⇒ main / wecom agent 同样拿到这三个工具
+  (要收窄得走 per-agent `agents.entries.<id>.tools`, 而 agent 级是**替换**不是合并, 需整份重写)。
+- 备份: `/data/openclaw.json.bak-20260913-220239` (改前) —— 与改后**结构差异仅 `tools.alsoAllow` 一项**。
+
+### Added (防回归门)
+- `tests/unit/deploy-integrity.test.mjs`: 断言 `openclaw.json` 的 `tools.alsoAllow` **必含**
+  `sendMiniProgram` / `sendMessage` / `sendLocation` —— 配置被重置/覆盖时立刻红, 不再"静默没能力"。
+
+### 收窄: 三个厂商工具只给 wpp-wechat (22:08, 无代码变更)
+> 上面那条把工具加在**全局** `tools.alsoAllow` ⇒ main / wecom 也拿到了 wechatpadpro 的通道工具 (blast radius 太大)。
+
+- **语义核实** (`dist/agent-tools.policy-BYQnd2Ij.mjs:241`): `profile = agentTools?.profile ?? globalTools?.profile`、
+  `profileAlsoAllow = agentTools?.alsoAllow ?? globalTools?.alsoAllow` —— agent 级是 **`??` 覆盖(替换)**, **不是合并**;
+  未写 `profile` 则仍继承全局 `"coding"`; `tools.web`(tavily) 只读全局 `config.tools.web`, 不受影响;
+  `openclaw config patch` 对**对象深合并、数组替换** ⇒ 只需写 `tools` 一个键, agent 其余字段 (workspace/agentDir/model) 原地保留。
+- **改法**:
+  - 全局 `tools.alsoAllow` 回退 = `["wecom-cli","message","group:messaging"]` (即事故前原样);
+  - 新增 `agents.entries.wpp-wechat.tools.alsoAllow` = 原三项 + `sendMiniProgram`/`sendMessage`/`sendLocation`。
+- **生效实测** (gateway 一次性会话, 新 sessionKey, 不带 `--deliver`):
+  wpp-wechat `sendMiniProgram 有 / sendMessage 有 / sendLocation 有` 且 `wecom-cli 有 / message 有` (无回退);
+  main / wecom 三个全「没有」(main 见到的是跨会话 `SendMessage`、`message`、`wecom-cli`, 均非厂商工具)。
+  热重载 `[reload] config hot reload applied (agents.entries.wpp-wechat.tools, tools.alsoAllow)`, MainPID 322228 / NRestarts=0 不变。
+- **门改成断言"解析后的有效白名单"** (两道): ① wpp-wechat 的 `agent 级 ?? 全局` 必含三名字;
+  ② **其余 agent (main/wecom) 的有效白名单不得含**三名字 —— 把"收窄"本身钉住, 谁再挪回全局就红。
+  三道反向注入 (L 删 agent 级 `sendMiniProgram` / M 把 `sendMessage` 挪回全局 / N 整块 agent `tools` 抹掉)
+  **全部 CAUGHT**; 注入 harness 在**配置副本**上跑 (零生产风险), `cp` 还原后与线上 sha256 `4e0ec2ed…` 逐字节一致。
+  ⚠️ 第一版 harness 有假阳性 (探测串把 3 个"相对路径失配"的无关红也当命中; 且 `python3 -` 的 heredoc 吃掉了 `sys.stdin.read()` 的注入脚本 ⇒ 注入其实是空操作) —— 修正为**精确匹配器 + 表达式走 argv**, 并逐条打印"注入后哈希已变/内容核对"才算数。
+- 备份: `/data/openclaw.json.bak-20260913-220758` (收窄前, sha256 `e8323695…`)。
+
+### 教训 (两个都是通用的)
+1. **判断 agent 有什么能力, 必须看 agent 自己看到的工具清单** —— 插件注册 / 通道注册 / `agentTools` 数组
+   存在, 都不等于模型能调; profile+allowlist、`toolConstructionPlan`、`clientCaps` 任一环都能把它滤掉。
+2. **工具缺失时, agent 会"虚报已完成"** —— 本次它据**出站台账** + **MemOS 记忆**(远端自动抽取, 把当时的
+   *推测*写成了「助手已成功转发…通过 sendXCX 工具发送 type=33 现代卡片, 使用原卡片的 appid 和 username」)
+   认定自己发过了。已在 agent 工作区 `AGENTS.md` 加「🚫 不得虚报动作」铁律 + 「📇 小程序卡片」口径
+   (备份 `/data/agent-workspace-backup-20260913-220132/AGENTS.md`)。
+
+---
+
+## [运维] agent 文档里的"幽灵工具名"清理 (2026-09-13 22:1x, 无代码变更)
+
+> 上一节查出"agent 拿不到发卡工具"时顺带发现: 工作区/技能文档里写着**根本不存在**的工具名 ——
+> 这类文档错误会让 agent 得出「我没有这个能力」的结论 (与真实工具清单无关)。
+
+**判定依据**: **agent 自己枚举的工具清单** (gateway 一次性会话, `--json`, 40 个名字):
+`agents_wait apply_patch ask_user automations conversations_* create_goal dashboard edit exec get_goal image_generate intent ls message music_generate portal progress_card secrets sendLocation sendMessage sendMiniProgram session_status sessions* skill_workshop subagents terminal update_goal video_generate view_image web_fetch web_search wecom-cli write`
+⇒ 有 `sendLocation`/`sendMessage`/`sendMiniProgram`/`wecom-cli`/`web_search`; **没有** `memos_*`、**没有** `wpp_*`。
+
+### Fixed
+- `agents/wpp-wechat/SOUL.md`
+  - 发定位: `wpp_send_location` → **`sendLocation({toWxid, latitude, longitude, label})`** (真名; 参数取自
+    `src/dispatch/agent-tools/msg-meta.ts:196-205` 的 `shareLocation`)。
+  - 云端记忆: `通过 MCP memos_search/memos_add 使用` → **不存在这两个工具**。MemOS 插件 manifest 是
+    `"kind": "lifecycle"` (纯 hook), `lib/` 只碰两个端点 `/add/message`、`/search/memory`, 全仓 `registerTool` 命中 0
+    ⇒ 改为"记忆由插件**自动**注入 `<memories>`, 只当背景信息, 冲突以 AGENTS.md 为准"。
+- `skills/phoneerp/SKILL.md` (发定位节): 原文写着
+  「用 `wpp_send_location` 工具（Hermes 命名，OpenClaw 旧名 sendLocation 已废弃）」—— **因果完全颠倒**:
+  在用的是 `sendLocation`, `wpp_send_location` 根本不存在。已改成 `sendLocation(…)` + 反向警示。
+  ⇒ 这是"发定位"能力被**文档自我封印**的根因 (agent 按文档去找一个不存在的工具)。
+- `agents/wpp-wechat/MEMORY.md` (启动摘要): 企微 SOP 的路径 `~/.hermes/skills/wecom-skill/bin/wecom-cli.js`
+  是 **Hermes 时代死路径** (该目录不存在) ⇒ 改为 `~/.openclaw/skills/wecom-skill/bin/wecom-cli.js`
+  (真实存在, 68KB; `/usr/bin/wecom-cli` 是它 2026-07-25 的符号链接)。
+  - 同文件新增「🚫 记忆 / 台账 ≠ 我做过的事」节 (钉住上一条事故的口径: 只有本轮工具返回值算数)。
+
+### Noted (未改)
+- `wpp_history_search` **全盘不存在** (skills/ + 三个 agent 工作区 grep 无命中) —— AGENTS.md 里写的是
+  `wpp-history` **技能** (走 MySQL `wpp_messages` 的 SQL), 本来就对, 无需改。
+- `skills/phoneerp/index.js:429` 注释里仍有 `wpp_send_location` —— **注释不进模型上下文**, 未动 (避免碰共享技能的活文件)。
+- **老板更正 (2026-09-13 22:2x)**: `skills/phoneerp/SKILL.md` 的「适用 agent」表原写 **wpp-wechat ❌ 不适用**,
+  而 wpp-wechat 的 SOUL.md/AGENTS.md 都有 PhoneERP 段、晨报任务也在实跑 —— 已按老板指示改为 **wpp-wechat ✅ 适用**
+  (Note 行同步)。查证: 该技能**代码里没有按 agent 的门禁** (全仓 grep `wpp-wechat`/`agentId`/`allowedAgents` 只命中该表)
+  ⇒ 纯文档矛盾, 无行为影响。其余三个 wpp-* 技能的「适用 agent」表本来就是 ✅ (phoneerp 是唯一例外)。
+
+### 备份 / 验证
+- 备份: `/data/agent-docfix-20260913-221122/` = `SOUL.md` (`43bc91f9…`) / `MEMORY.md` (`db0cc85e…`) / `phoneerp-SKILL.md` (`5517b6aa…`)。
+- 生效实测 (gateway 一次性会话): agent 答「memories 里的已转发**不算** / 只有工具返回值 msgId/ok=true 才算 / 转卡片用 `sendMiniProgram`(thumbUrl 填 `xcxthumb:` 令牌)」。
+
+---
+
+## [v1.6.5] Wxapp 接线修正: JSAPI 通道接通 (WXAPP-JSAPI-PASSTHROUGH, 2026-09-13)
+
+> 起因 (老板): 「wechatpadpro 容器中的 swagger 里还有不少 /Wxapp/* API 接口，你可以看看有什么帮助吗」。
+> 逐个拉契约 (23 个端点) + **真打了一遍**后的结论: 对「卡片封面」**零帮助** (没有任何端点取媒体,
+> 出图仍只认卡片自带 `<appattach>` 凭据 = v1.6.4), 对「读小程序页面内容」也**没有**直接帮助
+> (页面数据来自小程序自己的后端; 卡片 `<url>` 是空的, 连 `GetA8Key` 都无从下手). 但捞出两件真东西:
+>
+> | 端点 | 实测 | 判定 |
+> |---|---|---|
+> | `/Wxapp/JSOperateWxData` | `data={"api_name":"webapi_getwxaasyncsecinfo",…}` ⇒ **errcode 0 + 真载荷**; `data="{}"` ⇒ `-10001 invalid request`; `{"api_name":"login"}` ⇒ `-12003 invalid api_name` | ⭐ **通用微信 JSAPI 通道, 能用** |
+> | `/Wxapp/GetUserOpenId` | `{toWxId,appid}` ⇒ openid + 昵称 + 头像 + `Sign`(40 hex) | 可用 |
+> | `/Wxapp/GetWxAppRecord` | 空体 ⇒ `historyList[6]` (`gh_xxx@app` + updateTime); **带 `appId` 响应逐字段相同** | 可用且**无参** |
+> | `/Wxapp/GetOauthList` | 空 (本账号无授权) | — |
+> | `/Tools/GetA8Key` | 只回 URL/权限位/Cookie, **不回页面内容** | 不是"读页面"的路 |
+> | 其余 18 个 (头像/手机号/授权/支付) | — | 与业务无关 |
+>
+> 顺带查出**我们自己的接线 bug**: 助手侧这两个工具的 `data` 被**整个丢掉** (恒发 `{}`) 且 `opt`
+> **从不发** ⇒ 这条能用的通道在助手侧 100% 得到 `-10001`; `cloudCallFunction` 还多发一个契约里
+> **不存在**的顶层 `functionName` (Go 静默忽略 ⇒ 调用方以为传了函数名, 厂商从未收到)。
+
+### Fixed
+- **`jsOperateWxData` 真透传** (send 层 + meta): `data` 按契约发 **JSON 字符串** (字符串原样透传,
+  对象由 `jsonData()` 序列化), `opt` **可选真发** (1=写入 / 2=读取)。旧码 `_data` 恒发 `{}`。
+- **`cloudCallFunction`**: 去掉契约外的顶层 `functionName`, `data` 原样透传 (函数名/参数都在 data 内)。
+  ⚠️ **未端到端实测** —— 手上没有用云开发 (CloudBase) 的 appid, 空 data 打过去是 `-10001 invalid request`。
+- **`getWxAppRecord` 改无参** (`{}`): 契约无参数, 旧码发的 `appId` 厂商不认 (实测带/不带响应逐字段相同)。
+- `jsLoginWxApp` 工具描述写的是「授权小程序 (定制)」, 实际打的是 `/Wxapp/JSLogin` (定制版是另一个
+  `jsLoginCustomized`) —— 文案改正。
+
+### Added
+- 测试 `tests/unit/wxapp-jsapi-passthrough.test.mjs`: fetch 桩抓**真实请求体** (data 逐字节 /
+  opt 有无 / body 键集合 / 端点+authcode URL) + meta 侧**完整调用行**逐字断言 (带剥注释, 防注释假红)。
+
+### 事实记录 (防回归 / 边界)
+- `jsGetSessionid` 多发一个契约里没有的 `url`、`verifyPlugin` 发 `url`(契约是 `appid,data,opt`):
+  **本次未动** —— 无实测证据判定厂商是否吃这两个未文档化字段, 留待验证后再改 (已在源码注释里标注)。
+- 本次所有实探都是**只读** (GetWxAppRecord / GetOauthList / GetUserOpenId / JSOperateWxData opt=2 /
+  CloudCallFunction / GetA8Key), **未打 `JSLogin`** (会把账号在第三方小程序侧记成一次登录, 属对外动作,
+  且 code 要配小程序自己的 appsecret 才有用) —— 探针脚本 `/tmp/probe-wxapp.mjs`。
+- **部署目录清单普查** (事故后补做): 用本次部署前的整目录备份 `/data/wpp-deploy-swap-1789306584/
+  extensions-wechatpadpro/` 与现状做全量文件比对 (1135 → 286 个文件). 剔除新旧 `dist`/`node_modules`
+  后, 那次 `rm -rf $DEPLOY` **只多抹掉 1 个文件**: 手工残留的 `openclaw.plugin.json.bak-core-20260910-072050`
+  (连同曾被当作回滚用的 `dist.prev-*` 快照 —— 回滚资产以 `/data` 备份为准, 别放在部署目录里)。
+  **`db/` 下只有 `schema.sql`, 无任何数据文件** ⇒ 插件 sqlite 不在部署目录, **本次事故零数据丢失**,
+  损失仅在「建表/加列静默失效」这一路径 (已修复 + 双门钉住)。
+
+## [v1.6.4] 转发小程序卡片: 原图透传 (XCX-THUMB-INHERIT, 2026-09-13)
+
+> 起因 (老板): 「转发的小程序卡片图片不是收到的小程序卡片图片，图片不一样了」 →
+> 「其实你应该找找原因，因为第一遍你转发给我的小程序卡片，其实是有图片的，与我发给你的一样，
+>   后来要么是空的，要么是图标」。
+>
+> **这条证词直接推翻了 v1.6.3 的结论**。复盘三张卡的实测记录:
+> | 台账 id | 做法 | 老板手机看到 |
+> |---|---|---|
+> | 30877 (20:45) | **原卡片 appattach 凭据原样透传** | 有图, **与原卡片一模一样** ✅ |
+> | 30878 (20:53) | 插件自造 XML, 只给 `<weappiconurl>` | 空/灰块 |
+> | 30879/30882 (21:10/21:16) | v1.6.3「下载原图→自己上传换新凭据」 | 图标 (140×140 logo) |
+>
+> 于是 `-5103017` 的真实含义是**厂商服务端那个下载实现取不到** (两条口 `/Tools/DownloadMiniProgramCover`
+> 与 `/Tools/CdnDownloadImage` 对同一组凭据都返它), **不等于凭据死了** —— 同一组凭据交给
+> `/Msg/SendXCX`, 微信客户端照样取到原图 (30877 与修复后的重发两次实证)。**v1.6.3 把"换一组新凭据"
+> 当成唯一出路是错的**: 那条路的产物是**替代图** (能下载到手的通常只有 140×140 图标)。
+> 转发要的是"与原卡片一致" ⇒ 正解是**透传**, 不是替换。
+
+### Added
+- **凭据令牌 (THUMB-INHERIT)**: `formatThumbToken`/`parseThumbToken` + `parseThumbToken` 常量
+  `THUMB_TOKEN_PREFIX = "xcxthumb:"`。格式定长前缀 + 尾部 iconUrl, **严格互逆** (有单测锁):
+  `xcxthumb:<fileId>:<aesKey>:<md5>:<w>:<h>:<len>:<version>:<iconUrl>` (缺项写空串 —— 省略会让
+  "version 缺/iconUrl 在"与"version 在/iconUrl 缺"分不开; iconUrl 含 `:` 故必须是最后一段)。
+- **入站注记多一行**: `[小程序封面凭据] xcxthumb:… (转发时原样填 thumbUrl)` (由 `coverThumbToken(card)`
+  生成, 缺 fileNo/fileAesKey 时不产出也不打这行)。同一行里点明用途 —— 否则模型会顺手拿上面那行
+  `[小程序封面]`/`[小程序图标]` 的 OSS URL 去转发, **那等于换图** (本轮 bug 的根因)。
+- **出站 `buildXCXContent` 二选一**: `thumbUrl` 是令牌 ⇒ **原凭据直接进 `<appattach>`, 一个字节都不下载
+  不上传** (含 `version`/`iconUrl` 透传保真); 是 http(s) URL ⇒ 仍走 v1.6.3 的 `/Msg/UploadImg`。
+  坏令牌 (前缀对但 fileId/aesKey 非法) **既不当作 URL 去取图, 也不塞进 XML**, 卡片照发只是没图。
+- agent 工具描述 (sendMiniProgram / sendMessage) 写明"转发收到的卡片要用 `[小程序封面凭据]` 令牌"。
+
+### Fixed
+- **入站 `MiniProgramCardInfo` 补 `version`、`MiniProgramCoverCtx` 补 `length`** (`cdn_length`):
+  转发透传要用, 之前解析出来就丢了。
+- 更正 `app-card.ts` 里把 `-5103017` 归因为"封面 blob 在微信 CDN 侧取不到 (已过期)"的注释 —— 归因错了,
+  会把后来人再引回"下载+替换"那条错路。
+
+### 事实记录 (防回归)
+- 反向注入 6 条 (handler 不传令牌 / 出站丢令牌分支 / 令牌解析错位 / 入站令牌丢 md5 / 注记不打凭据行 /
+  序列化 w/h 互换) **全部被测试捕获**, 每条还原后 sha256 与基线一致。
+
 ## [v1.6.3] 小程序卡片补上缩略图 + schema.sql 静默失效修复 (2026-09-13)
 
+> ⚠️ 本节的两条定位**已被 v1.6.4 推翻/修正** (原卡片凭据没死, 是厂商下载口取不到), 保留原文以便回溯。
+>
 > 起因两件, 都是老板实测/拍板发现的:
 > ① **v1.6.2 换现代卡片后卡片没有图** (老板连问两轮「还是没有图片呢？啥情况」)。定位结论:
 >    真卡片的图**只**来自 `<appattach>` 里的微信 CDN blob; 只给 `<weappiconurl>`(或厂商结构化接口

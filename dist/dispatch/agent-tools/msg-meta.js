@@ -127,7 +127,7 @@ export const MSG_META = {
     ],
     /** /Msg/SendXCX */
     sendMiniProgram: [
-        "发送小程序卡片. 传 pagePath 可直达小程序内部页面 (卡片点开即该页); xcxUsername 形如 gh_xxx@app, 与 pagePath 配套使用 (从入站小程序卡片注记里可读到). 只给 5 个基础参数则发的是打开首页/链接的普通卡片.",
+        "发送小程序卡片. 传 pagePath 可直达小程序内部页面 (卡片点开即该页); xcxUsername 形如 gh_xxx@app, 与 pagePath 配套使用 (从入站小程序卡片注记里可读到). 只给 5 个基础参数则发的是打开首页/链接的普通卡片. ⚠️ 转发一张收到的小程序卡片时, thumbUrl 要填该卡片注记里的 [小程序封面凭据] 令牌串 (xcxthumb:…), 这样卡片图与原卡片一模一样; 填别的图会变成另一张图 (常见是小程序 logo).",
         Type.Object({
             toWxid: Type.String(),
             xcxTitle: Type.String(),
@@ -135,7 +135,9 @@ export const MSG_META = {
             /** legacy 卡片 (无 pagePath) 用它作 webview 地址; 现代卡片不用 */
             xcxUrl: Type.String(),
             xcxAppId: Type.String(),
-            thumbUrl: Type.Optional(Type.String()),
+            thumbUrl: Type.Optional(Type.String({
+                description: "缩略图: 图片URL, 或转发原卡片时的凭据令牌 (入站注记 [小程序封面凭据] 那串 xcxthumb:…) —— 令牌会原样透传, 卡片图与原卡片一致 (v1.6.4)",
+            })),
             /** v1.6.2: 小程序内部页面路径, 如 pages/index/index.html?activity_id=320800 */
             pagePath: Type.Optional(Type.String()),
             /** v1.6.2: 小程序 username gh_xxx@app */
@@ -211,7 +213,9 @@ export const MSG_META = {
             fileName: Type.Optional(Type.String({ description: "file: 文件名含扩展名" })),
             title: Type.Optional(Type.String({ description: "link/miniprogram: 标题" })),
             desc: Type.Optional(Type.String({ description: "link/miniprogram: 描述" })),
-            thumbUrl: Type.Optional(Type.String({ description: "image/video/link: 缩略图URL" })),
+            thumbUrl: Type.Optional(Type.String({
+                description: "image/video/link: 缩略图URL; miniprogram: 转发原卡片时填 [小程序封面凭据] 的 xcxthumb:… 令牌 (图与原卡片一致), 或填图片URL走上传",
+            })),
             appId: Type.Optional(Type.String({ description: "miniprogram: 小程序appId" })),
             latitude: Type.Optional(Type.Number({ description: "location: 纬度" })),
             longitude: Type.Optional(Type.Number({ description: "location: 经度" })),
