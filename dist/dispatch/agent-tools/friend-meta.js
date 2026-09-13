@@ -95,5 +95,37 @@ export const FRIEND_META = {
         Type.Object({}),
         () => getFriendApi().getGHList(),
     ],
+    // ===== v1.6.0 SWAGGER-323: 好友申请自动化 (2) =====
+    /**
+     * /Friend/GetFriendRequestList — 读好友申请列表.
+     * 返回项里的 v1/v2/scene 可直接喂 passVerify 通过申请 (见下 acceptFriendRequest)。
+     */
+    getFriendRequestList: [
+        "获取好友申请列表 (由 msg_type=37 同步消息自动进入列表). status 默认 pending. 返回项的 v1/v2/scene 可直接用于通过申请.",
+        Type.Object({
+            status: Type.Optional(Type.Union([
+                Type.Literal("pending"), Type.Literal("accepted"), Type.Literal("all"),
+            ], { description: "申请状态, 默认 pending" })),
+            page: Type.Optional(Type.Number({ description: "页码, 从 1 开始, 默认 1" })),
+            limit: Type.Optional(Type.Number({ description: "每页数量 1-100, 默认 20" })),
+        }),
+        (status, page, limit) => getFriendApi().getFriendRequestList({ status, page, limit }),
+    ],
+    /**
+     * /Friend/AutoAccept — 配置**自动通过好友申请**.
+     * ⚠️ 这是「陌生人自动变好友」的开关 — 服务端默认关闭, 本工具无任何默认放行:
+     *   调用方必须显式 enabled=true; scenes 留空 = 所有来源场景 (厂商建议显式白名单, 别留空)。
+     *   搭配 getFriendRequestList 可先看有什么申请再决定是否开。
+     */
+    setFriendAutoAccept: [
+        "配置自动通过好友申请 (默认关闭). enabled=true 才会生效; scenes 是允许自动通过的来源场景白名单, 留空=所有场景 (不推荐). 建议先用 getFriendRequestList 看清申请来源.",
+        Type.Object({
+            enabled: Type.Boolean({ description: "是否开启自动通过" }),
+            scenes: Type.Optional(Type.Array(Type.Number(), { description: "允许自动通过的来源场景, 留空=所有场景" })),
+            delaySeconds: Type.Optional(Type.Number({ description: "每条申请提交通过前的延迟秒数, 0-300" })),
+            processPending: Type.Optional(Type.Boolean({ description: "开启后立即处理本地已有的 pending 申请" })),
+        }),
+        (enabled, scenes, delaySeconds, processPending) => getFriendApi().autoAccept(enabled, { scenes, delaySeconds, processPending }),
+    ],
 };
 //# sourceMappingURL=friend-meta.js.map

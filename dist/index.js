@@ -9,7 +9,7 @@ import { CHANNEL_ID, PLUGIN_NAME, PLUGIN_VERSION, DEFAULT_BOT_NICKNAME } from ".
 import { loadGlobalConfigAsync, loadAccountConfigAsync, listAccountIds, isConfigured } from "./config.js";
 import { listAccountIds as helperListAccountIds, resolveAccount, defaultAccountId, isConfigured as helperIsConfigured, unconfiguredReason, describeAccount, } from "./config-helpers.js";
 import { getDefaultAccountRegistry } from "./account-state.js";
-import { closeDb, initDbPool, getSynckey, saveSynckey } from "./db.js";
+import { closeDb, initDbPool, getSynckey, saveSynckey, listHfGroupStates, countHfLedgerByStatus } from "./db.js";
 import { WechatpadproWsClient } from "./ws-client.js";
 import { WechatpadproWebhookServer } from "./webhook-receiver.js";
 import { createWppInboundHandler } from "./inbound/handler.js";
@@ -20,10 +20,12 @@ import { sendText as dispatchSendText, sendImage as dispatchSendImage } from "./
 import { AGENT_TOOLS } from "./dispatch/agent-tools/index.js";
 import { getCurrentAccountId } from "./dispatch/account-context.js";
 import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, setAccountField, updateHeartflowGroups, updateBlacklistGroups, ensureWebhookPathToken } from "./config.js";
+import { watchOpenClawChannelConfig, publishAccountCoreFieldsToChannelConfig } from "./channel-ui-bridge.js";
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig } from "./core/runtime-config.js";
 import { resolveAiConfig } from "./config-ai.js";
 import { defaultHeartflowConfig } from "./inbound/heartflow.js";
+import { loadLearnedThresholds, startHeartflowSweep } from "./inbound/heartflow-learn.js";
 import { defaultJargonConfig } from "./inbound/jargon.js";
 import { defaultAffectionConfig } from "./inbound/affection.js";
 // 每账号 triggerConfig/triggerCtx 可变容器: handler 闭包持有对象引用, 热重载 update 字段即刻生效
@@ -238,7 +240,51 @@ async function handleFeatureCommand(feature, args, send, accountId) {
         if (feature === "heartflow") {
             const th = typeof fc?.replyThreshold === "number" ? fc.replyThreshold : 0.6;
             const wl = Array.isArray(fc?.whitelistGroups) ? fc.whitelistGroups.length : 0;
-            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个`;
+            const lrEnabled = Boolean(fc?.learning?.enabled);
+            let learnLine = `\n自适应调阈: ${lrEnabled ? "✅ 开启" : "❌ 关闭"}`;
+            try {
+                const learned = await listHfGroupStates(accountId);
+                if (learned.length > 0) {
+                    learnLine += `\n已学阈值群 (${learned.length}):\n` + learned
+                        .map((s) => {
+                        const cur = s.learned_threshold == null ? "回落账号级" : Number(s.learned_threshold).toFixed(2);
+                        const last = s.last_change_new == null ? "" : ` (上次 ${s.last_change_old == null ? "账号级" : Number(s.last_change_old).toFixed(2)}→${Number(s.last_change_new).toFixed(2)})`;
+                        return `- ${s.group_id} → ${cur}${last}`;
+                    })
+                        .join("\n");
+                }
+                else {
+                    learnLine += " (暂无已学阈值 — 样本收集中, 满 10 条才自动调)";
+                }
+            }
+            catch (e) {
+                learnLine += " (读学习状态失败)";
+            }
+            // v1.6.1 可观测: 近 24h 台账摘要 —— 「judge 跑了但没回」不再是盲区 (09-11 静默瘫教训)
+            let ledgerLine = "";
+            try {
+                const since = Math.floor(Date.now() / 1000) - 86400;
+                const c = await countHfLedgerByStatus(accountId, since);
+                if (c.total === 0) {
+                    ledgerLine = "\n近24h台账: 0 行 (群里无消息 / judge 未跑 / judge 全失败 — 看日志 [WPP HEARTFLOW])";
+                }
+                else {
+                    const replied = (c.byStatus.sent ?? 0) + (c.byStatus.closed ?? 0);
+                    const silent = c.byStatus.suppressed ?? 0;
+                    const pending = c.byStatus.judged ?? 0;
+                    const reasons = Object.entries(c.bySuppressedReason)
+                        .map(([k, v]) => `${k} ${v}`)
+                        .join(", ");
+                    ledgerLine =
+                        `\n近24h台账: judge ${c.total} 次 → 回复 ${replied} / 沉默 ${silent}` +
+                            (pending ? ` / 待发送 ${pending}` : "") +
+                            (reasons ? `\n  沉默原因: ${reasons}` : "");
+                }
+            }
+            catch (e) {
+                ledgerLine = "\n近24h台账: (读台账失败)";
+            }
+            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}${ledgerLine}`;
         }
         await send(`${label} (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}${extra}\n用法: /${feature} on|off|status`);
         return true;
@@ -495,6 +541,13 @@ _agentId = "main") {
     const inboundHandler = runtimeInboundHandlers.get(accountId);
     // shutdown 时 flush 缓冲消息 (幂等: 只 attach 一次, 复用同 handler)
     state.attachInboundFlush(() => inboundHandler.flushAll());
+    // v1.6.x HEARTFLOW-FEEDBACK: 加载 per-群 learned 阈值进内存 + 启动每账号 sweep (幂等; stop 时 state 统一 clear)
+    //   幂等性由 startHeartflowSweep 内部 clear-then-reschedule 保证 (含 in-flight race 已启动再进)
+    void loadLearnedThresholds(accountId).then((n) => {
+        if (n > 0)
+            log.info(`[WPP HF] learned thresholds loaded: account=${accountId} groups=${n}`);
+    });
+    startHeartflowSweep(state, accountId, () => runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig());
     // 幂等 early-return: 任一 ws/webhook 已 attach 即视为已启动 (防并发 start 双重连接/端口占用)
     if (state.wsClient || state.webhookServer) {
         log.info(`account partially/fully started (in-flight race safe return): ${accountId} ws=${!!state.wsClient} webhook=${!!state.webhookServer}`);
@@ -1024,6 +1077,21 @@ export const wppChannelPlugin = {
         nativeCommands: false,
         blockStreaming: false,
     },
+    // ============================================================
+    // v1.5.5 CHANNEL-UI-RELOAD (2026-09-10 老板: Channel 页保存 → 即时热生效不掉线)
+    //
+    // 网关 config-reload-plan 按**插件自声明**的 reload 规则决定保存后重启范围:
+    //   - 只声明 noopPrefixes(不声明 configPrefixes!) → channels.wechatpadpro 改动计划 kind="none"
+    //     → 网关对该路径**完全不重启 channel runtime**, 微信连接不掉、网关不重启。
+    //     唯一 applier = channel-ui-bridge 的 fs.watch openclaw.json → merge accounts/<id>.json
+    //     → 既有 watchAccountConfigs 热载引擎 (零重连)。
+    //   - 绝不可再叠加 configPrefixes: 同前缀时 configPrefixes(热=重启该 channel)排序在 noop 前获胜,
+    //     会把编辑变回整 channel 重启 (=掉线)。
+    //   - 不用 accountScopedRestart: extractAccountIdFromPath 对 accountId="default" 返回 null
+    //     (特判整 channel 重启), default 账号无法被账号级重启隔离。
+    reload: {
+        noopPrefixes: ["channels.wechatpadpro"],
+    },
     // OpenClaw channel gateway (start/stop 细粒度入口, 委托 startAccountById/registry.stop)
     gateway: {
         async startAccount(ctx) {
@@ -1130,8 +1198,27 @@ export const plugin = {
         log.info(`plugin.register: registering wppChannelPlugin (v${PLUGIN_VERSION})`);
         api.registerChannel({ plugin: wppChannelPlugin });
         log.info(`plugin.register: wppChannelPlugin registered`);
+        // v1.5.5 CHANNEL-UI-BRIDGE (2026-09-10): fs.watch openclaw.json#channels.wechatpadpro →
+        //   diff 核心字段 → 写回 accounts/<id>.json → 既有 watchAccountConfigs 热载 apply (零重连)。
+        //   openclaw.json 侧保存不会重启 channel (reload.noopPrefixes 声明), 本 watcher 是唯一 applier。
+        //   onAccountEnabled: Channel 页把停用账号翻回启用 → 尽力拉起 (running 账号 enabled 恒 true 不触发)。
+        void watchOpenClawChannelConfig({
+            onAccountEnabled: async (accountId) => {
+                try {
+                    await startAccountById(accountId);
+                    log.info(`[channel-ui] account=${accountId} enabled via Channel 页 → started`);
+                }
+                catch (e) {
+                    log.warn(`[channel-ui] account=${accountId} enabled but start failed: ${formatErr(e)}`);
+                }
+            },
+        });
         // watch accounts/ 目录: 改运行时字段 (allowFrom/groupPolicy/requireAtMention) 零重启生效
         void watchAccountConfigs(async (accountId, newCfg) => {
+            // v1.5.5 CHANNEL-UI-MIRROR (P2): 账号文件被外部(CLI/手动)改动 → 核心字段 publish 回
+            //   openclaw.json#channels.wechatpadpro, Channel 页显示真实值。值相等 → 零写 (双向环打断);
+            //   页面发起的写 (经 bridge) 已是同值 → 天然 no-op。明文凭证永不 publish。
+            void publishAccountCoreFieldsToChannelConfig(accountId).catch((e) => log.warn(`[channel-ui] mirror failed: ${e.message}`));
             const registry = getDefaultAccountRegistry();
             const state = registry.get(accountId);
             if (!state) {

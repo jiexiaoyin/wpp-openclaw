@@ -1,5 +1,6 @@
 // src/inbound/handler.ts - 主入口 (debouncer + 4-way triggers + enrich)
 import { info, warn, debug, logObj as log, formatErr } from "../core/logger.js";
+import { MsgType } from "../core/constants.js";
 import { WppInboundDebouncer, } from "./debouncer.js";
 import { shouldTrigger, } from "./triggers.js";
 import { enrichBatch } from "./enrich.js";
@@ -10,6 +11,7 @@ import { extractPairCode } from "../pairing-store.js";
 import { getMessageById } from "../storage/db/messages.js";
 import { getMessageByMsgIdOrNewId } from "../db.js";
 import { parseRelayText, isRelayMessage } from "./relay.js";
+import { isMiniProgramCard, parseMiniProgramCard, formatMiniProgramCard, coverThumbToken, enrichMiniProgramAsset } from "./app-card.js";
 import { isRedPacketMessage, processRedPacket } from "./hongbao.js";
 import { extractAtUserList } from "./parser/mention.js";
 import { payloadToAllInboundMessages } from "./parser.js";
@@ -17,6 +19,7 @@ import { SeenTracker, buildDedupeKey } from "../webhook-receiver.js";
 import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1Cdn, enrichFileMessage, enrichFileMessageFromV1Binary, enrichVideoMessage, enrichVideoMessageFromV1, isV1SchemaVideo, enrichVoiceMessage, enrichVoiceMessageFromV1, isV1SchemaVoice, enrichFileMessageViaMcp, isV1SchemaImage, isV1SchemaFile } from "./media-enrich.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
 import { judgeHeartflow, recordRawMessage, getChatState, buildChatContextSummary, getRawBuffer, formatRawMessages, lastBotReply, secondsSinceLastReply, recordActiveReply, recordPassiveMessage, markHeartflowJudged, } from "./heartflow.js";
+import { resolveThresholdOverride, persistHfJudged, persistHfJudgedBelowThreshold, markHfGroupEngaged, } from "./heartflow-learn.js";
 import { updateJargonFromMessage, recordJargonMessage, shouldTriggerMine, mineJargonForGroup, getGroupMessageCount, } from "./jargon.js";
 import { processAffectionMessage, } from "./affection.js";
 // 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
@@ -76,7 +79,7 @@ export function createWppInboundHandler(opts) {
             // 先 enrich (DB 也带 OSS URL) 再 save; enrich 失败不阻塞 (非致命)
             for (const m of batch) {
                 // 图片: v0 schema (content 含 <img> XML) 走 CdnDownloadImage 完整大图; v1 schema (无 XML) 走 DownloadImg 64KB
-                if (m.msgType === 3 && opts.vendorCtx) {
+                if (m.msgType === MsgType.IMAGE && opts.vendorCtx) {
                     const v0Path = m.content.includes("<img");
                     if (v0Path) {
                         try {
@@ -134,7 +137,7 @@ export function createWppInboundHandler(opts) {
                     }
                 }
                 // 视频: msgType=43 → 新版 video.download_context → DownloadVideo (优先); 旧 videomsg XML 兜底
-                if (m.msgType === 43 && opts.vendorCtx) {
+                if (m.msgType === MsgType.VIDEO && opts.vendorCtx) {
                     let vR = null;
                     const v1Video = isV1SchemaVideo(m.raw);
                     if (v1Video.isV1 && v1Video.videoCtx) {
@@ -169,7 +172,7 @@ export function createWppInboundHandler(opts) {
                     }
                 }
                 // 名片: msgType=42 (contact_card) → 从 push_content 提取名片名 (如 "[名片]龙脉") 注入 content, AI 知道是谁的名片
-                if (m.msgType === 42) {
+                if (m.msgType === MsgType.CARD) {
                     const pushContent = m.raw?.push_content;
                     const cardMatch = pushContent?.match(/\[名片\]\s*([^\s:：]+)/);
                     const cardName = cardMatch?.[1]?.trim();
@@ -182,7 +185,7 @@ export function createWppInboundHandler(opts) {
                     }
                 }
                 // 语音: msgType=34 → 下载 + OSS + SiliconFlow STT 转写文字注入 content (AI 看到文本)
-                if (m.msgType === 34 && opts.vendorCtx) {
+                if (m.msgType === MsgType.VOICE && opts.vendorCtx) {
                     let vR = null;
                     // 路径 1 (v1.2.6 首选): 新版 voice.download_context → DownloadVoiceBinary
                     const v1Voice = isV1SchemaVoice(m.raw);
@@ -229,7 +232,8 @@ export function createWppInboundHandler(opts) {
                 //       v1 schema 无下载参数 (见下方 fallback)
                 const isV0FileContent = m.content.includes("<appmsg") &&
                     (m.content.includes("<type>6</type>") || m.content.includes("<type>8</type>"));
-                if (opts.vendorCtx && (m.msgType === 6 || (m.msgType === 49 && isV0FileContent))) {
+                // L322: m.msgType === 6 → v0 老文件 msgType, 不在 vendor MsgType 枚举 (保持裸数字)
+                if (opts.vendorCtx && (m.msgType === 6 || (m.msgType === MsgType.APP && isV0FileContent))) {
                     try {
                         const fR = await enrichFileMessage(opts.vendorCtx, m.content);
                         if (fR.mediaUrl) {
@@ -247,7 +251,7 @@ export function createWppInboundHandler(opts) {
                         log.warn(`[WPP v1.3.74] file enrich exception: ${formatErr(e)}`, { msgId: m.msgId });
                     }
                 }
-                else if (m.msgType === 49) {
+                else if (m.msgType === MsgType.APP) {
                     // v1 schema 文件 (kind=app, app.category=file)
                     //   失败 → v1.2.0 MCP 兜底 → 最后确定性回复 (禁 AI 猜路径读文件)
                     const v1File = isV1SchemaFile(m.raw);
@@ -306,8 +310,38 @@ export function createWppInboundHandler(opts) {
                         warn(`quote svrid capture err (non-fatal): ${formatErr(e)}`);
                     }
                 }
+                // v1.6.1 MINIPROGRAM-CARD: 小程序卡片 (49 + app.category=mini_program) 文本化 + 封面入 OSS。
+                //   此前该类型无任何解析 ⇒ 模型只看到厂商 content 字段 (= 标题), 会误判「转发时只带了文字」。
+                if (m.msgType === MsgType.APP && isMiniProgramCard(m.raw)) {
+                    try {
+                        const card = parseMiniProgramCard(m.raw);
+                        if (card) {
+                            let assetUrl;
+                            let assetKind;
+                            if (opts.vendorCtx && card.cover) {
+                                const r = await trackEnrich(`${m.accountId}:${m.fromWxid}`, () => enrichMiniProgramAsset(opts.vendorCtx, card.cover));
+                                assetUrl = r.mediaUrl ?? undefined;
+                                assetKind = r.kind;
+                                if (!assetUrl) {
+                                    log.info(`[WPP v1.6.1 MINIPROGRAM-CARD] cover miss (non-fatal): msgId=${m.msgId} err=${r.error}`);
+                                }
+                            }
+                            const token = coverThumbToken(card);
+                            m.content = `${m.content}\n${formatMiniProgramCard(card, {
+                                coverUrl: assetKind === "cover" ? assetUrl : undefined,
+                                iconUrl: assetKind === "icon" ? assetUrl : undefined,
+                                coverToken: token,
+                                omitTitle: !card.title || m.content.includes(card.title),
+                            })}`;
+                            log.info(`[WPP v1.6.1 MINIPROGRAM-CARD] ok: msgId=${m.msgId} appid=${card.appId ?? "?"} page=${card.pagePath ?? "?"} asset=${assetKind ?? "无"} token=${token ? "有" : "无"}`);
+                        }
+                    }
+                    catch (e) {
+                        warn(`[WPP v1.6.1 MINIPROGRAM-CARD] enrich failed (non-fatal): ${formatErr(e)}`, { msgId: m.msgId });
+                    }
+                }
                 // 引用消息: 查 DB 被引用消息, 把原媒体 OSS URL 注入 content → AI 看到原图/原资源
-                if (m.msgType === 49) {
+                if (m.msgType === MsgType.APP) {
                     let quotedMsgId = "";
                     try {
                         const appRef = extractReferencedFromApp(m.raw);
@@ -357,9 +391,9 @@ export function createWppInboundHandler(opts) {
                 persistResults.set(m, t);
             }
             const persistBatch = batch.filter((m) => persistResults.get(m)?.via !== "blocked");
-            // v1.5.2 B-fix (2026-08-25 22:28 老板拍 A): 传 opts.heartflow 给 enrichBatch
-            //   (修复 v1.5.0 B 方案 cfg 链未接 accounts.cfg bug, 让 enrichBatch fire-and-forget 用真 accounts cfg)
-            const r = await enrichBatch(persistBatch, opts.heartflow);
+            // 2026-09-13: enrichBatch 现在只落库 (原 cfg 参数只为驱动它内部的"独立心流 trigger" fire-and-forget,
+            //   该路径已删 — 它只 log 决策、从不发送也从不落台账, 且每条群消息双烧 2 次 LLM judge)
+            const r = await enrichBatch(persistBatch);
             if (r.failed > 0) {
                 warn(`inbound batch persist: ${r.failed}/${persistBatch.length} failed (skipped ${batch.length - persistBatch.length} blocked)`);
             }
@@ -401,7 +435,7 @@ export function createWppInboundHandler(opts) {
                         continue;
                     if (m.peerKind !== "group")
                         continue;
-                    if (m.msgType === 10000)
+                    if (m.msgType === MsgType.SYSTEM)
                         continue; // 系统通知不记
                     recordRawMessage(m.chatroomId ?? m.peerId, {
                         senderName: m.fromNickname ?? m.fromWxid ?? "未知",
@@ -422,7 +456,7 @@ export function createWppInboundHandler(opts) {
                         continue;
                     if (m.peerKind !== "group")
                         continue;
-                    if (m.msgType === 10000)
+                    if (m.msgType === MsgType.SYSTEM)
                         continue; // 系统通知不采
                     const groupId = m.chatroomId ?? m.peerId;
                     const content = m.content ?? "";
@@ -458,7 +492,7 @@ export function createWppInboundHandler(opts) {
                         continue;
                     if (m.peerKind !== "group")
                         continue;
-                    if (m.msgType === 10000)
+                    if (m.msgType === MsgType.SYSTEM)
                         continue; // 系统通知不处理
                     if (m.fromWxid === opts.triggerCtx.botWxid)
                         continue; // 自己消息不累计
@@ -468,6 +502,29 @@ export function createWppInboundHandler(opts) {
                     void processAffectionMessage(m.chatroomId ?? m.peerId, m.fromWxid ?? "", content, m.fromNickname ?? "", opts.affection, { ...resolveJudgeCreds() }, Date.now()).catch(() => { });
                 }
             }
+            // v1.6.x HEARTFLOW-FEEDBACK: 接话观察窗回填 (engaged) —
+            //   对每批内「人类群消息」(非 blocked/非系统/非 bot 自己) 按群去重, fire-and-forget markHfEngaged:
+            //   把该群仍开窗未定的心流回复 ledger 立即收敛为 engaged (UPDATE 走 idx_hf_open, 通常 0-1 行)
+            //   失败静默降级 (窗口留待 sweep 到期按 ignored 关, 语义仍正确). 只在 heartflow enabled 时跑.
+            if (opts.heartflow?.enabled) {
+                const seenGroups = new Set();
+                for (const m of batch) {
+                    const tr = persistResults.get(m);
+                    if (tr?.via === "blocked")
+                        continue;
+                    if (m.peerKind !== "group")
+                        continue;
+                    if (m.msgType === MsgType.SYSTEM)
+                        continue; // 系统通知不算接话
+                    if (!!opts.triggerCtx.botWxid && m.fromWxid === opts.triggerCtx.botWxid)
+                        continue; // bot 自己不算
+                    const groupId = m.chatroomId ?? m.peerId;
+                    if (seenGroups.has(groupId))
+                        continue;
+                    seenGroups.add(groupId);
+                    void markHfGroupEngaged(m.accountId, groupId, Math.floor(Date.now() / 1000));
+                }
+            }
             const triggerResults = persistResults; // Step 2 已算 (same ctxForTrigger + shouldTrigger)
             const dispatched = [];
             for (const [m, t] of triggerResults) {
@@ -475,7 +532,7 @@ export function createWppInboundHandler(opts) {
                 if (isRedPacketMessage(m))
                     continue;
                 // v1.3.72 系统通知 (msg_type=10000, 含红包领取/转账/安全提醒) 不触发 AI (老板 2026-08-20): 系统消息无需 AI 回复
-                if (m.msgType === 10000)
+                if (m.msgType === MsgType.SYSTEM)
                     continue;
                 // v1.3.39 FILEHELPER: filehelper 命令不 dispatch (只走命令回调, 不进 AI)
                 if (m.peerId === "filehelper" && /^\s*\//.test(m.content))
@@ -524,6 +581,9 @@ export function createWppInboundHandler(opts) {
                         const hfCfg = opts.heartflow;
                         try {
                             const nowMs = Date.now();
+                            // v1.6.x HEARTFLOW-FEEDBACK: 该群若有 learned 阈值且 ≠ 账号级 → shallow clone override (judge prompt 与判定同用 effCfg)
+                            const override = resolveThresholdOverride(m.accountId, chatId, hfCfg);
+                            const effCfg = override === undefined ? hfCfg : { ...hfCfg, replyThreshold: override };
                             const st = getChatState(chatId, hfCfg, nowMs);
                             const judgeResult = await judgeHeartflow({
                                 chatId,
@@ -535,20 +595,50 @@ export function createWppInboundHandler(opts) {
                                 lastBotReply: lastBotReply(chatId) ?? "",
                                 secondsSinceLastReply: secondsSinceLastReply(chatId, nowMs),
                                 energy: st.energy,
-                            }, hfCfg, {
+                            }, effCfg, {
                                 ...resolveJudgeCreds(),
                             });
                             // P1: 无论结果, 标记已 judge (频率闸生效)
                             markHeartflowJudged(chatId, nowMs);
+                            // v1.6.x HEARTFLOW-FEEDBACK: ledger 行字段两个分支共用 (judge 真出了结果才落;
+                            // judgeResult=null 时表示没判定发生, 已有 warn 留痕, 不落台账以免与"判定未过"混淆)
+                            const hfRecord = judgeResult
+                                ? {
+                                    account_id: m.accountId,
+                                    inbound_msg_id: m.msgId,
+                                    new_msg_id: m.newMsgId ?? null,
+                                    group_id: chatId,
+                                    from_wxid: m.fromWxid ?? null,
+                                    msg_type: m.msgType == null ? null : String(m.msgType),
+                                    content_head: (m.content ?? "").replace(/\s+/g, " ").slice(0, 256) || null,
+                                    judge_overall: judgeResult.overallScore,
+                                    dim_r: judgeResult.dimensions.relevance,
+                                    dim_w: judgeResult.dimensions.willingness,
+                                    dim_s: judgeResult.dimensions.social,
+                                    dim_t: judgeResult.dimensions.timing,
+                                    dim_c: judgeResult.dimensions.continuity,
+                                    effective_threshold: effCfg.replyThreshold ?? 0.6,
+                                    energy: st.energy,
+                                    judged_at: Math.floor(nowMs / 1000),
+                                }
+                                : null;
                             if (judgeResult?.shouldReply) {
                                 m.trigger = "heartflow";
-                                recordActiveReply(chatId, hfCfg, nowMs);
+                                recordActiveReply(chatId, effCfg, nowMs);
+                                // judge 通过落 ledger 行 (失败仅 warn 不阻断 dispatch)
+                                if (hfRecord)
+                                    await persistHfJudged(hfRecord);
                                 dispatched.push(m);
                                 info(`[WPP HEARTFLOW] trigger: peer=${m.peerId} msgId=${m.msgId} score=${judgeResult.overallScore.toFixed(2)} reasoning=${judgeResult.reasoning.slice(0, 40) ?? ""}`);
                             }
                             else {
                                 recordPassiveMessage(chatId, hfCfg, nowMs);
-                                debug(`[WPP HEARTFLOW] skip (score=${judgeResult?.overallScore.toFixed(2) ?? "null"}): peer=${m.peerId}`);
+                                // v1.6.1 留痕: judge 跑了但未过阈值 → 也落一行 (judged→suppressed/ below-threshold).
+                                //   否则"judge 跑了但没回"与"群里没消息"在日志/DB 里完全同形 (09-11 静默瘫就藏在这)。
+                                //   suppressed 行不进学习样本 ⇒ 闭环行为零变更。
+                                if (hfRecord)
+                                    await persistHfJudgedBelowThreshold(hfRecord, Math.floor(nowMs / 1000));
+                                debug(`[WPP HEARTFLOW] skip (score=${judgeResult?.overallScore.toFixed(2) ?? "null"}, threshold=${effCfg.replyThreshold ?? 0.6}): peer=${m.peerId}`);
                             }
                         }
                         catch (e) {

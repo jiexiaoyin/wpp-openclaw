@@ -168,6 +168,7 @@ export async function decideIntentWithLlm(input, opts) {
                     model,
                     max_tokens: maxTokens,
                     temperature: 0,
+                    thinking: { type: "disabled" },
                     messages: [
                         { role: "system", content: systemPrompt },
                         { role: "user", content: userPrompt },

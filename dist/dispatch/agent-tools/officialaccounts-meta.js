@@ -89,9 +89,9 @@ export const OFFICIAL_ACCOUNTS_META = {
      * v1.3.20 P3-OA: /OfficialAccounts/OauthAuthorize — 公众号 OAuth 授权.
      */
     authorizeOfficialAccount: [
-        "公众号 OAuth 授权 (url 是授权链接).",
-        Type.Object({ url: Type.String() }),
-        (url) => getOfficialAccountsApi().oauthAuthorize(url),
+        "公众号 OAuth 授权 (url 是授权链接, appid 是该公众号 AppID).",
+        Type.Object({ url: Type.String(), appid: Type.String({ description: "公众号 AppID" }) }),
+        (url, appid) => getOfficialAccountsApi().oauthAuthorize(url, appid),
     ],
     /**
      * v1.3.20 P3-OA: /OfficialAccounts/QRConnectAuthorize — 二维码授权请求.

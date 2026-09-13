@@ -239,4 +239,80 @@ export async function getWppJson(baseUrl, endpoint, opts) {
         raw: lastErr instanceof Error ? lastErr.message : String(lastErr),
     };
 }
+/** 从 Content-Disposition 里取 filename / filename* (RFC 5987), 失败返回 "" */
+function parseContentDisposition(cd) {
+    if (!cd)
+        return "";
+    const star = /filename\*\s*=\s*[^']*'[^']*'([^;]+)/i.exec(cd);
+    const starVal = star?.[1]?.trim();
+    if (starVal) {
+        try {
+            return decodeURIComponent(starVal);
+        }
+        catch {
+            // 非法 percent-encoding — 退回原始片段
+            return starVal;
+        }
+    }
+    const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(cd);
+    return plain?.[1]?.trim() ?? "";
+}
+/**
+ * GET 取**原始字节** (vendor 少数端点直接回文件流, 用 text() 会毁掉二进制).
+ * 与 getWppJson 同款重试/timeout/authcode 注入, 只是不做 JSON 解析.
+ */
+export async function getWppBinary(baseUrl, endpoint, opts) {
+    const rt = resolveCallCtx(baseUrl, opts);
+    const url = withAuthcodeQuery(buildUrl(rt.baseUrl, endpoint), rt.authcode);
+    const timeoutMs = opts.timeoutMs ?? API_TIMEOUT_MS;
+    const maxRetries = opts.maxRetries ?? API_MAX_RETRIES;
+    let lastErr = null;
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), timeoutMs);
+        try {
+            const res = await fetch(url, {
+                method: "GET",
+                headers: {
+                    "X-TokenKey": rt.tokenKey,
+                    "X-Request-Id": `wpp-${Date.now()}-${attempt}`,
+                },
+                signal: ac.signal,
+            });
+            clearTimeout(timer);
+            if (!res.ok) {
+                lastErr = new Error(`HTTP ${res.status}`);
+                // 失败体一般是 JSON 错误信封 — 读出来给调用方看 (二进制路径, 读错也无所谓)
+                const text = await res.text().catch(() => "");
+                if (isRetryable(res.status) && attempt <= maxRetries) {
+                    await backoff(attempt);
+                    continue;
+                }
+                return { Code: res.status, raw: text };
+            }
+            const buf = new Uint8Array(await res.arrayBuffer());
+            return {
+                Code: 0,
+                bytes: buf,
+                contentType: res.headers.get("content-type") ?? undefined,
+                fileName: parseContentDisposition(res.headers.get("content-disposition")),
+                raw: buf,
+            };
+        }
+        catch (e) {
+            clearTimeout(timer);
+            lastErr = e;
+            if (isRetryable(0, e) && attempt <= maxRetries) {
+                await backoff(attempt);
+                continue;
+            }
+            return { Code: -1, CodeValue: "NETWORK_ERROR", raw: e.message };
+        }
+    }
+    return {
+        Code: -1,
+        CodeValue: "RETRIES_EXHAUSTED",
+        raw: lastErr instanceof Error ? lastErr.message : String(lastErr),
+    };
+}
 //# sourceMappingURL=client.js.map
