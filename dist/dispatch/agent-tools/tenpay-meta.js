@@ -41,21 +41,25 @@ export const TEN_PAY_META = {
     ],
     /** /TenPay/Openwxhb */
     openRedPacket: [
-        "拆开红包 (redPacketId 来自 inbound 红包事件).",
-        Type.Object({ redPacketId: Type.String() }),
-        (redPacketId) => getTenPayApi().openwxhb(redPacketId),
+        "拆开已领取的红包. xml=红包消息内容, sendUserName=红包发送人, timingIdentifier=领取结果返回的时序标识.",
+        Type.Object({
+            xml: Type.String({ description: "红包消息内容" }),
+            sendUserName: Type.String({ description: "红包发送人" }),
+            timingIdentifier: Type.String({ description: "领取结果返回的时序标识" }),
+        }),
+        (xml, sendUserName, timingIdentifier) => getTenPayApi().openwxhb(xml, sendUserName, timingIdentifier),
     ],
     /** /TenPay/Qrydetailwxhb */
     queryRedPacketDetail: [
-        "查看红包详情.",
-        Type.Object({ redPacketId: Type.String() }),
-        (redPacketId) => getTenPayApi().qrydetailwxhb(redPacketId),
+        "查看红包详情. xml=红包消息内容.",
+        Type.Object({ xml: Type.String({ description: "红包消息内容" }) }),
+        (xml) => getTenPayApi().qrydetailwxhb(xml),
     ],
     /** /TenPay/Receivewxhb */
     receiveRedPacket: [
-        "接收红包 (无 key 流程, vendor 自动).",
-        Type.Object({ redPacketId: Type.String() }),
-        (redPacketId) => getTenPayApi().receivewxhb(redPacketId),
+        "打开红包 (无 key 流程, vendor 自动). xml=红包消息内容.",
+        Type.Object({ xml: Type.String({ description: "红包消息内容" }) }),
+        (xml) => getTenPayApi().receivewxhb(xml),
     ],
     /**
      * v1.3.20 P2-TENPAY: /TenPay/GetEncryptInfo — 获取红包/支付加密信息.
@@ -140,6 +144,19 @@ export const TEN_PAY_META = {
         "打开红包 (无加密兼容模式). xml=红包消息内容.",
         Type.Object({ xml: Type.String() }),
         (xml) => getTenPayApi().receiveWxhbWithoutEncryption(xml),
+    ],
+    /**
+     * /TenPay/CreatePreTransfer — 创建转账预订单 (v1.6.0 SWAGGER-323 新 API).
+     * **只创建预订单, 不扣款**; 成功后须用返回的 req_key 调 confirmPreTransfer 完成支付.
+     */
+    createPreTransfer: [
+        "创建转账预订单 (只创建不扣款). feeFen 单位是分 (100=1.00元). 成功后用返回的 req_key 调 confirmPreTransfer 完成支付.",
+        Type.Object({
+            toUserName: Type.String({ description: "转账接收人微信标识" }),
+            feeFen: Type.Number({ description: "转账金额, 单位分 (100=1.00元)" }),
+            description: Type.Optional(Type.String({ description: "转账备注" })),
+        }),
+        (toUserName, feeFen, description) => getTenPayApi().createPreTransfer(toUserName, feeFen, description),
     ],
 };
 //# sourceMappingURL=tenpay-meta.js.map
