@@ -1,16 +1,24 @@
 // src/inbound/enrich.ts - DB 单一入口 (仿 本项目/src/inbound/enrich.ts)
 // 关键: webhook / handler 都通过本文件写 DB, 避免 webhook 自己 INSERT + handler 再 UPDATE 的重复修复模式
+//
+// ⚠️ 2026-09-13 变更: 本文件**不再触发心流**。原 v1.5.0 B-fix 的「独立 trigger」
+//   (tryHeartflowAfterEnrich → tryIndependentTrigger) 已整条删除, 原因 (均为实测事实):
+//     1. 它只 log 决策, **从不发送、从不落台账** ⇒ 对心流行为零影响;
+//     2. 判定用**账号级**阈值 (不走 resolveThresholdOverride) ⇒ 与真实决策用的 per-群 learned
+//        阈值不一致 (华为群 learned=0.30 vs 账号级 0.6), 就算接上发送也是错的;
+//     3. 它先调 markHeartflowJudged() 消耗 judge 冷却, 而真实路径共用该冷却 ⇒ minJudgeIntervalSec>0
+//        时会把真路径整个闸死 (静默失效地雷);
+//     4. ⚠️⚠️ **同一个群消息被 judge 两次**: enrichBatch 先 map(enrichAndSaveMessage) (内部已 fire
+//        一次), 末尾又一个 for 循环再 fire 一次 ⇒ 每条群消息白烧 2 次 LLM 调用 (实测: 一条 via=msgType
+//        的消息在**同一次** handler 调用里产生 2 条 judge failed);
+//     5. 设计前提「非@群消息到不了 handler 的心流分支」经查**不成立** —— requireAtMention 从未在
+//        shouldTrigger 内实现, 非@消息本来就会走到 triggers.ts 的心流分支; ledger 31 行全部由
+//        handler.ts 写出即证。
+//   真·心流回复只走 handler.ts (`t.via === "heartflow"` → judgeHeartflow → persistHfJudged → dispatch)。
 
 import { logObj as log, formatErr } from "../core/logger.js";
-import { resolveJudgeCreds } from "../llm-judge.js";
 import { saveMessage } from "../db.js";
 import type { WppInboundMessage } from "../types.js";
-import {
-  tryIndependentTrigger,
-  defaultHeartflowConfig,
-  type HeartflowConfig,
-  type IndependentTriggerResult,
-} from "./heartflow-trigger.js";
 
 export interface EnrichResult {
   saved: boolean;
@@ -22,15 +30,11 @@ export interface EnrichResult {
  * Persist inbound message to wpp_messages. Idempotent — same msgId can call twice safely.
  * 关键: 不抛, 吞错返 saved:false (silent killer 永久救回靠 caller log)
  *
- * v1.5.2 B-fix (2026-08-25 22:28 老板拍 A):
- *   增加可选 cfg 参数, 末尾 fire-and-forget 调 tryHeartflowAfterEnrich
- *   (webhook 路径只调 enrichAndSaveMessage, 不调 enrichBatch, 所以单独触发)
- *   cfg 应来自 accounts.cfg (inbound/index.ts handleWebhookPayload 取 state.config.heartflow)
- *   不传 cfg → 跳过触发 (向后兼容, 默认 enrichBatch 已独立 fire-and-forget)
+ * 2026-09-13: 只做落库。v1.5.2 曾在此 fire-and-forget 触发心流独立 judge, 已整条删除
+ *   (同一消息会被本函数 + enrichBatch 末尾循环各触发一次 = 双烧 LLM; 且结果被丢弃) — 见文件头注释。
  */
 export async function enrichAndSaveMessage(
   msg: WppInboundMessage,
-  cfg?: HeartflowConfig,
 ): Promise<EnrichResult> {
   try {
     await saveMessage({
@@ -50,13 +54,6 @@ export async function enrichAndSaveMessage(
       ts: msg.ts,
     });
 
-    // v1.5.2 B-fix: enrichAndSaveMessage 末尾 fire-and-forget 调 tryHeartflowAfterEnrich
-    //   (webhook 路径只调 enrichAndSaveMessage, 不调 enrichBatch, 所以单独触发)
-    //   复用 tryHeartflowAfterEnrich 函数 (已含 cfg + apiKey + whitelist + gate 检查)
-    if (cfg && msg.peerKind === "group" && msg.chatroomId) {
-      void tryHeartflowAfterEnrich(msg, cfg);
-    }
-
     return { saved: true };
   } catch (e) {
     log.warn(`enrichAndSaveMessage failed: ${formatErr(e)}`, {
@@ -67,71 +64,14 @@ export async function enrichAndSaveMessage(
 }
 
 /**
- * v1.5.0 B-fix 20:06 老板拍板 B: enrichBatch 写库后, 异步触发心流独立 trigger
+ * 多个消息批量保存
  *
- * 设计: 解耦 AI 主动观察 (heartflow) 与 AI 被动响应 (@bot)
- *   - 老路径: handler.js shouldTrigger via="heartflow" → judge (受 requireAtMention 限制, 群聊非 @ 永远到不了)
- *   - 新路径: enrichBatch 写库后, 调 tryIndependentTrigger 独立入口 (不受 requireAtMention 限制, 仅看 whitelistGroups + heartflow gate)
- *
- * v1.5.2 B-fix (2026-08-25 22:28 老板拍 A):
- *   cfg 不再用 defaultHeartflowConfig + WPP_HEARTFLOW_CONFIG env (env 从来没设过 → cfg.independentTrigger=false → 0 次触发)
- *   改用 caller 传入的 cfg (来自 accounts.cfg 链), 不传则 fallback 到 defaultHeartflowConfig (向后兼容)
- *
- * 异步: fire-and-forget, 不阻塞 enrichBatch 返回 (enrichBatch 不等 judge 完成)
- * 安全: try/catch 全包, 失败仅 log warn 不抛
- *
- * @param msg  刚入库的消息
- * @param cfg  heartflow 配置 (来自 accounts cfg 链)
- */
-async function tryHeartflowAfterEnrich(
-  msg: WppInboundMessage,
-  cfg: HeartflowConfig,
-): Promise<void> {
-  // 仅群消息触发
-  if (msg.peerKind !== "group" || !msg.chatroomId) return;
-  // 心流关闭或 independentTrigger 未开 → 跳过
-  if (!cfg.enabled || !cfg.independentTrigger) return;
-  // 不触发 bot 自己发的消息 (避免自我循环)
-  // 注: msg.direction 已是 inbound (outbound 由 send 路径产出, 不走 enrichAndSaveMessage)
-  // 提取 judge 凭证 (DEEPSEEK 优先, MiniMax 兜底)
-  const creds = resolveJudgeCreds();
-  if (!creds.apiKey) {
-    log.warn("[WPP HEARTFLOW] enrich trigger skipped: missing judge API key (DEEPSEEK_API_KEY / MINIMAX_API_KEY)");
-    return;
-  }
-  try {
-    const result: IndependentTriggerResult = await tryIndependentTrigger(
-      {
-        chatId: msg.chatroomId,
-        content: msg.content ?? "",
-        senderName: msg.fromNickname ?? msg.fromWxid ?? "未知",
-        senderWxid: msg.fromWxid ?? "",
-        botWxid: undefined,
-        apiKey: creds.apiKey,
-        baseUrl: creds.baseUrl,
-        format: creds.format,
-      },
-      cfg,
-    );
-    // 触发成功才 info; 未触发(false)是常态噪音 → debug
-    (result.triggered ? log.info : log.debug)(
-      `[WPP HEARTFLOW] independent trigger result: triggered=${result.triggered} reason="${result.reason}" chatId=${msg.chatroomId}`,
-    );
-  } catch (err) {
-    log.warn(`[WPP HEARTFLOW] independent trigger threw: ${formatErr(err)}`, {
-      msgId: msg.msgId,
-      chatId: msg.chatroomId,
-    });
-  }
-}
-
-/** 多个消息批量保存
- *
- * v1.5.2 B-fix: 增加可选 cfg 参数, caller 传 accounts.cfg.heartflow → 不再依赖 WPP_HEARTFLOW_CONFIG env
+ * 2026-09-13: 只做落库 (原 v1.5.0/v1.5.2 的「写库后 fire-and-forget 心流独立 trigger」已删除)。
+ *   注意历史坑: 那两个版本里 enrichBatch 自己又 fire 了一次, 而 map(enrichAndSaveMessage) 内部
+ *   也 fire 一次 ⇒ 每条群消息被 judge 两次。删除该循环即同时修掉这个双烧。
  */
 export async function enrichBatch(
   batch: WppInboundMessage[],
-  cfg?: HeartflowConfig,
 ): Promise<{
   saved: number;
   failed: number;
@@ -139,7 +79,7 @@ export async function enrichBatch(
   // P3-2 (2026-08-13 外部审计): 历史跟踪入库 — 每条消息独立落库 (不同 msg_id, INSERT...ON DUPLICATE 幂等),
   //   相互独立无数据依赖 → 顺序 await 改 Promise.all 并发 (enrichAndSaveMessage 内部吞错永不 reject,
   //   一条失败不阻塞其余 + 计数语义与原串行一致)
-  const results = await Promise.all(batch.map((msg) => enrichAndSaveMessage(msg, cfg)));
+  const results = await Promise.all(batch.map((msg) => enrichAndSaveMessage(msg)));
   let saved = 0;
   let failed = 0;
   for (const r of results) {
@@ -149,17 +89,6 @@ export async function enrichBatch(
   // 每条入站消息都会落库 → 全部成功只 debug; 有失败才 warn 提级 (需排查)
   if (failed > 0) log.warn(`enrichBatch: ${saved} saved, ${failed} failed (size=${batch.length})`);
   else log.debug(`enrichBatch: ${saved} saved, ${failed} failed (size=${batch.length})`);
-
-  // v1.5.0 B-fix 20:06: enrichBatch 写库后, fire-and-forget 异步触发心流独立 trigger
-  // v1.5.2 B-fix: cfg 优先 caller 传入, fallback 到 defaultHeartflowConfig + WPP_HEARTFLOW_CONFIG env (向后兼容)
-  const effectiveCfg: HeartflowConfig = cfg ?? {
-    ...defaultHeartflowConfig(),
-    ...(process.env.WPP_HEARTFLOW_CONFIG ? JSON.parse(process.env.WPP_HEARTFLOW_CONFIG) : {}),
-  };
-  for (const msg of batch) {
-    if (msg.peerKind !== "group") continue;
-    void tryHeartflowAfterEnrich(msg, effectiveCfg);
-  }
 
   return { saved, failed };
 }

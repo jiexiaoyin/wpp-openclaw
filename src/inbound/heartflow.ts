@@ -64,14 +64,6 @@ export interface HeartflowConfig {
   includeReasoning?: boolean;
   /** 判断最大重试 (默认 2) */
   maxRetries?: number;
-  /**
-   * v1.5.0 B-fix 20:06: 老板拍板 B (3 层分层架构) — 心流独立 trigger 开关
-   * - false (默认): 心流仅在 handler.js shouldTrigger via="heartflow" 路径触发 (受 requireAtMention 间接限制)
-   * - true:         心流独立 trigger 入口, 绕过 requireAtMention/groupPolicy, 仅看 whitelistGroups
-   * 设计: 解耦 AI 主动观察 (heartflow) 和 AI 被动响应 (@bot), 两条路径独立
-   *       符合 2026-06-03 00:22 老板偏好 (@bot 才回复不变) + 2026-08-14 14:19 (模块解耦)
-   */
-  independentTrigger?: boolean;
   /** v1.5.4 BUSINESS-CONTEXT: 心流 judge 的业务背景知识注入，提升运营商群等专业场景判断准确率 */
   businessContext?: string;
   /**
@@ -175,7 +167,6 @@ export function defaultHeartflowConfig(): HeartflowConfig {
     weights: { relevance: 0.25, willingness: 0.2, social: 0.2, timing: 0.15, continuity: 0.2 },
     includeReasoning: false,
     maxRetries: 1, // P1: 默认 1 次重试 (原 2 → 3 次调用, 阻塞最坏 15s)
-    independentTrigger: false, // v1.5.0 B-fix 20:06: 默认关闭, 保持现有行为兼容
   };
 }
 
@@ -671,120 +662,4 @@ export function checkHeartflowGate(
     }
   }
   return { allowed: true };
-}
-
-// ===== v1.5.0 B-fix 20:06 老板拍板 B: 心流独立 trigger 入口 =====
-//
-// 设计目标: 解耦 AI 主动观察 (heartflow) 与 AI 被动响应 (@bot)
-//   - requireAtMention=true (默认, 符合 2026-06-03 00:22 老板偏好 @bot 才回复)
-//   - heartflow 是 AI 主动观察群聊, 不应该被 requireAtMention 限制
-//   - 现有架构: handler.js line 517 把 heartflow judge 嵌套在 shouldTrigger via="heartflow" 路径
-//                而 requireAtMention 在 index.ts:handleWebhookPayload 早已把非 @ 群消息拦了
-//                结果 heartflow 永远到不了 handler.js
-//   - 新设计: enrichBatch webhook 写库后, 调 tryIndependentTrigger 独立入口
-//             独立检查 whitelistGroups + heartflow gate, 绕过 requireAtMention/groupPolicy
-//             异步触发 judgeHeartflow, 不阻塞入库
-//
-// 调用方: inbound/enrich.ts enrichBatch (webhook 路径写库后)
-//        inbound/handler.ts (ws-sync 路径仍走原 via="heartflow", 保持兼容)
-
-export interface IndependentTriggerOpts {
-  /** 群 wxid (chatroom@chatroom) */
-  chatId: string;
-  /** 消息内容 */
-  content: string;
-  /** 发送者昵称 */
-  senderName: string;
-  /** 发送者 wxid */
-  senderWxid: string;
-  /** bot 自己的 wxid (用于 chat context) */
-  botWxid?: string;
-  /** miniMax API key (从 env var 读) */
-  apiKey: string;
-  /** API base URL */
-  baseUrl?: string;
-  /** API 格式: openai (DeepSeek) | anthropic (MiniMax) */
-  format?: "openai" | "anthropic";
-}
-
-export interface IndependentTriggerResult {
-  triggered: boolean;
-  reason: string;
-  judgeResult?: HeartflowJudgeResult | null;
-}
-
-/**
- * 心流独立 trigger 入口 (v1.5.0 B-fix 20:06 老板拍板 B)
- *
- * 流程:
- *   1. 检查 cfg.independentTrigger=true (B 方案开关)
- *   2. 检查 cfg.enabled=true
- *   3. 检查 whitelistGroups 包含 chatId
- *   4. 检查 checkHeartflowGate (gate = false → not triggered)
- *   5. 调 judgeHeartflow 异步打分 (5 维)
- *   6. markHeartflowJudged 标记已 judge (频率闸生效)
- *   7. 返回 { triggered, reason, judgeResult }
- *
- * 设计: 不抛异常 (failure-soft), 失败返回 { triggered: false, reason }
- *       enrichBatch 调用方 try/catch 隔离, 不影响主入库流程
- */
-export async function tryIndependentTrigger(
-  opts: IndependentTriggerOpts,
-  cfg: HeartflowConfig,
-): Promise<IndependentTriggerResult> {
-  // 步骤 1: B 方案开关检查
-  if (!cfg.independentTrigger) {
-    return { triggered: false, reason: "independentTrigger disabled" };
-  }
-  // 步骤 2: 总开关
-  if (!cfg.enabled) {
-    return { triggered: false, reason: "heartflow disabled" };
-  }
-  // 步骤 3: 群白名单
-  if (cfg.whitelistGroups && cfg.whitelistGroups.length > 0 && !cfg.whitelistGroups.includes(opts.chatId)) {
-    return { triggered: false, reason: "not in whitelistGroups" };
-  }
-  // 步骤 4: 心流 gate (冷却/精力)
-  const nowMs = Date.now();
-  const gate = checkHeartflowGate(opts.chatId, opts.content, cfg, nowMs);
-  if (!gate.allowed) {
-    return { triggered: false, reason: `gate:${gate.reason}` };
-  }
-  // 步骤 5: 异步 judge
-  try {
-    const judgeResult = await judgeHeartflow(
-      {
-        chatId: opts.chatId,
-        botNickname: opts.botWxid ?? "",
-        content: opts.content,
-        senderName: opts.senderName,
-        chatContext: buildChatContextSummary(opts.chatId, cfg, nowMs),
-        recentMessages: formatRawMessages(getRawBuffer(opts.chatId, cfg.contextMessagesCount ?? 5)),
-        lastBotReply: lastBotReply(opts.chatId) ?? "",
-        secondsSinceLastReply: secondsSinceLastReply(opts.chatId, nowMs),
-        energy: getChatState(opts.chatId, cfg, nowMs).energy,
-      },
-      cfg,
-      {
-        apiKey: opts.apiKey,
-        baseUrl: opts.baseUrl,
-        format: opts.format,
-      },
-    );
-    // 步骤 6: 标记已 judge
-    markHeartflowJudged(opts.chatId, nowMs);
-    // 步骤 7: 返回结果
-    if (!judgeResult) {
-      return { triggered: false, reason: "judge returned null" };
-    }
-    return {
-      triggered: judgeResult.shouldReply,
-      reason: judgeResult.shouldReply ? "judge.shouldReply=true" : `score=${judgeResult.overallScore.toFixed(2)}<threshold`,
-      judgeResult,
-    };
-  } catch (err) {
-    // 失败软处理: 不抛, 不影响 enrichBatch
-    const msg = err instanceof Error ? err.message : String(err);
-    return { triggered: false, reason: `judge threw: ${msg}` };
-  }
 }
