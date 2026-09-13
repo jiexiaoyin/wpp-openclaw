@@ -41,6 +41,10 @@ export interface WppSendMessageParams {
   thumbUrl?: string;
   /** miniprogram: 小程序 appId */
   appId?: string;
+  /** miniprogram: 小程序内部页面路径 (v1.6.2; 给了才能开具体页面, 不给=legacy 首页卡片) */
+  pagePath?: string;
+  /** miniprogram: 小程序 username `gh_xxx@app` (v1.6.2; 与 pagePath 配套) */
+  username?: string;
   /** location: 纬度 */
   latitude?: number;
   /** location: 经度 */
@@ -197,7 +201,10 @@ export async function sendMessage(p: WppSendMessageParams): Promise<WppSendResul
     case "location":
       return callMsg(accountId, (api) => api.shareLocation(toWxid, p.latitude ?? 0, p.longitude ?? 0, p.label));
     case "miniprogram":
-      return callMsg(accountId, (api) => api.sendXCX(toWxid, p.title ?? "", p.desc ?? "", p.content ?? "", p.appId ?? "", p.thumbUrl));
+      // v1.6.2 XCX-PAGEPATH: p.pagePath 给了才走现代卡片 (内部页面), 否则 legacy
+      return callMsg(accountId, (api) =>
+        api.sendXCX(toWxid, p.title ?? "", p.desc ?? "", p.content ?? "", p.appId ?? "", p.thumbUrl, p.pagePath, p.username),
+      );
     case "emoji":
       return callMsg(accountId, (api) => api.sendEmoji(toWxid, p.content ?? "", p.size ?? 0));
     default:
