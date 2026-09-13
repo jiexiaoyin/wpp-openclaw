@@ -75,9 +75,9 @@ export const USER_META: ToolMeta = {
   ],
   /** /User/SetPasswd */
   changePassword: [
-    "修改自己的微信登录密码.",
-    Type.Object({ newPwd: Type.String() }),
-    (newPwd: string) => getUserApi().setPasswd(newPwd),
+    "修改自己的微信登录密码. 需先用 verifyPassword 拿 ticket (swagger 必填).",
+    Type.Object({ newPwd: Type.String(), ticket: Type.String({ description: "verifyPassword 返回的修改凭据" }) }),
+    (newPwd: string, ticket: string) => getUserApi().setPasswd(newPwd, ticket),
   ],
   /** /User/VerifyPasswd */
   verifyPassword: [
@@ -87,9 +87,14 @@ export const USER_META: ToolMeta = {
   ],
   /** /User/ReportMotion */
   reportMotion: [
-    "上报步数 (微信运动).",
-    Type.Object({ steps: Type.Number() }),
-    (steps: number) => getUserApi().reportMotion(steps),
+    "上报步数 (微信运动). deviceId 留空则用厂商默认.",
+    Type.Object({
+      steps: Type.Number(),
+      deviceId: Type.Optional(Type.String()),
+      deviceType: Type.Optional(Type.String()),
+    }),
+    (steps: number, deviceId?: string, deviceType?: string) =>
+      getUserApi().reportMotion(steps, deviceId ?? "", deviceType ?? "ipad"),
   ],
   /** /User/BindingMobile */
   bindMobile: [

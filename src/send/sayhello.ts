@@ -38,7 +38,7 @@ export function makeWppSayHello(ctx: WppAccountCtx) {
       dispatch("/SayHello/Modelv3", {
         scene,
         v3,
-        ...(v4 ? { v4 } : {}),
+        v4, // v1.6.0: swagger 把 v4 标为必填 — 恒发 (旧码仅在非空时才带 ⇒ 常缺)
         ...(verifyContent ? { verifyContent } : {}),
       }),
   };

@@ -92,22 +92,37 @@ export function makeWppSearch(ctx: WppAccountCtx) {
 
     // ===== v1.3.25 SWAGGER-254: 新增 5 个通用搜索 =====
 
-    /** /Search/Capabilities — GET 查看通用搜索支持的分类 */
+    /**
+     * /Search/Capabilities — GET 查看通用搜索支持的分类.
+     * v1.6.0 SWAGGER-323: 厂商已**下线** `/Search/Services` 与 `/Search/Service/{name}`
+     * (旧「高级搜索能力目录 / 能力调用」一套), 合并进本端点 + `/Search/Query`.
+     * 原 `services()` 就是本端点的重复实现, 已删; 旧 `service(name, q)` 的语义
+     * 由 `query(q, category=name)` 覆盖 (见下).
+     */
     capabilities: () => getWppJson(ctx.baseUrl, "/Search/Capabilities", opts),
-
-    /** /Search/Services — GET 查看高级搜索能力目录 */
-    services: () => getWppJson(ctx.baseUrl, "/Search/Services", opts),
 
     /** /Search/Gateway — 兼容旧版搜一搜网页网关 */
     gateway: (query: string) => dispatch("/Search/Gateway", { query }),
 
-    /** /Search/Query — 通用分类搜索 */
-    query: (query: string, category = "", cursor = "") =>
-      dispatch("/Search/Query", { query, category, cursor }),
-
-    /** /Search/Service/{name} — 高级搜索能力调用入口 */
-    service: (name: string, query = "", params: Record<string, unknown> = {}) =>
-      dispatch(`/Search/Service/${name}`, { query, ...params }),
+    /**
+     * /Search/Query — 通用分类搜索 (Search.QueryRequestDoc).
+     * category 必填 (swagger: all/article/official_account/channels/mini_program/moments …);
+     * 续页时把上一页返回的 search_id/cursor 原样传回, offset 用上一页的 next_offset.
+     */
+    query: (
+      query: string,
+      category = "",
+      cursor = "",
+      page?: { searchId?: string; offset?: number; limit?: number },
+    ) =>
+      dispatch("/Search/Query", {
+        query,
+        category,
+        cursor,
+        ...(page?.searchId ? { search_id: page.searchId } : {}),
+        ...(page?.offset !== undefined ? { offset: page.offset } : {}),
+        ...(page?.limit !== undefined ? { limit: page.limit } : {}),
+      }),
 
     // ===== v1.3.67 新 vendor: 视频号 Channels 深度 API =====
 

@@ -61,6 +61,39 @@ export function makeWppFriend(ctx: WppAccountCtx) {
 
     /** /Friend/GetGHList — 通讯录完整拉取 (v1.3.67 新 API; 分页+批量补齐名称/备注/头像) */
     getGHList: () => dispatch("/Friend/GetGHList", {}),
+
+    // ===== v1.6.0 SWAGGER-323: 好友申请自动化 (2) =====
+    // 来源: 容器 swagger (v09102) Friend.FriendRequestListParamDoc / FriendAutoAcceptParamDoc.
+    // 申请由 msg_type=37 同步消息自动进本地列表, 返回的 v1/v2/scene 可直接喂 PassVerify.
+
+    /**
+     * /Friend/GetFriendRequestList — 读好友申请列表.
+     * swagger: {status: pending|accepted|all (默认 pending), page (从 1 开始, 默认 1), limit (1-100, 默认 20)}.
+     */
+    getFriendRequestList: (opt?: { status?: "pending" | "accepted" | "all"; page?: number; limit?: number }) =>
+      dispatch("/Friend/GetFriendRequestList", {
+        ...(opt?.status ? { status: opt.status } : {}),
+        ...(opt?.page !== undefined ? { page: opt.page } : {}),
+        ...(opt?.limit !== undefined ? { limit: opt.limit } : {}),
+      }),
+
+    /**
+     * /Friend/AutoAccept — 配置自动通过好友申请.
+     * swagger: {enabled*, scenes[](留空=所有来源场景, 建议明确白名单), delay_seconds(0-300), process_pending}.
+     * ⚠️ 这是**自动把陌生人加成好友**的开关 — 默认关闭且本包装不提供任何默认放行:
+     *    调用方必须显式传 enabled=true 才会生效.
+     */
+    autoAccept: (enabled: boolean, opt?: {
+      scenes?: number[];
+      delaySeconds?: number;
+      processPending?: boolean;
+    }) =>
+      dispatch("/Friend/AutoAccept", {
+        enabled,
+        ...(opt?.scenes ? { scenes: opt.scenes } : {}),
+        ...(opt?.delaySeconds !== undefined ? { delay_seconds: opt.delaySeconds } : {}),
+        ...(opt?.processPending !== undefined ? { process_pending: opt.processPending } : {}),
+      }),
   };
 }
 

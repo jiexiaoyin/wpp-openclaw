@@ -127,22 +127,38 @@ test('P2-3.4: enrich.ts 与 heartflow 完全无耦合', () => {
 });
 
 // ===== P2-4: plugin.json version 对齐 =====
-test('P2-4.1: dev openclaw.plugin.json version = 1.5.4', () => {
+// v1.6.0: 原断言把版本号**写字面量** ('1.5.4') ⇒ 每次正常升版都假红, 且没人会因此发现真问题。
+// 改为断言「三方一致」(package.json 是 SSOT)。P2-4 的本意 (=version 必须对齐) 原样保留,
+// 牙齿靠 package.json↔manifest↔部署副本的互相比对, 而非固定值。
+const DEV_VERSION = JSON.parse(fs.readFileSync(`${ROOT}/package.json`, 'utf-8')).version;
+
+test('P2-4.1: dev openclaw.plugin.json.version = package.json.version', () => {
   const d = JSON.parse(fs.readFileSync(`${ROOT}/openclaw.plugin.json`, 'utf-8'));
-  assert.strictEqual(d.version, '1.5.4', 'dev openclaw.plugin.json.version 必须 1.5.4');
+  assert.strictEqual(d.version, DEV_VERSION, `dev openclaw.plugin.json.version(${d.version}) 必须 = package.json(${DEV_VERSION})`);
 });
 
-test('P2-4.2: deploy openclaw.plugin.json version = 1.5.4', () => {
+test('P2-4.2: deploy openclaw.plugin.json.version = dev (部署没掉队)', () => {
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}/openclaw.plugin.json`, 'utf-8'));
-  assert.strictEqual(d.version, '1.5.4', 'deploy openclaw.plugin.json.version 必须 1.5.4');
+  assert.strictEqual(d.version, DEV_VERSION, `deploy openclaw.plugin.json.version(${d.version}) 必须 = dev(${DEV_VERSION}) — 改了版本但没重新部署?`);
 });
 
-test('P2-4.3: package.json version = 1.5.4', () => {
-  const d = JSON.parse(fs.readFileSync(`${ROOT}/package.json`, 'utf-8'));
-  assert.strictEqual(d.version, '1.5.4');
+test('P2-4.3: package.json version 是合法 semver (SSOT 自检)', () => {
+  assert.match(DEV_VERSION, /^\d+\.\d+\.\d+$/, `package.json version 不是 semver: ${DEV_VERSION}`);
 });
 
-test('P2-4.4: PLUGIN_VERSION 从 package.json 动态读取 = 1.5.4', async () => {
+test('P2-4.4: PLUGIN_VERSION 从 package.json 动态读取 (非编译期烤死)', async () => {
+  // ⚠️ 只断言「PLUGIN_VERSION === 部署副本版本号」是**没有牙**的 —
+  //   发版那一刻两边本来就相等, "烤成字面量" 与 "运行时读文件" 在数值上无法区分。
+  //   (反向注入实测: 把部署 package.json 改成 1.5.4, 纯数值断言照样 PASS。)
+  //   真正的判据 = 编译产物里**必须留着**动态 require 的痕迹。
+  const compiled = fs.readFileSync(`${DEPLOY}/dist/core/constants.js`, 'utf-8');
+  assert.match(compiled, /require\((["'])\.\.\/\.\.\/package\.json\1\)/,
+    'dist/core/constants.js 必须动态 require("../../package.json") — 改成字面量则升版后日志/上报版本会静默失真');
+  assert.doesNotMatch(compiled, /PLUGIN_VERSION\s*=\s*["']\d+\.\d+\.\d+["']/,
+    'PLUGIN_VERSION 不得被烤成字面量');
+
+  // 机制 ✓ 之后, 再补一层运行时一致性 (管部署有没有对齐, 与上面的机制判据互补)
   const { PLUGIN_VERSION } = await import(`${DEPLOY}/dist/core/constants.js`);
-  assert.strictEqual(PLUGIN_VERSION, '1.5.4', `PLUGIN_VERSION must be 1.5.4, got ${PLUGIN_VERSION}`);
+  const deployed = JSON.parse(fs.readFileSync(`${DEPLOY}/package.json`, 'utf-8')).version;
+  assert.strictEqual(PLUGIN_VERSION, deployed, `PLUGIN_VERSION(${PLUGIN_VERSION}) 必须 = 部署副本 package.json(${deployed})`);
 });

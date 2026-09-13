@@ -101,11 +101,17 @@ export const TOOLS_META = {
         Type.Object({}),
         () => getToolsApi().getBandCardList(),
     ],
-    /** /Tools/setproxy — 修改微信步数 (走 setproxy; 新端点 SetStep 有 vendor bug panic, 勿用) */
+    /** /Tools/SetStep — 修改微信步数 (v1.6.0: 纠正误绑 — 步数端点一直都是 SetStep, 见 send/tools.ts 说明) */
     setStepCount: [
         "修改微信运动步数 (当天步数, 最高 98000).",
         Type.Object({ steps: Type.Number() }),
         (steps) => getToolsApi().setStep(steps),
+    ],
+    /** /Tools/setproxy — 设置/删除代理IP (v1.6.0 新增; 该端点本来就是代理, 见 send/tools.ts 的纠错说明) */
+    setProxy: [
+        "设置或删除出口代理IP. 传空字符串恢复直连; 格式 host:port.",
+        Type.Object({ proxy: Type.String() }),
+        (proxy) => getToolsApi().setProxy(proxy),
     ],
     // ===== v1.3.25 SWAGGER-254: 新增 2 个 (media-enrich 已用, 补 AI 工具) =====
     /** /Tools/DownloadFileBinary — swagger {app_id, attach_id, data_len, file_name, section, user_name} */
@@ -132,6 +138,21 @@ export const TOOLS_META = {
             format: Type.Optional(Type.Number()),
         }),
         (msgId, newMsgId, toUserName, fromUserName, length, format) => getToolsApi().downloadVoiceBinary(msgId, newMsgId, toUserName, fromUserName, length, format),
+    ],
+    /**
+     * /Tools/DownloadMiniProgramCover — 下载小程序卡片封面 (v1.6.0 SWAGGER-323 新 API).
+     * 三种入参: ① url (小程序卡片返回的官方封面地址); ② fileNo + fileAesKey (url 为空时成对使用).
+     * 也可把 WS/Webhook 小程序消息里 app.cover_image.download_context 的字段拆出来传.
+     * 返回 Data.Image = base64 封面图.
+     */
+    downloadMiniProgramCover: [
+        "下载小程序卡片封面图. 传 url, 或 url 为空时传 fileNo+fileAesKey. 返回 Data.Image (base64 图片).",
+        Type.Object({
+            url: Type.Optional(Type.String({ description: "小程序卡片返回的官方封面地址" })),
+            fileNo: Type.Optional(Type.String({ description: "图片文件标识 (url 为空时与 fileAesKey 成对使用)" })),
+            fileAesKey: Type.Optional(Type.String({ description: "图片访问凭据 (url 为空时与 fileNo 成对使用)" })),
+        }),
+        (url, fileNo, fileAesKey) => getToolsApi().downloadMiniProgramCover({ url, fileNo, fileAesKey }),
     ],
 };
 //# sourceMappingURL=tools-meta.js.map

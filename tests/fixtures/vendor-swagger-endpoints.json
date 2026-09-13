@@ -1,0 +1,1458 @@
+{
+ "_meta": {
+  "source": "wechatpadpro 容器 swagger.json (默认 http://127.0.0.1:28062/swagger.json, basePath /api)",
+  "swagger_md5": "bccc5af02a232eaf52df067ba87859be",
+  "basePath": "/api",
+  "note": "路径已把 {param} 归一为 {_} (项目里是模板字面量/变量); required 只收端点专属 body definition, 被 >=2 端点赞的通用占位已剔除 (其 required 不可信)。"
+ },
+ "tags": [
+  "Admin",
+  "Customized",
+  "Favor",
+  "Finder",
+  "Friend",
+  "FriendCircle",
+  "Group",
+  "Label",
+  "Login",
+  "Msg",
+  "OfficialAccounts",
+  "Other",
+  "QWContact",
+  "SayHello",
+  "Search",
+  "TenPay",
+  "Tools",
+  "Translate",
+  "User",
+  "Voice",
+  "Webhook",
+  "Wxapp",
+  "XiaoWei"
+ ],
+ "paths": {
+  "/Admin/DelayAuthKey": [
+   "post"
+  ],
+  "/Admin/DeleteAuthKey": [
+   "post"
+  ],
+  "/Admin/GenAuthKey": [
+   "post"
+  ],
+  "/Admin/GetAllDevices": [
+   "get"
+  ],
+  "/Admin/RedisMemory": [
+   "post"
+  ],
+  "/Customized/WXCTDUniftyAuthBatch": [
+   "post"
+  ],
+  "/Favor/Del": [
+   "post"
+  ],
+  "/Favor/GetFavInfo": [
+   "post"
+  ],
+  "/Favor/GetFavItem": [
+   "post"
+  ],
+  "/Favor/Sync": [
+   "post"
+  ],
+  "/Finder/Comment": [
+   "post"
+  ],
+  "/Finder/Decrypt": [
+   "post"
+  ],
+  "/Finder/FinderGetMsgSessionId": [
+   "post"
+  ],
+  "/Finder/FinderLiveDetail": [
+   "post"
+  ],
+  "/Finder/FinderSearchList": [
+   "post"
+  ],
+  "/Finder/FinderSendText": [
+   "post"
+  ],
+  "/Finder/Findergettopiclist": [
+   "post"
+  ],
+  "/Finder/Follow": [
+   "post"
+  ],
+  "/Finder/GetCommentDetail": [
+   "post"
+  ],
+  "/Finder/GetCommentList": [
+   "post"
+  ],
+  "/Finder/GetRecommend": [
+   "post"
+  ],
+  "/Finder/Like": [
+   "post"
+  ],
+  "/Finder/PlayVideo": [
+   "post"
+  ],
+  "/Finder/PlayVideoStatus": [
+   "get"
+  ],
+  "/Finder/PlayVideoStop": [
+   "post"
+  ],
+  "/Finder/PlayVideoTasks": [
+   "get"
+  ],
+  "/Finder/Search": [
+   "post"
+  ],
+  "/Finder/TargetUserPage": [
+   "post"
+  ],
+  "/Finder/UserPrepare": [
+   "post"
+  ],
+  "/Friend/AutoAccept": [
+   "post"
+  ],
+  "/Friend/Blacklist": [
+   "post"
+  ],
+  "/Friend/Delete": [
+   "post"
+  ],
+  "/Friend/GetContractDetail": [
+   "post"
+  ],
+  "/Friend/GetContractList": [
+   "post"
+  ],
+  "/Friend/GetFriendRequestList": [
+   "post"
+  ],
+  "/Friend/GetFriendstate": [
+   "post"
+  ],
+  "/Friend/GetGHList": [
+   "post"
+  ],
+  "/Friend/GetMFriend": [
+   "post"
+  ],
+  "/Friend/LbsFind": [
+   "post"
+  ],
+  "/Friend/PassVerify": [
+   "post"
+  ],
+  "/Friend/Search": [
+   "post"
+  ],
+  "/Friend/SendRequest": [
+   "post"
+  ],
+  "/Friend/SetRemarks": [
+   "post"
+  ],
+  "/Friend/Upload": [
+   "post"
+  ],
+  "/FriendCircle/ActiveTasks": [
+   "post"
+  ],
+  "/FriendCircle/AutoForward": [
+   "post"
+  ],
+  "/FriendCircle/AutoForwardStatus": [
+   "get"
+  ],
+  "/FriendCircle/BatchDownload": [
+   "post"
+  ],
+  "/FriendCircle/BatchDownloadFile": [
+   "get"
+  ],
+  "/FriendCircle/BatchDownloadStatus": [
+   "get"
+  ],
+  "/FriendCircle/Comment": [
+   "post"
+  ],
+  "/FriendCircle/DownloadVideo": [
+   "post"
+  ],
+  "/FriendCircle/GetCollectCircle": [
+   "post"
+  ],
+  "/FriendCircle/GetCommnet": [
+   "post"
+  ],
+  "/FriendCircle/GetDetail": [
+   "post"
+  ],
+  "/FriendCircle/GetIdDetail": [
+   "post"
+  ],
+  "/FriendCircle/GetList": [
+   "post"
+  ],
+  "/FriendCircle/Messages": [
+   "post"
+  ],
+  "/FriendCircle/MessagesRaw": [
+   "post"
+  ],
+  "/FriendCircle/MmSnsSync": [
+   "post"
+  ],
+  "/FriendCircle/Operation": [
+   "post"
+  ],
+  "/FriendCircle/PrivacySettings": [
+   "post"
+  ],
+  "/FriendCircle/PushCommnet": [
+   "post"
+  ],
+  "/FriendCircle/SendFavItemCircle": [
+   "post"
+  ],
+  "/FriendCircle/SendOneIdCircle": [
+   "post"
+  ],
+  "/FriendCircle/SetBackgroundImage": [
+   "post"
+  ],
+  "/FriendCircle/SetFriendCircleDays": [
+   "post"
+  ],
+  "/FriendCircle/Upload": [
+   "post"
+  ],
+  "/FriendCircle/UploadImage": [
+   "post"
+  ],
+  "/FriendCircle/UploadImages": [
+   "post"
+  ],
+  "/FriendCircle/UploadVideo": [
+   "post"
+  ],
+  "/Group/AddChatRoomMember": [
+   "post"
+  ],
+  "/Group/ConsentToJoin": [
+   "post"
+  ],
+  "/Group/CreateChatRoom": [
+   "post"
+  ],
+  "/Group/DelChatRoomMember": [
+   "post"
+  ],
+  "/Group/FacingCreateChatRoom": [
+   "post"
+  ],
+  "/Group/GetChatRoomInfo": [
+   "post"
+  ],
+  "/Group/GetChatRoomInfoDetail": [
+   "post"
+  ],
+  "/Group/GetChatRoomMemberDetail": [
+   "post"
+  ],
+  "/Group/GetQRCode": [
+   "post"
+  ],
+  "/Group/GroupList": [
+   "get"
+  ],
+  "/Group/InviteChatRoomMember": [
+   "post"
+  ],
+  "/Group/List": [
+   "get"
+  ],
+  "/Group/MoveContractList": [
+   "post"
+  ],
+  "/Group/OperateChatRoomAdmin": [
+   "post"
+  ],
+  "/Group/Quit": [
+   "post"
+  ],
+  "/Group/ScanIntoGroup": [
+   "post"
+  ],
+  "/Group/ScanIntoGroupEnterprise": [
+   "post"
+  ],
+  "/Group/SendPat": [
+   "post"
+  ],
+  "/Group/SendTransferGroupOwner": [
+   "post"
+  ],
+  "/Group/SetChatRoomAnnouncement": [
+   "post"
+  ],
+  "/Group/SetChatRoomName": [
+   "post"
+  ],
+  "/Group/SetChatRoomRemarks": [
+   "post"
+  ],
+  "/Group/SetChatroomAccessVerify": [
+   "post"
+  ],
+  "/Label/Add": [
+   "post"
+  ],
+  "/Label/Delete": [
+   "post"
+  ],
+  "/Label/GetList": [
+   "post"
+  ],
+  "/Label/GetWXFriendListByLabel": [
+   "post"
+  ],
+  "/Label/UpdateList": [
+   "post"
+  ],
+  "/Label/UpdateName": [
+   "post"
+  ],
+  "/Label/UpdateOrder": [
+   "post"
+  ],
+  "/Login/62data": [
+   "post"
+  ],
+  "/Login/62dataQRCodeApply": [
+   "post"
+  ],
+  "/Login/62dataQRCodeVerify": [
+   "post"
+  ],
+  "/Login/62dataSMSAgain": [
+   "post"
+  ],
+  "/Login/62dataSMSApply": [
+   "post"
+  ],
+  "/Login/62dataSMSVerify": [
+   "post"
+  ],
+  "/Login/A16Data": [
+   "post"
+  ],
+  "/Login/A16Data848": [
+   "post"
+  ],
+  "/Login/AutoHeartBeat": [
+   "post"
+  ],
+  "/Login/Awaken": [
+   "post"
+  ],
+  "/Login/CheckCanSetAlias": [
+   "get"
+  ],
+  "/Login/CheckMacQR": [
+   "post"
+  ],
+  "/Login/CheckQR": [
+   "post"
+  ],
+  "/Login/ExtDeviceLoginConfirmGet": [
+   "post"
+  ],
+  "/Login/ExtDeviceLoginConfirmOk": [
+   "post"
+  ],
+  "/Login/Get62Data": [
+   "post"
+  ],
+  "/Login/GetA16Data": [
+   "post"
+  ],
+  "/Login/GetCacheInfo": [
+   "post"
+  ],
+  "/Login/GetLoginQRCode862": [
+   "post"
+  ],
+  "/Login/GetLoginStatus": [
+   "get"
+  ],
+  "/Login/GetQR": [
+   "post"
+  ],
+  "/Login/GetQRMac": [
+   "post"
+  ],
+  "/Login/GetQRMac_oversea": [
+   "post"
+  ],
+  "/Login/GetQRPad": [
+   "post"
+  ],
+  "/Login/GetQRPadCloud": [
+   "post"
+  ],
+  "/Login/GetQRPadPPMT": [
+   "post"
+  ],
+  "/Login/GetQRPadx": [
+   "post"
+  ],
+  "/Login/GetQRWatch": [
+   "post"
+  ],
+  "/Login/GetQRWin": [
+   "post"
+  ],
+  "/Login/GetQRWinUnified": [
+   "post"
+  ],
+  "/Login/GetQRWinUwp": [
+   "post"
+  ],
+  "/Login/GetQR_oversea": [
+   "post"
+  ],
+  "/Login/GetQRx": [
+   "post"
+  ],
+  "/Login/GetQRx_oversea": [
+   "post"
+  ],
+  "/Login/HarmonyLoginApi": [
+   "post"
+  ],
+  "/Login/HeartBeat": [
+   "post"
+  ],
+  "/Login/HeartBeatLogs": [
+   "get"
+  ],
+  "/Login/HeartBeatLong": [
+   "post"
+  ],
+  "/Login/LogOut": [
+   "post"
+  ],
+  "/Login/LongLinkStatus": [
+   "get"
+  ],
+  "/Login/Newinit": [
+   "post"
+  ],
+  "/Login/SubmitLoginVerificationCode": [
+   "post"
+  ],
+  "/Login/TwiceAutoAuth": [
+   "post"
+  ],
+  "/Login/YPayVerificationcode": [
+   "post"
+  ],
+  "/Msg/Quote": [
+   "post"
+  ],
+  "/Msg/Revoke": [
+   "post"
+  ],
+  "/Msg/SendApp": [
+   "post"
+  ],
+  "/Msg/SendAppMessage": [
+   "post"
+  ],
+  "/Msg/SendCDNFile": [
+   "post"
+  ],
+  "/Msg/SendCDNImg": [
+   "post"
+  ],
+  "/Msg/SendCDNVideo": [
+   "post"
+  ],
+  "/Msg/SendEmoji": [
+   "post"
+  ],
+  "/Msg/SendFile": [
+   "post"
+  ],
+  "/Msg/SendGroupMassMsgText": [
+   "post"
+  ],
+  "/Msg/SendTxt": [
+   "post"
+  ],
+  "/Msg/SendVideo": [
+   "post"
+  ],
+  "/Msg/SendVoice": [
+   "post"
+  ],
+  "/Msg/SendXCX": [
+   "post"
+  ],
+  "/Msg/ShareCard": [
+   "post"
+  ],
+  "/Msg/ShareLink": [
+   "post"
+  ],
+  "/Msg/ShareLocation": [
+   "post"
+  ],
+  "/Msg/ShareVideo": [
+   "post"
+  ],
+  "/Msg/StartAutoSync": [
+   "post"
+  ],
+  "/Msg/Sync": [
+   "post"
+  ],
+  "/Msg/UploadImg": [
+   "post"
+  ],
+  "/OfficialAccounts/ArticleList": [
+   "post"
+  ],
+  "/OfficialAccounts/ArticleMarkdown": [
+   "post"
+  ],
+  "/OfficialAccounts/ArticleRead": [
+   "post"
+  ],
+  "/OfficialAccounts/AuthMpLogin": [
+   "post"
+  ],
+  "/OfficialAccounts/Follow": [
+   "post"
+  ],
+  "/OfficialAccounts/GetAppMsgExt": [
+   "post"
+  ],
+  "/OfficialAccounts/GetAppMsgExtLike": [
+   "post"
+  ],
+  "/OfficialAccounts/GetMpHistory": [
+   "post"
+  ],
+  "/OfficialAccounts/GetMpHistoryMessage": [
+   "post"
+  ],
+  "/OfficialAccounts/JSAPIPreVerify": [
+   "post"
+  ],
+  "/OfficialAccounts/MpGetA8Key": [
+   "post"
+  ],
+  "/OfficialAccounts/OauthAuthorize": [
+   "post"
+  ],
+  "/OfficialAccounts/QRConnectAuthorize": [
+   "post"
+  ],
+  "/OfficialAccounts/QRConnectAuthorizeConfirm": [
+   "post"
+  ],
+  "/OfficialAccounts/Quit": [
+   "post"
+  ],
+  "/Other/GetUserRankLikeCount": [
+   "post"
+  ],
+  "/QWContact/QWAddContact": [
+   "post"
+  ],
+  "/QWContact/QWApplyAddContact": [
+   "post"
+  ],
+  "/QWContact/SearchQWContact": [
+   "post"
+  ],
+  "/SayHello/Modelv1": [
+   "post"
+  ],
+  "/SayHello/Modelv2": [
+   "post"
+  ],
+  "/SayHello/Modelv3": [
+   "post"
+  ],
+  "/Search/AI": [
+   "post"
+  ],
+  "/Search/AI/Conversation": [
+   "delete",
+   "get"
+  ],
+  "/Search/AI/FollowUp": [
+   "post"
+  ],
+  "/Search/All": [
+   "post"
+  ],
+  "/Search/Articles": [
+   "post"
+  ],
+  "/Search/Baike": [
+   "post"
+  ],
+  "/Search/Books": [
+   "post"
+  ],
+  "/Search/Capabilities": [
+   "get"
+  ],
+  "/Search/Channels": [
+   "post"
+  ],
+  "/Search/Channels/Comments": [
+   "post"
+  ],
+  "/Search/Channels/Detail": [
+   "post"
+  ],
+  "/Search/Channels/Media": [
+   "get"
+  ],
+  "/Search/Channels/ResolveShare": [
+   "post"
+  ],
+  "/Search/Emoji": [
+   "post"
+  ],
+  "/Search/Gateway": [
+   "post"
+  ],
+  "/Search/Images": [
+   "post"
+  ],
+  "/Search/Listen": [
+   "post"
+  ],
+  "/Search/Live": [
+   "post"
+  ],
+  "/Search/MiniGames": [
+   "post"
+  ],
+  "/Search/MiniPrograms": [
+   "post"
+  ],
+  "/Search/Moments": [
+   "post"
+  ],
+  "/Search/News": [
+   "post"
+  ],
+  "/Search/OfficialAccounts": [
+   "post"
+  ],
+  "/Search/Query": [
+   "post"
+  ],
+  "/Search/Stickers": [
+   "post"
+  ],
+  "/Search/Underlines": [
+   "post"
+  ],
+  "/Search/WeChatIndex": [
+   "post"
+  ],
+  "/TenPay/Collectmoney": [
+   "post"
+  ],
+  "/TenPay/ConfirmPreTransferApi": [
+   "post"
+  ],
+  "/TenPay/CreatePreTransfer": [
+   "post"
+  ],
+  "/TenPay/GeMaSkdPayQCode": [
+   "post"
+  ],
+  "/TenPay/GeneratePayQCode": [
+   "post"
+  ],
+  "/TenPay/GetEncryptInfo": [
+   "post"
+  ],
+  "/TenPay/GetRedPacketListApi": [
+   "post"
+  ],
+  "/TenPay/OpenHongBao": [
+   "post"
+  ],
+  "/TenPay/OpenHongBaoWithParams": [
+   "post"
+  ],
+  "/TenPay/Openwxhb": [
+   "post"
+  ],
+  "/TenPay/Qrydetailwxhb": [
+   "post"
+  ],
+  "/TenPay/Receivewxhb": [
+   "post"
+  ],
+  "/TenPay/ReceivewxhbWithoutEncryption": [
+   "post"
+  ],
+  "/TenPay/SjSkdPayQCode": [
+   "post"
+  ],
+  "/TenPay/WXCreateRedPacketApi": [
+   "post"
+  ],
+  "/Tools/CdnDownloadImage": [
+   "post"
+  ],
+  "/Tools/DownloadFile": [
+   "post"
+  ],
+  "/Tools/DownloadFileBinary": [
+   "post"
+  ],
+  "/Tools/DownloadImg": [
+   "post"
+  ],
+  "/Tools/DownloadMiniProgramCover": [
+   "post"
+  ],
+  "/Tools/DownloadVideo": [
+   "post"
+  ],
+  "/Tools/DownloadVoice": [
+   "post"
+  ],
+  "/Tools/DownloadVoiceBinary": [
+   "post"
+  ],
+  "/Tools/GeneratePayQCode": [
+   "get"
+  ],
+  "/Tools/GetA8Key": [
+   "post"
+  ],
+  "/Tools/GetBandCardList": [
+   "post"
+  ],
+  "/Tools/GetBoundHardDevices": [
+   "post"
+  ],
+  "/Tools/GetCdnDns": [
+   "post"
+  ],
+  "/Tools/HelperVerification": [
+   "post"
+  ],
+  "/Tools/OauthSdkApp": [
+   "post"
+  ],
+  "/Tools/SetStep": [
+   "post"
+  ],
+  "/Tools/ThirdAppGrant": [
+   "post"
+  ],
+  "/Tools/UploadFile": [
+   "post"
+  ],
+  "/Tools/setproxy": [
+   "post"
+  ],
+  "/Translate/Send": [
+   "post"
+  ],
+  "/Translate/Text": [
+   "post"
+  ],
+  "/User/AddMeMethods": [
+   "post"
+  ],
+  "/User/BindQQ": [
+   "post"
+  ],
+  "/User/BindingEmail": [
+   "post"
+  ],
+  "/User/BindingMobile": [
+   "post"
+  ],
+  "/User/CheckCanSetAlias": [
+   "get"
+  ],
+  "/User/DelSafetyInfo": [
+   "post"
+  ],
+  "/User/FriendVerification": [
+   "post"
+  ],
+  "/User/GetAllOnline": [
+   "get"
+  ],
+  "/User/GetContractProfile": [
+   "post"
+  ],
+  "/User/GetOnlineInfo": [
+   "get"
+  ],
+  "/User/GetQRCode": [
+   "post"
+  ],
+  "/User/GetSafetyInfo": [
+   "post"
+  ],
+  "/User/PrivacySettings": [
+   "post"
+  ],
+  "/User/ReportMotion": [
+   "post"
+  ],
+  "/User/SendVerifyMobile": [
+   "post"
+  ],
+  "/User/SetAlisa": [
+   "post"
+  ],
+  "/User/SetPasswd": [
+   "post"
+  ],
+  "/User/UpdateProfile": [
+   "post"
+  ],
+  "/User/UploadHeadImage": [
+   "post"
+  ],
+  "/User/VerifyPasswd": [
+   "post"
+  ],
+  "/Voice/MessageTranscribe": [
+   "post"
+  ],
+  "/Voice/Result": [
+   "post"
+  ],
+  "/Voice/Transcribe": [
+   "post"
+  ],
+  "/Webhook/Business/Get": [
+   "get"
+  ],
+  "/Webhook/Business/Set": [
+   "post"
+  ],
+  "/Webhook/Get": [
+   "get"
+  ],
+  "/Webhook/Remove": [
+   "post"
+  ],
+  "/Webhook/Set": [
+   "post"
+  ],
+  "/Webhook/Test": [
+   "post"
+  ],
+  "/Wxapp/AddAvatar": [
+   "post"
+  ],
+  "/Wxapp/AddMobile": [
+   "post"
+  ],
+  "/Wxapp/CloudCallFunction": [
+   "post"
+  ],
+  "/Wxapp/DelMobile": [
+   "post"
+  ],
+  "/Wxapp/DeleteOauthApp": [
+   "post"
+  ],
+  "/Wxapp/DellAvatar": [
+   "post"
+  ],
+  "/Wxapp/GETCreditScoreParam": [
+   "post"
+  ],
+  "/Wxapp/GetAllMobile": [
+   "post"
+  ],
+  "/Wxapp/GetOauthList": [
+   "post"
+  ],
+  "/Wxapp/GetRandomAvatar": [
+   "post"
+  ],
+  "/Wxapp/GetUnionPay": [
+   "post"
+  ],
+  "/Wxapp/GetUserOpenId": [
+   "post"
+  ],
+  "/Wxapp/GetWxAppRecord": [
+   "post"
+  ],
+  "/Wxapp/JSGetSessionid": [
+   "post"
+  ],
+  "/Wxapp/JSLogin": [
+   "post"
+  ],
+  "/Wxapp/JSLoginCustomized": [
+   "post"
+  ],
+  "/Wxapp/JSOperateWxData": [
+   "post"
+  ],
+  "/Wxapp/UploadAvatarImg": [
+   "post"
+  ],
+  "/Wxapp/Verifyplugin": [
+   "post"
+  ],
+  "/Wxapp/Wxapp/AddWxAppRecord": [
+   "post"
+  ],
+  "/Wxapp/Wxapp/GetpullPay": [
+   "post"
+  ],
+  "/Wxapp/Wxapp/JSGetSessionidQRcode": [
+   "post"
+  ],
+  "/Wxapp/Wxapp/QrcodeAuthLogin": [
+   "post"
+  ],
+  "/XiaoWei/Cards/ScreenshotSecurityCheck": [
+   "post"
+  ],
+  "/XiaoWei/Cards/Users": [
+   "post"
+  ],
+  "/XiaoWei/Chat/Sessions": [
+   "post"
+  ],
+  "/XiaoWei/Chat/Sessions/{_}": [
+   "delete",
+   "get"
+  ],
+  "/XiaoWei/Chat/Sessions/{_}/Cancel": [
+   "post"
+  ],
+  "/XiaoWei/Chat/Sessions/{_}/Events": [
+   "get"
+  ],
+  "/XiaoWei/Chat/Sessions/{_}/Messages": [
+   "post"
+  ],
+  "/XiaoWei/Chat/Sessions/{_}/Regenerate": [
+   "post"
+  ],
+  "/XiaoWei/Chat/Sessions/{_}/SwitchRoom": [
+   "post"
+  ],
+  "/XiaoWei/Conversations/A2A/List": [
+   "post"
+  ],
+  "/XiaoWei/Conversations/Suggestions": [
+   "post"
+  ],
+  "/XiaoWei/History/Delete": [
+   "post"
+  ],
+  "/XiaoWei/History/Fill": [
+   "post"
+  ],
+  "/XiaoWei/History/List": [
+   "post"
+  ],
+  "/XiaoWei/Invites": [
+   "post"
+  ],
+  "/XiaoWei/Invites/Candidates": [
+   "get"
+  ],
+  "/XiaoWei/Invites/Info": [
+   "get"
+  ],
+  "/XiaoWei/Permission": [
+   "get"
+  ],
+  "/XiaoWei/RedDots/Query": [
+   "post"
+  ],
+  "/XiaoWei/RedDots/Read": [
+   "post"
+  ]
+ },
+ "requiredByPath": {
+  "/Admin/DelayAuthKey": [
+   "authcode",
+   "days"
+  ],
+  "/Admin/DeleteAuthKey": [
+   "authcode"
+  ],
+  "/Admin/GenAuthKey": [
+   "count",
+   "days"
+  ],
+  "/Admin/RedisMemory": [
+   "action"
+  ],
+  "/Customized/WXCTDUniftyAuthBatch": [
+   "Username"
+  ],
+  "/Favor/Del": [
+   "favId"
+  ],
+  "/Favor/GetFavItem": [
+   "favId"
+  ],
+  "/Friend/AutoAccept": [
+   "enabled"
+  ],
+  "/Friend/Blacklist": [
+   "toWxid",
+   "val"
+  ],
+  "/Friend/Delete": [
+   "toWxid"
+  ],
+  "/Friend/GetContractDetail": [
+   "userName"
+  ],
+  "/Friend/GetFriendstate": [
+   "toWxid"
+  ],
+  "/Friend/LbsFind": [
+   "latitude",
+   "longitude"
+  ],
+  "/Friend/PassVerify": [
+   "scene",
+   "v1",
+   "v2"
+  ],
+  "/Friend/Search": [
+   "keyword"
+  ],
+  "/Friend/SetRemarks": [
+   "remarks",
+   "toWxid"
+  ],
+  "/Friend/Upload": [
+   "currentPhoneNo",
+   "opcode",
+   "phoneNo"
+  ],
+  "/FriendCircle/AutoForward": [
+   "enabled"
+  ],
+  "/FriendCircle/BatchDownload": [
+   "towxid"
+  ],
+  "/FriendCircle/Comment": [
+   "id",
+   "type"
+  ],
+  "/FriendCircle/DownloadVideo": [
+   "key",
+   "url"
+  ],
+  "/FriendCircle/GetCollectCircle": [
+   "sourceId"
+  ],
+  "/FriendCircle/GetCommnet": [
+   "xmlData"
+  ],
+  "/FriendCircle/GetDetail": [
+   "towxid"
+  ],
+  "/FriendCircle/GetIdDetail": [
+   "id"
+  ],
+  "/FriendCircle/MessagesRaw": [
+   "content"
+  ],
+  "/FriendCircle/Operation": [
+   "id",
+   "type"
+  ],
+  "/FriendCircle/PrivacySettings": [
+   "function",
+   "value"
+  ],
+  "/FriendCircle/PushCommnet": [
+   "forwardAddr",
+   "id"
+  ],
+  "/FriendCircle/SendFavItemCircle": [
+   "favItemId",
+   "sourceId"
+  ],
+  "/FriendCircle/SendOneIdCircle": [
+   "id"
+  ],
+  "/FriendCircle/SetBackgroundImage": [
+   "url"
+  ],
+  "/FriendCircle/SetFriendCircleDays": [
+   "range"
+  ],
+  "/FriendCircle/Upload": [
+   "base64"
+  ],
+  "/FriendCircle/UploadImage": [
+   "imageData"
+  ],
+  "/FriendCircle/UploadImages": [
+   "imageDataList"
+  ],
+  "/FriendCircle/UploadVideo": [
+   "thumbData",
+   "videoData"
+  ],
+  "/Label/Add": [
+   "LabelName"
+  ],
+  "/Label/Delete": [
+   "LabelID"
+  ],
+  "/Label/GetWXFriendListByLabel": [
+   "labelId"
+  ],
+  "/Label/UpdateList": [
+   "LabelID",
+   "ToWxids"
+  ],
+  "/Label/UpdateName": [
+   "LabelID",
+   "NewName"
+  ],
+  "/Label/UpdateOrder": [
+   "LabelIDs"
+  ],
+  "/Login/62dataQRCodeVerify": [
+   "Url"
+  ],
+  "/Login/62dataSMSAgain": [
+   "Cookie",
+   "Url"
+  ],
+  "/Login/62dataSMSVerify": [
+   "Cookie",
+   "Sms",
+   "Url"
+  ],
+  "/Login/CheckMacQR": [
+   "uuid"
+  ],
+  "/Msg/Quote": [
+   "content"
+  ],
+  "/Msg/SendAppMessage": [
+   "items"
+  ],
+  "/Msg/ShareVideo": [
+   "ToWxid",
+   "Xml"
+  ],
+  "/Msg/StartAutoSync": [
+   "TargetURL"
+  ],
+  "/OfficialAccounts/ArticleMarkdown": [
+   "url"
+  ],
+  "/OfficialAccounts/ArticleRead": [
+   "url"
+  ],
+  "/OfficialAccounts/AuthMpLogin": [
+   "url"
+  ],
+  "/OfficialAccounts/OauthAuthorize": [
+   "appid",
+   "url"
+  ],
+  "/QWContact/QWAddContact": [
+   "username",
+   "v1"
+  ],
+  "/QWContact/QWApplyAddContact": [
+   "username",
+   "v1"
+  ],
+  "/QWContact/SearchQWContact": [
+   "username"
+  ],
+  "/SayHello/Modelv1": [
+   "url"
+  ],
+  "/SayHello/Modelv2": [
+   "toUserName"
+  ],
+  "/SayHello/Modelv3": [
+   "scene",
+   "v3",
+   "v4"
+  ],
+  "/Search/AI": [
+   "query"
+  ],
+  "/Search/AI/FollowUp": [
+   "query",
+   "session_id"
+  ],
+  "/Search/Channels/Comments": [
+   "comment_token"
+  ],
+  "/Search/Channels/Detail": [
+   "content_token"
+  ],
+  "/Search/Channels/ResolveShare": [
+   "url"
+  ],
+  "/Search/Gateway": [
+   "query"
+  ],
+  "/Search/Query": [
+   "category",
+   "query"
+  ],
+  "/TenPay/ConfirmPreTransferApi": [
+   "bankSerial",
+   "bankType",
+   "payPassword",
+   "reqKey"
+  ],
+  "/TenPay/CreatePreTransfer": [
+   "fee",
+   "toUserName"
+  ],
+  "/TenPay/GeneratePayQCode": [
+   "money",
+   "name"
+  ],
+  "/TenPay/GetRedPacketListApi": [
+   "xml"
+  ],
+  "/TenPay/OpenHongBaoWithParams": [
+   "SendId",
+   "SendUserName",
+   "TimingIdentifier",
+   "Xml"
+  ],
+  "/TenPay/Openwxhb": [
+   "SendUserName",
+   "TimingIdentifier",
+   "Xml"
+  ],
+  "/TenPay/Qrydetailwxhb": [
+   "Xml"
+  ],
+  "/TenPay/Receivewxhb": [
+   "Xml"
+  ],
+  "/TenPay/ReceivewxhbWithoutEncryption": [
+   "Xml"
+  ],
+  "/TenPay/WXCreateRedPacketApi": [
+   "amount",
+   "content",
+   "count",
+   "username"
+  ],
+  "/Tools/DownloadFile": [
+   "attach_id",
+   "data_len",
+   "user_name"
+  ],
+  "/Tools/DownloadFileBinary": [
+   "attach_id",
+   "data_len",
+   "user_name"
+  ],
+  "/Tools/DownloadVoice": [
+   "fromUserName",
+   "length",
+   "msgId"
+  ],
+  "/Tools/GetA8Key": [
+   "reqUrl"
+  ],
+  "/Tools/HelperVerification": [
+   "gcc",
+   "mobile"
+  ],
+  "/Tools/OauthSdkApp": [
+   "appid"
+  ],
+  "/Tools/SetStep": [
+   "step"
+  ],
+  "/Tools/ThirdAppGrant": [
+   "appid",
+   "url"
+  ],
+  "/Tools/UploadFile": [
+   "base64"
+  ],
+  "/Tools/setproxy": [
+   "proxy"
+  ],
+  "/Translate/Send": [
+   "target_lang",
+   "text",
+   "to_wxid"
+  ],
+  "/Translate/Text": [
+   "target_lang",
+   "text"
+  ],
+  "/User/BindQQ": [
+   "account",
+   "password"
+  ],
+  "/User/BindingEmail": [
+   "email"
+  ],
+  "/User/BindingMobile": [
+   "mobile",
+   "verifycode"
+  ],
+  "/User/DelSafetyInfo": [
+   "uuid"
+  ],
+  "/User/FriendVerification": [
+   "enabled"
+  ],
+  "/User/PrivacySettings": [
+   "function",
+   "value"
+  ],
+  "/User/ReportMotion": [
+   "deviceId",
+   "deviceType",
+   "stepCount"
+  ],
+  "/User/SendVerifyMobile": [
+   "mobile"
+  ],
+  "/User/SetAlisa": [
+   "alisa"
+  ],
+  "/User/SetPasswd": [
+   "newPassword",
+   "ticket"
+  ],
+  "/User/UploadHeadImage": [
+   "base64"
+  ],
+  "/User/VerifyPasswd": [
+   "password"
+  ],
+  "/Voice/Result": [
+   "voice_id"
+  ],
+  "/Webhook/Set": [
+   "url"
+  ],
+  "/Webhook/Test": [
+   "MessageType"
+  ],
+  "/Wxapp/AddAvatar": [
+   "aFilekey",
+   "appid",
+   "nickName"
+  ],
+  "/Wxapp/AddMobile": [
+   "appid",
+   "mobile",
+   "verifyCode"
+  ],
+  "/Wxapp/CloudCallFunction": [
+   "appid"
+  ],
+  "/Wxapp/DelMobile": [
+   "appid",
+   "mobile"
+  ],
+  "/Wxapp/DellAvatar": [
+   "avatarId"
+  ],
+  "/Wxapp/GetUnionPay": [
+   "appid",
+   "nonceStr",
+   "package",
+   "paySign",
+   "sessionid",
+   "timeStamp"
+  ],
+  "/Wxapp/GetUserOpenId": [
+   "appid",
+   "toWxId"
+  ],
+  "/Wxapp/UploadAvatarImg": [
+   "appid",
+   "jpgLink"
+  ],
+  "/Wxapp/Wxapp/AddWxAppRecord": [
+   "username"
+  ],
+  "/Wxapp/Wxapp/GetpullPay": [
+   "appid",
+   "nonceStr",
+   "package",
+   "paySign",
+   "sessionid",
+   "timeStamp"
+  ],
+  "/Wxapp/Wxapp/JSGetSessionidQRcode": [
+   "appid",
+   "nonceStr",
+   "package",
+   "paySign",
+   "sessionid",
+   "timeStamp"
+  ],
+  "/Wxapp/Wxapp/QrcodeAuthLogin": [
+   "uuid"
+  ],
+  "/XiaoWei/Cards/ScreenshotSecurityCheck": [
+   "app_id",
+   "message_id"
+  ],
+  "/XiaoWei/Conversations/Suggestions": [
+   "share_type",
+   "ui_state"
+  ],
+  "/XiaoWei/History/Fill": [
+   "operation_type"
+  ],
+  "/XiaoWei/Invites": [
+   "wxids"
+  ],
+  "/XiaoWei/RedDots/Read": [
+   "last_read_timestamp",
+   "reddot_id"
+  ]
+ }
+}
