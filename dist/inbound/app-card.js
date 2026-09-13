@@ -12,6 +12,7 @@
 //   必须换路子 (搜索引擎找公开政策 / 看封面图), 不能靠解析消息实现。
 import { logObj as log, formatErr } from "../core/logger.js";
 import { loadOssConfig, ossUploadBuffer, sanitizeFilenamePart, } from "./media-enrich/shared.js";
+import { formatThumbToken } from "../send/msg.js";
 function asRecord(v) {
     return v && typeof v === "object" && !Array.isArray(v) ? v : undefined;
 }
@@ -41,6 +42,7 @@ export function parseMiniProgramCard(raw) {
     const cover = asRecord(app.cover_image);
     // download_context = { endpoint, file_no, file_aes_key, variant } — 可直接作为 /Tools/DownloadMiniProgramCover 请求体
     const dc = asRecord(cover?.download_context);
+    const cdn = asRecord(cover?.cdn);
     return {
         title: str(app.title),
         description: str(app.description),
@@ -48,18 +50,39 @@ export function parseMiniProgramCard(raw) {
         pagePath: str(mp?.page_path),
         username: str(mp?.username),
         sourceDisplayName: str(mp?.source_display_name),
+        version: num(mp?.version),
         cover: cover
             ? {
                 url: str(dc?.url) ?? str(cover.url),
                 fileNo: str(dc?.file_no) ?? str(cover.file_no),
                 fileAesKey: str(dc?.file_aes_key) ?? str(cover.aes_key),
                 md5: str(cover.md5),
+                length: num(cover.cdn_length) ?? num(cdn?.length),
                 width: num(cover.width),
                 height: num(cover.height),
                 iconUrl: str(app.icon_url),
             }
             : undefined,
     };
+}
+/**
+ * v1.6.4 XCX-THUMB-INHERIT: 卡片封面凭据 → 转发令牌 (入站注记里给模型, 出站原样塞进 appattach)。
+ * 有 fileNo+fileAesKey 才能生成 (缺了就只能走"上传替代图"的降级路)。纯函数。
+ */
+export function coverThumbToken(info) {
+    const c = info.cover;
+    if (!c?.fileNo || !c.fileAesKey)
+        return undefined;
+    return formatThumbToken({
+        fileId: c.fileNo,
+        aesKey: c.fileAesKey,
+        md5: c.md5,
+        length: c.length,
+        width: c.width,
+        height: c.height,
+        version: info.version,
+        iconUrl: c.iconUrl,
+    });
 }
 /**
  * 文本化 (追加进 content, 与 [图片]/[文件] 注入同一约定) — 让 LLM 知道「这是哪个小程序的哪个页面」。
@@ -89,6 +112,11 @@ export function formatMiniProgramCard(info, opts) {
         lines.push(`[小程序封面] ${opts.coverUrl}`);
     if (opts?.iconUrl)
         lines.push(`[小程序图标] ${opts.iconUrl}`);
+    // v1.6.4 XCX-THUMB-INHERIT: 转发这张卡片**必须**带上这串 —— 它是原卡片的 appattach 凭据,
+    //   出站原样填进 sendMessage 的 thumbUrl 即可 (卡片图 = 原卡片那张)。⚠️ 别拿上面的 OSS URL 去转发:
+    //   那是我们**下载**到的资产 (封面下不动时就是图标), 用它转发等于换图。
+    if (opts?.coverToken)
+        lines.push(`[小程序封面凭据] ${opts.coverToken} (转发时原样填 thumbUrl)`);
     return lines.join("\n");
 }
 /**
@@ -96,10 +124,12 @@ export function formatMiniProgramCard(info, opts) {
  *   ① cover: download_context.url 优先 (厂商文档: 已校验的官方封面直链), 否则 file_no+file_aes_key;
  *   ② icon : app.icon_url (仅在①拿不到时降级)。
  *
- * ⚠️ 2026-09-13 实测 (国补卡片): ①对两条真消息**恒失败** —— 端点返回
+ * ⚠️ 2026-09-13 实测 (国补/苏新消费卡片): ①对真卡片**恒失败** —— 端点返回
  *   `异常：小程序封面下载失败：CDN 返回错误码 -5103017×8`; 同凭证打通用 /Tools/CdnDownloadImage
- *   同样 -5103017 ⇒ **不是本端点的问题, 是封面 blob 在微信 CDN 侧取不到** (过期或该 variant 不受支持)。
- *   ②稳定可用 (实测返回 140×140 PNG)。故部署后通常落到 icon, 这是已知现状而非 bug。
+ *   同样 -5103017。**v1.6.4 更正归因**: 死的是**厂商服务端这个下载实现**, 不是凭据 —— 同一组凭据
+ *   原样透传给 /Msg/SendXCX, 老板手机上显示的就是原卡片那张 720×576 封面 (20:45 与 21:20 两次实证)。
+ *   ⇒ 转发请走 coverThumbToken 的透传路 (v1.6.4), 这里的下载路只用于"给模型看一眼"。
+ *   ②稳定可用 (实测返回 140×140 PNG)。故下载路通常落到 icon, 这是已知现状而非 bug。
  */
 export function planMiniProgramAssetAttempts(cover) {
     if (!cover)

@@ -1,6 +1,7 @@
-// src/dispatch/agent-tools/wxapp-meta.ts - Wxapp tag (20)
+// src/dispatch/agent-tools/wxapp-meta.ts - Wxapp tag
 // v1.3.18 P1-核心1 fix (2026-08-10): 改成 lazy-evaluate ctx 模式
-// 注: jsOperateWxData/cloudCallFunction 实际签名 data: Record<string, unknown> — meta schema 用 string 是历史不一致, 不优化
+// v1.6.5 (2026-09-13): jsOperateWxData/cloudCallFunction 的 data (**及 opt**) 曾经被 meta 丢掉 (恒发 {}) ⇒ 助手侧
+//   这两条通道 100% 打不通. 已改为原样透传; 契约上的 data 是 **JSON 字符串**, 字符串原样发, 对象由 send 层序列化.
 
 import { Type } from "typebox";
 import type { ToolMeta } from "./_shared.js";
@@ -22,7 +23,7 @@ function getWxappApi() {
 export const WXAPP_META: ToolMeta = {
   /** /Wxapp/JSLogin */
   jsLoginWxApp: [
-    "授权小程序 (定制).",
+    "授权小程序, 返回授权后的 code. (定制版是另一个工具 jsLoginCustomized)",
     Type.Object({ appId: Type.String() }),
     (appId: string) => getWxappApi().jsLogin(appId),
   ],
@@ -32,28 +33,30 @@ export const WXAPP_META: ToolMeta = {
     Type.Object({ appId: Type.String(), url: Type.String() }),
     (appId: string, url: string) => getWxappApi().jsGetSessionid(appId, url),
   ],
-  /** /Wxapp/JSOperateWxData */
+  /** /Wxapp/JSOperateWxData — 小程序 JSAPI 通用通道 (v1.6.5: data/opt 必须真透传, 否则恒 -10001) */
   jsOperateWxData: [
-    "小程序操作 (data 是 JSON.stringify).",
+    "小程序 JSAPI 通用通道. data 传 JSAPI 请求 JSON 字符串, 形如 " +
+      '{"api_name":"webapi_getwxaasyncsecinfo","data":{},"opt":1}; opt: 1=写入 2=读取. ' +
+      "实测: 空 data ⇒ -10001 invalid request, 非法 api_name ⇒ -12003 invalid api_name (成败只看 api_name).",
     Type.Object({
       appId: Type.String(),
-      data: Type.String({ description: "JSON.stringify 后的 data" }),
+      data: Type.String({
+        description: 'JSAPI 请求 JSON 字符串, 形如 {"api_name":"webapi_getwxaasyncsecinfo","data":{},"opt":1}',
+      }),
+      opt: Type.Optional(Type.Number({ description: "操作类型: 1=写入 2=读取 (可选)" })),
     }),
-    // 原版 api.jsOperateWxData(appId, data) — 但 api 签名是 (appId, data: Record<string, unknown>)
-    // 历史不一致, 不优化
-    (appId: string, _data: string) => getWxappApi().jsOperateWxData(appId, {}),
+    // v1.6.5 (2026-09-13): 旧码 (appId, _data) ⇒ 恒发 {} 且从不发 opt, 助手侧这条通道 100% 打不通. 现原样透传.
+    (appId: string, data: string, opt?: number) => getWxappApi().jsOperateWxData(appId, data, opt),
   ],
   /** /Wxapp/CloudCallFunction */
   cloudCallFunction: [
-    "小程序云函数调用 (云开发).",
+    "小程序云函数调用 (云开发). data = 云函数请求 JSON 字符串 (函数名与参数都在里面); 厂商契约只有 {appid, data}.",
     Type.Object({
       appId: Type.String(),
-      functionName: Type.String(),
-      data: Type.String({ description: "JSON.stringify" }),
+      data: Type.String({ description: "云函数请求 JSON 字符串 (含函数名/参数)" }),
     }),
-    // 原版 api.cloudCallFunction(appId, functionName, data) — 但 api 签名是 (appId, functionName, data: Record)
-    // 历史不一致, 不优化
-    (appId: string, functionName: string, _data: string) => getWxappApi().cloudCallFunction(appId, functionName, {}),
+    // v1.6.5: 旧码 (appId, functionName, _data) ⇒ 丢掉 data 且发了个契约里没有的顶层 functionName. 现原样透传 data.
+    (appId: string, data: string) => getWxappApi().cloudCallFunction(appId, data),
   ],
   /** /Wxapp/GetUserOpenId */
   getWxAppUserOpenId: [

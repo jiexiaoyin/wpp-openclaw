@@ -180,6 +180,57 @@ export function buildAppMsgXml(username, title, desc, mmPayload) {
 function isHex(s, minLen) {
     return typeof s === "string" && s.length >= minLen && /^[0-9a-fA-F]+$/.test(s);
 }
+// ───────────────────────── v1.6.4 XCX-THUMB-INHERIT ─────────────────────────
+// 转发小程序卡片时**不要**下载原图再自己上传 —— 那条路的产物是"替代图" (实测落到 140×140 图标),
+// 而老板要的是"与我发给你的一样"。真相 (2026-09-13 实测坐实):
+//   · `<appattach>` 凭据在**微信客户端**手里是好的: 20:45 那次把原凭据原样带过去转发, 老板手机上
+//     显示的就是原卡片那张 720×576 封面, 一模一样;
+//   · 而厂商**服务端**的两个下载口 (/Tools/DownloadMiniProgramCover、/Tools/CdnDownloadImage) 对
+//     同样的凭据都返 `-5103017` ⇒ 死的是厂商的下载实现, 不是凭据本身。
+// 所以转发链路 = 入站注记里给出**凭据令牌**, 出站原样塞进 appattach, 全程不下载不上传。
+/** 凭据令牌前缀 (入站注记 → 出站 thumbUrl 的载体) */
+export const THUMB_TOKEN_PREFIX = "xcxthumb:";
+/**
+ * 令牌 → 凭据。**定长前缀字段 + 尾部 iconUrl** 的格式, 位置固定所以不含歧义:
+ *   `xcxthumb:<fileId>:<aesKey>:<md5>:<w>:<h>:<len>:<version>:<iconUrl>`
+ * 缺项写空串 (不能用省略 —— 省略会让"version 缺/iconUrl 在"与"version 在/iconUrl 缺"分不开)。
+ * 不是令牌 / fileId·aesKey 不合法 ⇒ null (调用方按"没缩略图"处理)。
+ */
+export function parseThumbToken(token) {
+    if (!token || !token.startsWith(THUMB_TOKEN_PREFIX))
+        return null;
+    const p = token.slice(THUMB_TOKEN_PREFIX.length).split(":");
+    if (p.length < 6)
+        return null;
+    const [fileId, aesKey, md5, w, h, len] = p;
+    if (!isHex(fileId, 16) || !isHex(aesKey, 16))
+        return null;
+    const num = (v) => (v && /^\d+$/.test(v) ? parseInt(v, 10) : undefined);
+    const out = { fileId, aesKey };
+    if (isHex(md5, 32))
+        out.md5 = md5;
+    const width = num(w);
+    const height = num(h);
+    const length = num(len);
+    if (width !== undefined)
+        out.width = width;
+    if (height !== undefined)
+        out.height = height;
+    if (length !== undefined)
+        out.length = length;
+    const version = num(p[6]);
+    if (version !== undefined)
+        out.version = version;
+    const iconUrl = p.slice(7).join(":");
+    if (iconUrl)
+        out.iconUrl = iconUrl;
+    return out;
+}
+/** 凭据 → 令牌 (入站注记用; 与 parseThumbToken 严格互逆, 有单测锁) */
+export function formatThumbToken(t) {
+    return (THUMB_TOKEN_PREFIX +
+        [t.fileId, t.aesKey, t.md5 ?? "", t.width ?? "", t.height ?? "", t.length ?? "", t.version ?? "", t.iconUrl ?? ""].join(":"));
+}
 /**
  * 从 /Msg/UploadImg 的响应体里取出 CDN 凭据。
  * ⚠️ 字段名是厂商 Go 结构体的原样序列化: `Fileid` / `Aeskey` / `TotalLen` (不是 fileId/aesKey),
@@ -285,21 +336,26 @@ export function cdnThumbRefFromUpload(buf, uploadData) {
 /**
  * sendXCX 的 Content 构造 (纯函数 + 注入式上传, 便于单测).
  *
- * 规则: 给了 pagePath ⇒ 现代 type=33 卡片 (能开小程序内部页面, 且**先上传缩略图**拿 appattach
- *   —— 没有 appattach 卡片就是灰块, 见 MiniProgramCardXmlOpts.thumb); 没给 ⇒ 保持 legacy type=2001
- *   输出**逐字节不变** (老调用方零回归, 有测试锁), 且**不触发任何上传**。
+ * 规则: 给了 pagePath ⇒ 现代 type=33 卡片 (能开小程序内部页面, 且需要 appattach —— 没有 appattach
+ *   卡片就是灰块, 见 MiniProgramCardXmlOpts.thumb); 没给 ⇒ 保持 legacy type=2001 输出**逐字节
+ *   不变** (老调用方零回归, 有测试锁), 且**不触发任何上传**。
  */
 export async function buildXCXContent(toWxid, o, uploadThumb) {
     if (o.pagePath) {
-        // 缩略图上传失败/没有 URL 都不算致命: 卡片照发 (只是没图), 绝不能因此把消息丢掉
-        const thumb = o.thumbUrl ? await uploadThumb(o.thumbUrl) : null;
+        // v1.6.4: 先看是不是"原卡片凭据令牌" —— 是则原样透传 (这条路上一个字节都不下载不上传)
+        const token = parseThumbToken(o.thumbUrl);
+        const tokenish = o.thumbUrl?.startsWith(THUMB_TOKEN_PREFIX) ?? false;
+        // 缩略图拿不到 (上传失败/令牌非法/没给) 都不算致命: 卡片照发 (只是没图), 绝不能因此把消息丢掉
+        const thumb = token ?? (tokenish || !o.thumbUrl ? null : await uploadThumb(o.thumbUrl));
         return buildMiniProgramCardXml({
             title: o.title,
             desc: o.desc,
             appId: o.appId,
             pagePath: o.pagePath,
             username: o.username,
-            iconUrl: o.thumbUrl,
+            // iconUrl 只接受真 URL: 令牌串塞进 <weappiconurl> 会让微信按 URL 解析失败
+            iconUrl: token ? token.iconUrl : tokenish ? undefined : o.thumbUrl,
+            version: token?.version,
             sourceDisplayName: o.desc || o.title,
             thumb: thumb ?? undefined,
             thumbWidth: thumb ? thumb.width : undefined,
