@@ -110,6 +110,17 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 ---
 
+## [运维] 构建口径备忘: `dist/setup-wizard.js` 只有 `npm run build` 会产出 (2026-09-13)
+
+- `build-release.sh:86` = `rm -rf dist` + `tsc`; 而 `package.json` 的 `build` = `tsc` + `node scripts/build-setup-wizard.mjs` (esbuild)。
+  ⇒ **release / 部署 这条路径从来不产出 `dist/setup-wizard.js`**, 只有本地 `npm run build` 产出 ⇒ 该文件在两种构建后"时有时无"
+  (本次先按 `npm run build` 复原过, 跑完 `build-release.sh` 又被删掉; 已实测两者产出的字节与 HEAD 完全一致, 只是"在不在"的差别)。
+- 该文件**无任何引用**: `package.json` 无 `bin`、`main = dist/index.js`、全仓 grep 只命中 build 脚本自己提及 ⇒ 属死产物。
+- 处置: **以 release 构建为准** (线上部署端 `extensions/wechatpadpro/dist/` 与部署目录一直都没有它), commit `461bbe2` 移除。
+- 将来二选一: 要保留这个 CLI ⇒ 给 `build-release.sh` 补 `node scripts/build-setup-wizard.mjs`; 不要 ⇒ 从 `package.json` 的 `build` 里去掉那步。
+
+---
+
 ## [v1.6.5] Wxapp 接线修正: JSAPI 通道接通 (WXAPP-JSAPI-PASSTHROUGH, 2026-09-13)
 
 > 起因 (老板): 「wechatpadpro 容器中的 swagger 里还有不少 /Wxapp/* API 接口，你可以看看有什么帮助吗」。
