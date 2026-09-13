@@ -33,7 +33,7 @@ const FIXTURE = JSON.parse(read(join(ROOT, 'tests/fixtures/miniprogram-card.json
 const realPayload = { app: FIXTURE.app };
 
 const mod = await import(pathToFileURL(join(ROOT, 'dist/inbound/app-card.js')).href);
-const { isMiniProgramCard, parseMiniProgramCard, formatMiniProgramCard, planMiniProgramAssetAttempts } = mod;
+const { isMiniProgramCard, parseMiniProgramCard, formatMiniProgramCard, planMiniProgramAssetAttempts, coverThumbToken } = mod;
 
 // ===== 1. 真报文解析 (夹具逐字段) =====
 test('1. 真报文: isMiniProgramCard 命中 + 字段逐项保真', () => {
@@ -52,6 +52,63 @@ test('1. 真报文: isMiniProgramCard 命中 + 字段逐项保真', () => {
   assert.equal(c.cover.md5, FIXTURE.app.cover_image.md5);
   assert.equal(c.cover.width, 720);
   assert.equal(c.cover.height, 576);
+  // v1.6.4 转发透传要用的两个字段
+  assert.equal(c.cover.length, FIXTURE.app.cover_image.cdn_length, 'cdnthumblength 来自 cdn_length');
+  assert.equal(c.version, FIXTURE.app.mini_program.version, 'weappinfo.version 透传');
+});
+
+// ===== 1b. v1.6.4 转发闭环: 注记里的凭据令牌 = 出站 appattach =====
+// 老板 2026-09-13 实测: 转发卡片图与原卡片不一样 (落成 140×140 图标)。根因是转发时**换了图**。
+// 正解 = 入站把原卡片 appattach 凭据编成令牌写进注记, 出站原样透传 ⇒ 客户看到的就是原图。
+test('1b. coverThumbToken ⇄ parseThumbToken ⇄ buildXCXContent: 全链路透传原凭据', async () => {
+  const c = parseMiniProgramCard(realPayload);
+  const token = coverThumbToken(c);
+  assert.ok(token && token.startsWith('xcxthumb:'), '有 fileNo+fileAesKey 就必须能生成令牌');
+
+  // 出站侧解出来的必须是原卡片那一组值
+  const { parseThumbToken, buildXCXContent } = await import(
+    pathToFileURL(join(ROOT, 'dist/send/msg.js')).href
+  );
+  const back = parseThumbToken(token);
+  assert.equal(back.fileId, FIXTURE.app.cover_image.file_no);
+  assert.equal(back.aesKey, FIXTURE.app.cover_image.aes_key);
+  assert.equal(back.md5, FIXTURE.app.cover_image.md5);
+  assert.equal(back.length, FIXTURE.app.cover_image.cdn_length);
+  assert.equal(back.width, 720);
+  assert.equal(back.height, 576);
+  assert.equal(back.version, FIXTURE.app.mini_program.version);
+  assert.equal(back.iconUrl, FIXTURE.app.icon_url);
+
+  // 真发一遍 (注入式上传器: 令牌路线**必须一次都不调它**)
+  const calls = [];
+  const xml = await buildXCXContent(
+    'q139198824',
+    {
+      title: c.title, desc: c.description, url: '', appId: c.appId,
+      thumbUrl: token, pagePath: c.pagePath, username: c.username,
+    },
+    async (u) => { calls.push(u); return null; },
+  );
+  assert.deepEqual(calls, [], '转发原卡片时不得走"下载+上传替换图"那条路 (本轮 bug 的根因)');
+  assert.ok(xml.includes(`<cdnthumburl>${FIXTURE.app.cover_image.file_no}</cdnthumburl>`), '原凭据必须进 appattach');
+  assert.ok(xml.includes(`<cdnthumbaeskey>${FIXTURE.app.cover_image.aes_key}</cdnthumbaeskey>`));
+  assert.ok(xml.includes(`<pagepath>${c.pagePath}</pagepath>`), '页面路径也要在 (点开直达内部页)');
+  assert.ok(xml.includes(`<username>${c.username}</username>`));
+});
+
+test('1c. 注记末行是凭据令牌, 并明确"转发时原样填 thumbUrl"', () => {
+  const c = parseMiniProgramCard(realPayload);
+  const token = coverThumbToken(c);
+  const text = formatMiniProgramCard(c, { iconUrl: 'https://oss.example/icon.png', coverToken: token });
+  const line = text.split('\n').find((l) => l.includes('[小程序封面凭据]'));
+  assert.ok(line, `注记必须带凭据行, 实得:\n${text}`);
+  assert.ok(line.includes(token), '凭据行必须原样含令牌 (模型是要抄它的)');
+  assert.match(line, /转发时原样填 thumbUrl/, '要写清用途, 否则模型会拿上面那行 OSS URL 去转发 (= 换图)');
+
+  // 没有凭据 (缺 fileNo/fileAesKey) ⇒ 不产出令牌, 也不打这一行 (别给模型一个空壳)
+  assert.equal(coverThumbToken({ title: 'x', cover: { md5: 'a'.repeat(32) } }), undefined);
+  const noTok = formatMiniProgramCard(c, { coverToken: undefined });
+  assert.doesNotMatch(noTok, /\[小程序封面凭据\]/);
 });
 
 // ===== 2. 文本化 =====
@@ -162,6 +219,10 @@ test('5. handler 在落库前完成小程序卡片解析 (否则 DB 与 prompt �
   assert.ok(hookAt < persistAt, `卡片解析必须在 enrichBatch 落库之前 (hook=${hookAt}, persist=${persistAt})`);
   // 封面下载失败必须非致命 (vendor 抖动/无 OSS 凭据不能让消息丢掉)
   assert.match(code, /MINIPROGRAM-CARD\] cover miss \(non-fatal\)/, '封面失败须非致命且留痕');
+  // v1.6.4: 凭据令牌必须由 handler 交给文本化 —— 少了这一句, 模型在 prompt 里就看不到令牌,
+  //   转发又会退回"用 OSS 图"的换图老路 (本轮 bug 的根因)
+  assert.match(code, /const token = coverThumbToken\(card\)/, 'handler 必须生成凭据令牌');
+  assert.match(code, /coverToken: token,/, '凭据令牌必须传进 formatMiniProgramCard');
 });
 
 // ===== 6. 封面下载必须复用既有基建, 不自造轮子 =====

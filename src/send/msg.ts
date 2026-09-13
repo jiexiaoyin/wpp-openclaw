@@ -240,9 +240,9 @@ export interface MiniProgramCardXmlOpts {
   /**
    * v1.6.3 XCX-THUMB: 卡片缩略图凭据 —— **这是卡片有没有图的唯一决定因素**。
    * 老板 2026-09-13 实测: 只给 `<weappiconurl>` (无论厂商结构化接口的 thumbUrl 还是 XML 的 iconurl)
-   *   卡片都是**灰块**; 真卡片的图来自 `<appattach>` 里那组微信 CDN blob。原卡片那组已失效
-   *   (`-5103017`), 但我们能用 /Msg/UploadImg 自己上传一张换一组新的 (见 CdnThumbRef)。
-   * 一组必须齐: fileId (cdnthumburl) + aesKey (cdnthumbaeskey); md5/length/width/height 缺失不致命。
+   *   卡片都是**灰块**; 真卡片的图来自 `<appattach>` 里那组微信 CDN blob。
+   * v1.6.4 更正: 那组凭据**不是死的** —— 死的是厂商服务端那个下载接口。转发要的是"原图一样",
+   *   所以正解是把原卡片凭据**原样透传** (见 XcxThumbToken), 而不是下载+自己上传 (那只会得到替代图)。
    */
   thumb?: CdnThumbRef;
   /** 缩略图像素尺寸 (cdnthumbwidth/height; 纯布局提示) */
@@ -268,6 +268,62 @@ export interface CdnThumbRef {
 /** 16 进制串 (fileid/aeskey 都是), 用来挡住厂商返回空对象/占位符这类情况 */
 function isHex(s: string | undefined, minLen: number): s is string {
   return typeof s === "string" && s.length >= minLen && /^[0-9a-fA-F]+$/.test(s);
+}
+
+// ───────────────────────── v1.6.4 XCX-THUMB-INHERIT ─────────────────────────
+// 转发小程序卡片时**不要**下载原图再自己上传 —— 那条路的产物是"替代图" (实测落到 140×140 图标),
+// 而老板要的是"与我发给你的一样"。真相 (2026-09-13 实测坐实):
+//   · `<appattach>` 凭据在**微信客户端**手里是好的: 20:45 那次把原凭据原样带过去转发, 老板手机上
+//     显示的就是原卡片那张 720×576 封面, 一模一样;
+//   · 而厂商**服务端**的两个下载口 (/Tools/DownloadMiniProgramCover、/Tools/CdnDownloadImage) 对
+//     同样的凭据都返 `-5103017` ⇒ 死的是厂商的下载实现, 不是凭据本身。
+// 所以转发链路 = 入站注记里给出**凭据令牌**, 出站原样塞进 appattach, 全程不下载不上传。
+
+/** 凭据令牌前缀 (入站注记 → 出站 thumbUrl 的载体) */
+export const THUMB_TOKEN_PREFIX = "xcxthumb:";
+
+/** 原卡片凭据 + 保真用的 weappinfo 字段 */
+export interface XcxThumbToken extends CdnThumbRef {
+  /** 原卡片 weappinfo.version (真卡片带, 透传保真) */
+  version?: number;
+  /** 原卡片 weappiconurl (透传保真; 含 `:` 故必须是令牌最后一段) */
+  iconUrl?: string;
+}
+
+/**
+ * 令牌 → 凭据。**定长前缀字段 + 尾部 iconUrl** 的格式, 位置固定所以不含歧义:
+ *   `xcxthumb:<fileId>:<aesKey>:<md5>:<w>:<h>:<len>:<version>:<iconUrl>`
+ * 缺项写空串 (不能用省略 —— 省略会让"version 缺/iconUrl 在"与"version 在/iconUrl 缺"分不开)。
+ * 不是令牌 / fileId·aesKey 不合法 ⇒ null (调用方按"没缩略图"处理)。
+ */
+export function parseThumbToken(token: string | undefined): XcxThumbToken | null {
+  if (!token || !token.startsWith(THUMB_TOKEN_PREFIX)) return null;
+  const p = token.slice(THUMB_TOKEN_PREFIX.length).split(":");
+  if (p.length < 6) return null;
+  const [fileId, aesKey, md5, w, h, len] = p;
+  if (!isHex(fileId, 16) || !isHex(aesKey, 16)) return null;
+  const num = (v: string | undefined): number | undefined => (v && /^\d+$/.test(v) ? parseInt(v, 10) : undefined);
+  const out: XcxThumbToken = { fileId, aesKey };
+  if (isHex(md5, 32)) out.md5 = md5;
+  const width = num(w);
+  const height = num(h);
+  const length = num(len);
+  if (width !== undefined) out.width = width;
+  if (height !== undefined) out.height = height;
+  if (length !== undefined) out.length = length;
+  const version = num(p[6]);
+  if (version !== undefined) out.version = version;
+  const iconUrl = p.slice(7).join(":");
+  if (iconUrl) out.iconUrl = iconUrl;
+  return out;
+}
+
+/** 凭据 → 令牌 (入站注记用; 与 parseThumbToken 严格互逆, 有单测锁) */
+export function formatThumbToken(t: XcxThumbToken): string {
+  return (
+    THUMB_TOKEN_PREFIX +
+    [t.fileId, t.aesKey, t.md5 ?? "", t.width ?? "", t.height ?? "", t.length ?? "", t.version ?? "", t.iconUrl ?? ""].join(":")
+  );
 }
 
 /**
@@ -379,7 +435,13 @@ export interface XcxSendInput {
   desc: string;
   url: string;
   appId: string;
-  /** 图标/缩略图 URL —— 会被上传到微信 CDN 换取 appattach 凭据 (卡片有图的关键) */
+  /**
+   * 缩略图: **二选一**
+   *   · `xcxthumb:…` 凭据令牌 (转发原卡片用, 见 XcxThumbToken) ⇒ appattach 直接透传原凭据,
+   *     **不下载、不上传** ⇒ 客户看到的图和原卡片**一模一样**;
+   *   · http(s) URL ⇒ 走 /Msg/UploadImg 换一组新凭据 (只有拿不到原凭据时才有意义:
+   *     产物是"替代图", 实测能到手的通常只有 140×140 图标)。
+   */
   thumbUrl?: string;
   pagePath?: string;
   username?: string;
@@ -388,9 +450,9 @@ export interface XcxSendInput {
 /**
  * sendXCX 的 Content 构造 (纯函数 + 注入式上传, 便于单测).
  *
- * 规则: 给了 pagePath ⇒ 现代 type=33 卡片 (能开小程序内部页面, 且**先上传缩略图**拿 appattach
- *   —— 没有 appattach 卡片就是灰块, 见 MiniProgramCardXmlOpts.thumb); 没给 ⇒ 保持 legacy type=2001
- *   输出**逐字节不变** (老调用方零回归, 有测试锁), 且**不触发任何上传**。
+ * 规则: 给了 pagePath ⇒ 现代 type=33 卡片 (能开小程序内部页面, 且需要 appattach —— 没有 appattach
+ *   卡片就是灰块, 见 MiniProgramCardXmlOpts.thumb); 没给 ⇒ 保持 legacy type=2001 输出**逐字节
+ *   不变** (老调用方零回归, 有测试锁), 且**不触发任何上传**。
  */
 export async function buildXCXContent(
   toWxid: string,
@@ -398,15 +460,20 @@ export async function buildXCXContent(
   uploadThumb: (thumbUrl: string) => Promise<CdnThumbRef | null>,
 ): Promise<string> {
   if (o.pagePath) {
-    // 缩略图上传失败/没有 URL 都不算致命: 卡片照发 (只是没图), 绝不能因此把消息丢掉
-    const thumb = o.thumbUrl ? await uploadThumb(o.thumbUrl) : null;
+    // v1.6.4: 先看是不是"原卡片凭据令牌" —— 是则原样透传 (这条路上一个字节都不下载不上传)
+    const token = parseThumbToken(o.thumbUrl);
+    const tokenish = o.thumbUrl?.startsWith(THUMB_TOKEN_PREFIX) ?? false;
+    // 缩略图拿不到 (上传失败/令牌非法/没给) 都不算致命: 卡片照发 (只是没图), 绝不能因此把消息丢掉
+    const thumb = token ?? (tokenish || !o.thumbUrl ? null : await uploadThumb(o.thumbUrl));
     return buildMiniProgramCardXml({
       title: o.title,
       desc: o.desc,
       appId: o.appId,
       pagePath: o.pagePath,
       username: o.username,
-      iconUrl: o.thumbUrl,
+      // iconUrl 只接受真 URL: 令牌串塞进 <weappiconurl> 会让微信按 URL 解析失败
+      iconUrl: token ? token.iconUrl : tokenish ? undefined : o.thumbUrl,
+      version: token?.version,
       sourceDisplayName: o.desc || o.title,
       thumb: thumb ?? undefined,
       thumbWidth: thumb ? thumb.width : undefined,
