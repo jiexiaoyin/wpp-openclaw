@@ -14,6 +14,20 @@ import { execSync } from 'node:child_process';
 const ROOT = '/root/dev/wechatpadpro-openclaw';
 const DEPLOY = '/root/.openclaw/extensions/wechatpadpro';
 
+// 去注释 (跨行 /* */ + 行内 //)。tsc 默认保留注释, 故「不许引用符号 X」类断言必须先剥注释,
+// 否则会把**解释为什么删**的注释误判成代码引用 (假红)。字符串里的 // 可能误伤, 粗扫够用。
+function stripComments(s) {
+  return s
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .map((line) => {
+      const idx = line.indexOf('//');
+      if (idx >= 0) return line.slice(0, idx);
+      return line;
+    })
+    .join('\n');
+}
+
 // ===== P2-1: HMAC 验签 =====
 // v1.5.2 文档化: v1.5.1 老板拍板回滚到 v1.1.10 permissive 模式
 //   - vendor 不发 signature 时 plugin 默认跳过 HMAC
@@ -55,20 +69,7 @@ test('P2-2.2: dispatcher.ts hardcode 消除 (resolveLlmModel)', () => {
 });
 
 test('P2-2.3: 全局 src/ 代码行 (非注释) 无 hardcode "MiniMax-M2.7-highspeed"', () => {
-  // 用 node 逐文件 read + 用 regex 找 hardcode (避免注释)
-  // 注释检测规则: //单行注释、/* */块注释
-  function stripComments(s) {
-    // 去 /* ... */ 块注释 (跨行)
-    s = s.replace(/\/\*[\s\S]*?\*\//g, '');
-    // 去 // 单行注释 (到行尾)
-    s = s.split('\n').map(line => {
-      const idx = line.indexOf('//');
-      // 注意字符串字面量内的 // 可能误伤, 但 hardcode 检查用粗扫不需精确
-      if (idx >= 0) return line.slice(0, idx);
-      return line;
-    }).join('\n');
-    return s;
-  }
+  // 用 node 逐文件 read + 用 regex 找 hardcode (避免注释) — 复用文件顶部的 stripComments
   const files = execSync(`grep -rl "MiniMax-M2.7-highspeed" ${ROOT}/src/ 2>/dev/null || true`, { encoding: 'utf-8' })
     .split('\n').filter(f => f.trim());
   const hits = [];
@@ -103,19 +104,26 @@ test('P2-3.1: enrich.js 大小 < 50KB (拆分前 1.3MB)', () => {
   assert.ok(stats.size < 50_000, `enrich.js 必须 < 50KB, 实际 ${stats.size} bytes`);
 });
 
-test('P2-3.2: enrich.js 保留 import 语句 (--bundle=false)', () => {
+// P2-3.2/3.3/3.4 原断言 "enrich.js 必须 import heartflow-trigger 桥" —— 该桥的唯一用途是给
+// enrich 转发心流独立 trigger, 2026-09-13 该路径已整条删除 (见 enrich.ts 文件头), 桥文件同删。
+// P2-3 的**本意**是「enrich.js 不许被 heartflow.js 拖成 1.3MB」, 故断言改为更强形式: enrich 与
+// heartflow 必须**完全无耦合** (既不直连也不经桥) —— 任何形式的重连都会 FAIL。
+test('P2-3.2: enrich.js 保留 import 语句 (--bundle=false, 仍是拆分产物而非 bundle)', () => {
   const src = fs.readFileSync(`${DEPLOY}/dist/inbound/enrich.js`, 'utf-8');
-  assert.match(src, /^import \{[\s\S]*?\} from "\.\/heartflow-trigger\.js"/m, 'enrich.js 必须 import heartflow-trigger');
+  // 注: import 语句本身即代码, 但 dist 里 import 与注释混排, 用 raw 匹配 import 更稳
+  assert.match(src, /^import \{[\s\S]*?\} from "\.\.\/db\.js"/m, 'enrich.js 必须保留 import (证明 --bundle=false)');
+  assert.doesNotMatch(stripComments(src), /heartflow/, 'enrich.js 代码不得引用 heartflow (含桥) — 无耦合才不会被拖大');
 });
 
-test('P2-3.3: heartflow-trigger.ts 桥接文件存在', () => {
-  assert.ok(fs.existsSync(`${ROOT}/src/inbound/heartflow-trigger.ts`), 'heartflow-trigger.ts 必须存在');
+test('P2-3.3: heartflow-trigger.ts 桥接文件已删除 (唯一用途=转发独立 trigger, 已随功能删除)', () => {
+  assert.ok(!fs.existsSync(`${ROOT}/src/inbound/heartflow-trigger.ts`), 'heartflow-trigger.ts 必须已删除 (留着=看着还活着)');
 });
 
-test('P2-3.4: enrich.ts import 改用 heartflow-trigger', () => {
+test('P2-3.4: enrich.ts 与 heartflow 完全无耦合', () => {
   const src = fs.readFileSync(`${ROOT}/src/inbound/enrich.ts`, 'utf-8');
-  assert.match(src, /from "\.\/heartflow-trigger\.js"/, 'enrich.ts 必须 import heartflow-trigger');
-  assert.doesNotMatch(src, /from "\.\/heartflow\.js"/, 'enrich.ts 不能直接 import heartflow');
+  const code = stripComments(src); // 文件头注释会点名被删符号 (记录用), 只看代码
+  assert.doesNotMatch(code, /from "\.\/heartflow(-trigger)?\.js"/, 'enrich.ts 不得 import heartflow (直连或桥)');
+  assert.doesNotMatch(code, /tryIndependentTrigger|tryHeartflowAfterEnrich|judgeHeartflow/, 'enrich.ts 不得触发心流 judge (真回复只走 handler.ts)');
 });
 
 // ===== P2-4: plugin.json version 对齐 =====

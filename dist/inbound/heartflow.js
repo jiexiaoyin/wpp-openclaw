@@ -85,7 +85,6 @@ export function defaultHeartflowConfig() {
         weights: { relevance: 0.25, willingness: 0.2, social: 0.2, timing: 0.15, continuity: 0.2 },
         includeReasoning: false,
         maxRetries: 1, // P1: 默认 1 次重试 (原 2 → 3 次调用, 阻塞最坏 15s)
-        independentTrigger: false, // v1.5.0 B-fix 20:06: 默认关闭, 保持现有行为兼容
     };
 }
 // ===== 纯逻辑: JSON 稳健解析 (移植自 Heartflow _extract_json) =====
@@ -471,74 +470,5 @@ export function checkHeartflowGate(chatId, content, cfg, nowMs) {
         }
     }
     return { allowed: true };
-}
-/**
- * 心流独立 trigger 入口 (v1.5.0 B-fix 20:06 老板拍板 B)
- *
- * 流程:
- *   1. 检查 cfg.independentTrigger=true (B 方案开关)
- *   2. 检查 cfg.enabled=true
- *   3. 检查 whitelistGroups 包含 chatId
- *   4. 检查 checkHeartflowGate (gate = false → not triggered)
- *   5. 调 judgeHeartflow 异步打分 (5 维)
- *   6. markHeartflowJudged 标记已 judge (频率闸生效)
- *   7. 返回 { triggered, reason, judgeResult }
- *
- * 设计: 不抛异常 (failure-soft), 失败返回 { triggered: false, reason }
- *       enrichBatch 调用方 try/catch 隔离, 不影响主入库流程
- */
-export async function tryIndependentTrigger(opts, cfg) {
-    // 步骤 1: B 方案开关检查
-    if (!cfg.independentTrigger) {
-        return { triggered: false, reason: "independentTrigger disabled" };
-    }
-    // 步骤 2: 总开关
-    if (!cfg.enabled) {
-        return { triggered: false, reason: "heartflow disabled" };
-    }
-    // 步骤 3: 群白名单
-    if (cfg.whitelistGroups && cfg.whitelistGroups.length > 0 && !cfg.whitelistGroups.includes(opts.chatId)) {
-        return { triggered: false, reason: "not in whitelistGroups" };
-    }
-    // 步骤 4: 心流 gate (冷却/精力)
-    const nowMs = Date.now();
-    const gate = checkHeartflowGate(opts.chatId, opts.content, cfg, nowMs);
-    if (!gate.allowed) {
-        return { triggered: false, reason: `gate:${gate.reason}` };
-    }
-    // 步骤 5: 异步 judge
-    try {
-        const judgeResult = await judgeHeartflow({
-            chatId: opts.chatId,
-            botNickname: opts.botWxid ?? "",
-            content: opts.content,
-            senderName: opts.senderName,
-            chatContext: buildChatContextSummary(opts.chatId, cfg, nowMs),
-            recentMessages: formatRawMessages(getRawBuffer(opts.chatId, cfg.contextMessagesCount ?? 5)),
-            lastBotReply: lastBotReply(opts.chatId) ?? "",
-            secondsSinceLastReply: secondsSinceLastReply(opts.chatId, nowMs),
-            energy: getChatState(opts.chatId, cfg, nowMs).energy,
-        }, cfg, {
-            apiKey: opts.apiKey,
-            baseUrl: opts.baseUrl,
-            format: opts.format,
-        });
-        // 步骤 6: 标记已 judge
-        markHeartflowJudged(opts.chatId, nowMs);
-        // 步骤 7: 返回结果
-        if (!judgeResult) {
-            return { triggered: false, reason: "judge returned null" };
-        }
-        return {
-            triggered: judgeResult.shouldReply,
-            reason: judgeResult.shouldReply ? "judge.shouldReply=true" : `score=${judgeResult.overallScore.toFixed(2)}<threshold`,
-            judgeResult,
-        };
-    }
-    catch (err) {
-        // 失败软处理: 不抛, 不影响 enrichBatch
-        const msg = err instanceof Error ? err.message : String(err);
-        return { triggered: false, reason: `judge threw: ${msg}` };
-    }
 }
 //# sourceMappingURL=heartflow.js.map
