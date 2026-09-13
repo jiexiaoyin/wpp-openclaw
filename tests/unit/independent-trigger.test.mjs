@@ -43,11 +43,11 @@ test('4. accounts cfg heartflow.independentTrigger=true (deploy 端)', () => {
   assert.strictEqual(d.heartflow.independentTrigger, true, 'deploy accounts cfg heartflow.independentTrigger=true (老板实测心流)');
 });
 
-test('5. schema default independentTrigger=false (dev 端)', () => {
-  const d = JSON.parse(fs.readFileSync(`${DEPLOY}/openclaw.plugin.json`, 'utf-8'));
-  const field = d.channelConfigs.wechatpadpro.schema.properties.heartflow.properties.independentTrigger;
-  assert.ok(field, 'schema 必须有 independentTrigger 字段');
-  assert.strictEqual(field.default, false, 'schema default=false (dev 端向后兼容)');
+test('5. schema heartflow 只暴露 enabled (independentTrigger 不回流 UI schema; 运行时真相=代码默认#3 + 账号文件#4)', () => {
+  const d = JSON.parse(fs.readFileSync(`${ROOT}/openclaw.plugin.json`, 'utf-8'));
+  const hf = d.channelConfigs.wechatpadpro.schema.properties.heartflow;
+  assert.ok(hf && hf.properties && hf.properties.enabled, 'schema heartflow 必须保留总开关 enabled');
+  assert.equal(hf.properties.independentTrigger, undefined, 'independentTrigger 高级开关不许回流 UI schema (账号文件#4 heartflow.independentTrigger=true 权威)');
 });
 
 // ===== 3. tryIndependentTrigger 函数存在 =====

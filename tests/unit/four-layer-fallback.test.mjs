@@ -36,20 +36,15 @@ test('L1 heartflow.whitelistGroups = 5 群 (益融管理/全员/华为/移动 + 
   assert.ok(list.includes('57737516566@chatroom'), 'gewe 调试群');
 });
 
-test('L2 schema default maxRetries=1 (heartflow/affection/jargon)', () => {
+test('L2 schema heartflow/affection/jargon 只暴露 enabled (maxRetries/timeoutMs/model 不回流 UI schema)', () => {
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}openclaw.plugin.json`, 'utf-8'));
   const sc = d.channelConfigs.wechatpadpro.schema.properties;
-  assert.strictEqual(sc.heartflow.properties.maxRetries.default, 1);
-  assert.strictEqual(sc.affection.properties.maxRetries.default, 1);
-  assert.strictEqual(sc.jargon.properties.maxRetries.default, 1);
-});
-
-test('L2 schema default timeoutMs=5000', () => {
-  const d = JSON.parse(fs.readFileSync(`${DEPLOY}openclaw.plugin.json`, 'utf-8'));
-  const sc = d.channelConfigs.wechatpadpro.schema.properties;
-  assert.strictEqual(sc.heartflow.properties.timeoutMs.default, 5000);
-  assert.strictEqual(sc.affection.properties.timeoutMs.default, 5000);
-  assert.strictEqual(sc.jargon.properties.timeoutMs.default, 5000);
+  for (const k of ['heartflow', 'affection', 'jargon']) {
+    const obj = sc[k];
+    assert.ok(obj && obj.properties && obj.properties.enabled, `L2 schema.${k} 必须保留总开关 enabled`);
+    assert.equal(obj.properties.maxRetries, undefined, `L2 schema.${k}.maxRetries 不许回流 UI schema (L1 账号文件 / L3 代码默认 / L4 运行兜底权威)`);
+    assert.equal(obj.properties.timeoutMs, undefined, `L2 schema.${k}.timeoutMs 不许回流 UI schema`);
+  }
 });
 
 test('L3 dev defaultHeartflowConfig/Affection/JargonConfig timeoutMs=5000', () => {
@@ -86,15 +81,14 @@ test('L4 deploy dist/ 全文件 0 MiniMax-M2.5 hardcode (排除 node_modules)', 
   }
 });
 
-test('L1/L2 deepseek-v4-flash 切 fallback (B-fix 19:39 老板拍 B)', () => {
+test('L1/L2 deepseek-flash 切 fallback (B-fix 19:39 老板拍 B)', () => {
   const d1 = JSON.parse(fs.readFileSync(`${DEPLOY}accounts/default.json`, 'utf-8'));
-  assert.strictEqual(d1.heartflow.model, 'deepseek-v4-flash', 'L1 heartflow.model must be deepseek-v4-flash');
-  assert.strictEqual(d1.affection.model, 'deepseek-v4-flash', 'L1 affection.model must be deepseek-v4-flash');
-  assert.strictEqual(d1.jargon.model, 'deepseek-v4-flash', 'L1 jargon.model must be deepseek-v4-flash');
+  assert.strictEqual(d1.heartflow.model, 'deepseek-flash', 'L1 heartflow.model must be deepseek-flash');
+  assert.strictEqual(d1.affection.model, 'deepseek-flash', 'L1 affection.model must be deepseek-flash');
+  assert.strictEqual(d1.jargon.model, 'deepseek-flash', 'L1 jargon.model must be deepseek-flash');
   const d2 = JSON.parse(fs.readFileSync(`${DEPLOY}openclaw.plugin.json`, 'utf-8'));
   const sc = d2.channelConfigs.wechatpadpro.schema.properties;
   for (const k of ['heartflow', 'affection', 'jargon']) {
-    assert.strictEqual(sc[k].properties.model.default, 'deepseek-v4-flash', `L2 schema.${k}.model.default must be deepseek-v4-flash`);
-    assert.ok(sc[k].properties.model.enum.includes('deepseek-v4-flash'), `L2 schema.${k}.model.enum must include deepseek-v4-flash`);
+    assert.equal(sc[k].properties.model, undefined, `L2 schema.${k}.model 不许回流 UI schema (deepseek-flash 切档真相=L1 账号文件 + L3 代码默认)`);
   }
 });

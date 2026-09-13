@@ -82,16 +82,17 @@ test('P2-2.3: 全局 src/ 代码行 (非注释) 无 hardcode "MiniMax-M2.7-highs
   assert.deepStrictEqual(hits, [], 'src/ 代码行还有 hardcode 残留:\n' + hits.join('\n'));
 });
 
-test('P2-2.4: schema.llmIntentModel default = deepseek-v4-flash', () => {
-  const d = JSON.parse(fs.readFileSync(`${DEPLOY}/openclaw.plugin.json`, 'utf-8'));
-  const f = d.channelConfigs.wechatpadpro.schema.properties.llmIntentModel;
-  assert.strictEqual(f.default, 'deepseek-v4-flash', 'schema default 必须切到 deepseek-v4-flash');
-  assert.ok(f.enum.includes('deepseek-v4-flash'), 'enum 必须包含 deepseek-v4-flash');
+test('P2-2.4: llmIntentModel 不回流 UI schema (老板: 只要核心在 UI; 高级 AI 参数文件侧管理)', () => {
+  const d = JSON.parse(fs.readFileSync(`${ROOT}/openclaw.plugin.json`, 'utf-8'));
+  const props = d.channelConfigs.wechatpadpro.schema.properties;
+  assert.equal(props.llmIntentModel, undefined, 'llmIntentModel 不许在 UI schema (运行时权威=代码默认 + 账号文件 P2-2.5)');
+  assert.equal(props.llmIntentEnabled, undefined, 'llmIntentEnabled 不许在 UI schema');
+  assert.equal(props.llmIntentTimeoutMs, undefined, 'llmIntentTimeoutMs 不许在 UI schema');
 });
 
-test('P2-2.5: accounts cfg llmIntentModel = deepseek-v4-flash', () => {
+test('P2-2.5: accounts cfg llmIntentModel = deepseek-flash', () => {
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}/accounts/default.json`, 'utf-8'));
-  assert.strictEqual(d.llmIntentModel, 'deepseek-v4-flash', 'accounts cfg llmIntentModel 必须 deepseek-v4-flash');
+  assert.strictEqual(d.llmIntentModel, 'deepseek-flash', 'accounts cfg llmIntentModel 必须 deepseek-flash');
   assert.strictEqual(d.llmIntentEnabled, true);
   assert.strictEqual(d.llmIntentTimeoutMs, 5000);
 });

@@ -3,8 +3,6 @@
   "id": "wechatpadpro",
   "version": "1.5.4",
   "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 313 paths API 覆盖 (新 vendor v2026.08.18.1); v1.3.75 HEARTFLOW 心流主动回复 (未@群消息小模型5维打分自动参与); v1.3.76 JARGON 群黑话挖掘 (自主学习, AI 可查群黑话含义); v1.3.77 AFFECTION 好感度/社交关系系统 (交互分类→好感度+情绪注入回复风格) + AI-UNIFY 统一判断模型配置; v1.3.78 完整审阅加固 (webhook token 强制 / 群白名单 fail-closed / WS v1 解析 / 去重账号隔离 / 心流冷却 / jargon 计数 / affection 去单字误判 / WS 长退避 / synckey 崩溃 / DB 重试 / sync 锁); v1.3.79 三功能 filehelper 命令 (/heartflow /affection /jargon 开关) + 账号专属配置热生效.",
-  "channelId": "wechatpadpro",
-  "channelName": "WeChatPadPro (微信 Pad 协议)",
   "kind": "plugin",
   "configUiHints": {
     "tokenKey": {
@@ -64,44 +62,32 @@
             "type": "boolean",
             "description": "启用此账号"
           },
-          "tokenKey": {
+          "nickname": {
             "type": "string",
-            "description": "WeChatPadPro vendor 鉴权 TokenKey (从 vendor 后台 adminmax.knowhub.cloud 拿)"
+            "description": "机器人昵称"
           },
-          "apiBaseUrl": {
+          "selfWxid": {
             "type": "string",
-            "description": "WeChatPadPro HTTP API base URL (公网反代: https://wx.juhe.chat)"
+            "readOnly": true,
+            "description": "当前登录的微信 wxid (扫码登录后回填; 只读身份标识, 勿改)"
           },
-          "wsUrl": {
+          "agent": {
             "type": "string",
-            "description": "WebSocket URL (公网反代: wss://wx.juhe.chat/ws/sync)"
+            "description": "绑定 OpenClaw agent id (如 wpp-wechat)"
           },
-          "authcode": {
-            "type": "string",
-            "description": "授权码 (binary 启动时生成, 用于 WebSocket 鉴权)"
-          },
-          "webhookHost": {
-            "type": "string",
-            "description": "webhook 接收主机 (安全加固: 127.0.0.1 仅本机, 由 nginx 反代暴露公网)"
-          },
-          "webhookPort": {
-            "type": "number",
-            "description": "webhook 接收端口"
-          },
-          "webhookPath": {
-            "type": "string",
-            "description": "webhook 接收路径"
-          },
-          "webhookSecret": {
-            "type": "string",
-            "description": "webhook 验签 secret (vendor 暂未公开签名算法, 预留)"
+          "adminUsers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "管理员 wxid 列表 (默认 [selfWxid]; 限频/脱敏/优先回复豁免)"
           },
           "allowFrom": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "允许的私聊发送方 wxid 白名单"
+            "description": "允许的私聊发送方 wxid 白名单 (空=fail-closed 全拒)"
           },
           "groupPolicy": {
             "type": "string",
@@ -118,175 +104,7 @@
             "items": {
               "type": "string"
             },
-            "description": "允许的群 wxid 白名单"
-          },
-          "selfWxid": {
-            "type": "string",
-            "description": "当前登录的微信 wxid (扫码登录后回填)"
-          },
-          "nickname": {
-            "type": "string",
-            "description": "机器人昵称"
-          },
-          "requireAtMention": {
-            "type": "boolean",
-            "description": "群聊需 @ 才回复"
-          },
-          "debounceMs": {
-            "type": "number",
-            "description": "群消息防抖毫秒"
-          },
-          "tokenKeyEnv": {
-            "type": "string",
-            "description": "tokenKey 环境变量名 (B 方案: 凭证不入 JSON)"
-          },
-          "authcodeEnv": {
-            "type": "string",
-            "description": "authcode 环境变量名 (B 方案: 凭证不入 JSON)"
-          },
-          "webhookSecretEnv": {
-            "type": "string",
-            "description": "webhook secret 环境变量名 (B 方案: 凭证不入 JSON)"
-          },
-          "webhookPublicUrl": {
-            "type": "string",
-            "description": "v1.1.12: 公网入口 base URL (拼 vendor push URL = webhookPublicUrl + webhookPath)"
-          },
-          "webhookPublicUrlEnv": {
-            "type": "string",
-            "description": "v1.1.12: webhookPublicUrl 环境变量名 (如 WECHATPRO_WEBHOOK_PUBLIC_URL)"
-          },
-          "autoSetWebhook": {
-            "type": "boolean",
-            "description": "v1.1.12: 启动自动 setWebhook (默认 true; false 则老板手动)"
-          },
-          "setWebhookRetries": {
-            "type": "number",
-            "description": "v1.1.12: setWebhook 重试次数 (默认 3, 1s/3s/9s backoff)"
-          },
-          "agent": {
-            "type": "string",
-            "description": "v1.1.12: 绑定 OpenClaw agent id (如 wpp-wechat)"
-          },
-          "webhookBusinessPath": {
-            "type": "string",
-            "description": "v1.1.15: 业务回调路径 (走 /Webhook/Business/Set + /Msg/StartAutoSync 完整消息)"
-          },
-          "adminUsers": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "v1.1.39 SUNNOY-DM-POLICY: 管理员 wxid 列表 (默认 [selfWxid]; 限频/脱敏/优先回复豁免预留)"
-          },
-          "commandAllowlist": {
-            "type": "object",
-            "description": "v1.1.39 SUNNOY-COMMANDS: 命令白名单 (sunnoy commands.js 范式, 未设=禁用)",
-            "properties": {
-              "allowlist": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "prefix": {
-                "type": "string",
-                "description": "默认 /"
-              },
-              "blockMessage": {
-                "type": "string",
-                "description": "默认中文"
-              }
-            }
-          },
-          "sync": {
-            "type": "object",
-            "description": "v1.1.40 GLOBAL-CONFIG: WS 重连 + 同步参数 (单账号独有)",
-            "properties": {
-              "fallbackSyncMs": {
-                "type": "number",
-                "description": "HTTP 轮询兑底间隔毫秒 (默认 60000)"
-              },
-              "enableWsClient": {
-                "type": "boolean",
-                "description": "v1.1.41 WS-DEGRADE: 启用 WS 主动推送 (默认 true)"
-              },
-              "enableHttpFallback": {
-                "type": "boolean",
-                "description": "v1.1.41 WS-DEGRADE: 启用 HTTP 60s 彗底 (默认 true)"
-              },
-              "wsReconnect": {
-                "type": "object",
-                "description": "WS 重连策略",
-                "properties": {
-                  "initialDelayMs": {
-                    "type": "number",
-                    "description": "初始重连延迟 (默认 1000)"
-                  },
-                  "maxDelayMs": {
-                    "type": "number",
-                    "description": "最大重连延迟 (默认 30000)"
-                  },
-                  "multiplier": {
-                    "type": "number",
-                    "description": "重连延迟倍增因子 (默认 2)"
-                  }
-                }
-              }
-            }
-          },
-          "keywordTrigger": {
-            "type": "object",
-            "description": "关键词触发配置 (单账号 default; 多账号 hot-reload)",
-            "properties": {
-              "enabled": {
-                "type": "boolean"
-              },
-              "keywords": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "include",
-                  "exact"
-                ]
-              }
-            }
-          },
-          "msgTypeTrigger": {
-            "type": "object",
-            "description": "消息类型触发配置 (可选精确控制; 接龙已默认自动触发 v1.3.54, 无需配此字段)",
-            "properties": {
-              "enabled": {
-                "type": "boolean"
-              },
-              "appMsgTypes": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "app 消息类型白名单 (接龙=49; 旧 chat-history=53)"
-              }
-            }
-          },
-          "quoteBotTrigger": {
-            "type": "object",
-            "description": "引用 bot 触发配置",
-            "properties": {
-              "enabled": {
-                "type": "boolean"
-              },
-              "whitelistGroups": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            }
+            "description": "允许的群 wxid 白名单 (@chatroom; groupPolicy=allowlist 时用)"
           },
           "blacklistGroups": {
             "type": "array",
@@ -295,394 +113,106 @@
             },
             "description": "黑名单群 wxid (拒绝处理任何消息)"
           },
-          "chatroomDebug": {
+          "requireAtMention": {
             "type": "boolean",
-            "description": "调试模式 (详细日志, 生产环境禁用)"
+            "description": "群聊需 @ 才回复"
+          },
+          "dmPairingEnabled": {
+            "type": "boolean",
+            "description": "启用 DM 配对码 (默认 false)"
+          },
+          "friendCirclePublishEnabled": {
+            "type": "boolean",
+            "description": "朋友圈发布开关 (v1.3.41): true=启用但仅 friendCirclePublishAllowFrom / adminUsers 内 wxid 可发; false=完全禁用"
+          },
+          "friendCirclePublishAllowFrom": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "朋友圈发布白名单 wxid (缺省用 adminUsers; 未配则全禁)"
           },
           "heartflow": {
             "type": "object",
-            "description": "v1.3.75 HEARTFLOW: 群聊主动回复 (心流机制, 未@群消息小模型5维打分自动参与)。enabled=false (默认) 关闭; 显式 true 启用",
+            "description": "心流主动回复 (群聊未@消息小模型打分自动参与)。enabled=false (默认) 关; true 开。高级参数/阈值在账号文件手调",
             "properties": {
               "enabled": {
                 "type": "boolean",
                 "description": "总开关 (默认 false)"
-              },
-              "model": {
-                "type": "string",
-                "default": "deepseek-v4-flash",
-                "enum": [
-                  "MiniMax-M2.5",
-                  "MiniMax-M2.7",
-                  "MiniMax-M2.7-highspeed",
-                  "deepseek-v4-flash"
-                ],
-                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-v4-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
-              },
-              "replyThreshold": {
-                "type": "number",
-                "description": "回复阈值 0-1 (默认 0.6)",
-                "default": 0.6
-              },
-              "energyDecayRate": {
-                "type": "number",
-                "description": "回复后精力衰减 (默认 0.1)"
-              },
-              "energyRecoveryRate": {
-                "type": "number",
-                "description": "不回复恢复 (默认 0.02)"
-              },
-              "contextMessagesCount": {
-                "type": "number",
-                "description": "判断上下文条数 (默认 5)"
-              },
-              "minReplyIntervalSec": {
-                "type": "number",
-                "description": "最小回复间隔秒 (默认 0)",
-                "default": 0
-              },
-              "whitelistGroups": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "群白名单 (空=全部)"
-              },
-              "includeReasoning": {
-                "type": "boolean",
-                "description": "判断时输出 reasoning (默认 false 省 token)"
-              },
-              "maxRetries": {
-                "type": "number",
-                "description": "判断重试 (默认 1; v1.4.0 P0-fix 19:24 maxRetries fallback 2→1 跟 defaultHeartflowConfig 对齐)",
-                "default": 1
-              },
-              "timeoutMs": {
-                "type": "number",
-                "description": "判断超时毫秒 (默认 5000; v1.4.0 14:55 老板拍 C 方案 5000×2=10秒总)",
-                "default": 5000
-              },
-              "minJudgeIntervalSec": {
-                "type": "number",
-                "default": 0,
-                "description": "LLM judge 频率闸最小间隔秒 (默认 0; v1.4.0 P0-fix 19:24)"
-              },
-              "independentTrigger": {
-                "type": "boolean",
-                "default": false,
-                "description": "v1.5.0 B-fix 20:06 老板拍板 B (3 层分层架构): 心流独立 trigger 开关. true=enrichBatch 写库后异步触发心流, 绕过 requireAtMention/groupPolicy (仅看 whitelistGroups + heartflow gate). 默认 false 保持现有行为兼容. 设计: 解耦 AI 主动观察与 AI 被动响应 (@bot)."
-              },
-              "learning": {
-                "type": "object",
-                "description": "v1.6.x HEARTFLOW-FEEDBACK: per-群双向自适应调阈 (反馈闭环, 只对白名单群). schema default 全关/全缺省 (enabled=false) 保持旧行为; 生产 accounts JSON 显式开 enabled=true 即安全灰度 (样本满前阈值不动). learned 阈值落 DB (wpp_hf_group_state) 不回写 JSON",
-                "properties": {
-                  "enabled": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "总开关 (默认 false; 生产 accounts/default.json 显式 true)"
-                  },
-                  "minSample": {
-                    "type": "number",
-                    "default": 10,
-                    "description": "最小样本量 (不足=不调阈, 自然灰度)"
-                  },
-                  "lowEngageRate": {
-                    "type": "number",
-                    "default": 0.15,
-                    "description": "接话率 ≤ 此值 → 上调阈值 (更克制)"
-                  },
-                  "highEngageRate": {
-                    "type": "number",
-                    "default": 0.5,
-                    "description": "接话率 ≥ 此值 → 下调阈值 (更主动)"
-                  },
-                  "step": {
-                    "type": "number",
-                    "default": 0.05,
-                    "description": "单次步长上限"
-                  },
-                  "bandMin": {
-                    "type": "number",
-                    "default": 0.3,
-                    "description": "硬区间下限"
-                  },
-                  "bandMax": {
-                    "type": "number",
-                    "default": 0.9,
-                    "description": "硬区间上限"
-                  },
-                  "sampleWindow": {
-                    "type": "number",
-                    "default": 20,
-                    "description": "参与统计的最近 closed 样本数 (滚窗)"
-                  },
-                  "observeWindowSec": {
-                    "type": "number",
-                    "default": 600,
-                    "description": "观察窗时长 (秒): 心流回复发出后多久内有人类消息 = engaged"
-                  },
-                  "minChangeCooldownSec": {
-                    "type": "number",
-                    "default": 14400,
-                    "description": "相邻两次阈值变更最小间隔 (秒, 防抖)"
-                  },
-                  "sweepIntervalSec": {
-                    "type": "number",
-                    "default": 300,
-                    "description": "sweep 周期 (秒)"
-                  },
-                  "staleJudgedMaxSec": {
-                    "type": "number",
-                    "default": 1800,
-                    "description": "judged 无发送结果呆账上限 (秒)"
-                  }
-                }
               }
             }
           },
           "jargon": {
             "type": "object",
-            "description": "v1.3.76 JARGON: 群黑话挖掘 (自主学习, 旁路采集+定时挖掘)。enabled=false (默认) 关闭; 显式 true 启用。AI 可查 query_jargon 理解群黑话",
+            "description": "群黑话挖掘 (自主学习)。enabled=false (默认) 关; true 开。高级参数在账号文件手调",
             "properties": {
               "enabled": {
                 "type": "boolean",
                 "description": "总开关 (默认 false)"
-              },
-              "model": {
-                "type": "string",
-                "default": "deepseek-v4-flash",
-                "enum": [
-                  "MiniMax-M2.5",
-                  "MiniMax-M2.7",
-                  "MiniMax-M2.7-highspeed",
-                  "deepseek-v4-flash"
-                ],
-                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-v4-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
-              },
-              "mineIntervalSec": {
-                "type": "number",
-                "description": "挖掘间隔秒 (默认 60)"
-              },
-              "minMessages": {
-                "type": "number",
-                "description": "每次挖掘最少新增消息数 (默认 10)"
-              },
-              "maxCandidatesPerGroup": {
-                "type": "number",
-                "description": "每群候选上限 (默认 50)"
-              },
-              "whitelistGroups": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "群白名单 (空=全部)"
-              },
-              "timeoutMs": {
-                "type": "number",
-                "default": 5000,
-                "description": "LLM 单次超时毫秒 (默认 5000; v1.4.0 P0-fix 19:30 全对齐 5000)"
-              },
-              "maxRetries": {
-                "type": "number",
-                "default": 1,
-                "description": "LLM 重试 (默认 1; jargon 单次调用, fallback 兼容)"
-              },
-              "minJudgeIntervalSec": {
-                "type": "number",
-                "default": 0,
-                "description": "LLM judge 频率闸最小间隔秒 (默认 0; v1.4.0 P0-fix 19:30 补 schema default)"
               }
             }
           },
           "affection": {
             "type": "object",
-            "description": "v1.3.77 AFFECTION: 好感度/社交关系系统。enabled=false (默认) 关闭; 显式 true 启用。交互分类→好感度增减+情绪状态→情绪注入回复风格",
+            "description": "好感度/社交关系系统。enabled 开关。高级参数在账号文件手调",
             "properties": {
               "enabled": {
                 "type": "boolean",
-                "description": "总开关 (默认 true, v1.5.2 老板 23:30 启用, 按 8-23 01:00 Explicit Preference)",
-                "default": true
-              },
-              "model": {
-                "type": "string",
-                "default": "deepseek-v4-flash",
-                "enum": [
-                  "MiniMax-M2.5",
-                  "MiniMax-M2.7",
-                  "MiniMax-M2.7-highspeed",
-                  "deepseek-v4-flash"
-                ],
-                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-v4-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
-              },
-              "maxUserAffection": {
-                "type": "number",
-                "description": "单用户好感度上限 (默认 100)"
-              },
-              "maxTotalAffection": {
-                "type": "number",
-                "description": "群总好感度上限 (默认 500)"
-              },
-              "affectionDecayRate": {
-                "type": "number",
-                "description": "重分配衰减率 (默认 0.3)"
-              },
-              "llmClassify": {
-                "type": "boolean",
-                "description": "用 LLM 增强交互分类 (默认 false 纯规则)"
-              },
-              "timeoutMs": {
-                "type": "number",
-                "default": 5000,
-                "description": "LLM 单次超时毫秒 (默认 5000; v1.4.0 P0-fix 19:30 全对齐 5000)"
-              },
-              "maxRetries": {
-                "type": "number",
-                "default": 1,
-                "description": "LLM 重试 (默认 1; affection 单次调用, fallback 兼容)"
-              },
-              "replyThreshold": {
-                "type": "number",
-                "default": 0.6,
-                "description": "好感度阈值 (默认 0.6; v1.4.0 P0-fix 19:30 补 schema default)"
-              },
-              "minReplyIntervalSec": {
-                "type": "number",
-                "default": 0,
-                "description": "最小回复间隔秒 (默认 0; v1.4.0 P0-fix 19:30 补 schema default)"
-              },
-              "minJudgeIntervalSec": {
-                "type": "number",
-                "default": 0,
-                "description": "LLM judge 频率闸最小间隔秒 (默认 0; v1.4.0 P0-fix 19:30 补 schema default)"
+                "description": "总开关 (v1.5.2 默认 true)"
               }
             }
-          },
-          "dmPairingEnabled": {
-            "type": "boolean",
-            "description": "v1.2.3: 启用 DM 配对码 (默认 false = 关闭, 显式 true 才启用)"
-          },
-          "groupContextEnabled": {
-            "type": "boolean",
-            "description": "v1.2.4: 启用群聊上下文注入 (默认 false = 关闭)"
-          },
-          "groupContextWindow": {
-            "type": "number",
-            "description": "v1.2.4: 群聊上下文条数 (默认 20, 1-100)"
-          },
-          "llmIntentEnabled": {
-            "type": "boolean",
-            "description": "v1.3.1: 用 LLM 智能判断注入哪些候选 (默认 true)",
-            "default": true
-          },
-          "llmIntentModel": {
-            "type": "string",
-            "description": "v1.5.0 P2-fix 20:41 老板拍 A: LLM 判断模型 (消除 hardcode, 走 schema default → accounts cfg 链). 默认 deepseek-v4-flash (跟 heartflow 对齐, 切独立集群按 8-25 09:35 偏好).",
-            "default": "deepseek-v4-flash",
-            "enum": [
-              "MiniMax-M2.5",
-              "MiniMax-M2.7",
-              "MiniMax-M2.7-highspeed",
-              "deepseek-v4-flash"
-            ]
-          },
-          "llmIntentTimeoutMs": {
-            "type": "number",
-            "description": "v1.3.1: LLM 判断超时毫秒 (默认 5000)",
-            "default": 5000
-          },
-          "embedIntentEnabled": {
-            "type": "boolean",
-            "description": "v1.3.2: embedding 快路径定位相关候选 (默认 true)"
-          },
-          "embedIntentTopN": {
-            "type": "number",
-            "description": "v1.3.2: embedding 选 top-N (默认 5)"
-          },
-          "embedIntentThreshold": {
-            "type": "number",
-            "description": "v1.3.2: embedding 相似度阈值 (默认 0.3)"
-          },
-          "mcpEnabled": {
-            "type": "boolean",
-            "description": "v1.2.0: 启用 vendor MCP 增强 (默认 true; false 跳过 MCP 走 v1 确定性回复)"
           }
         }
       },
       "uiHints": {
-        "tokenKey": {
-          "label": "WeChatPadPro TokenKey",
-          "sensitive": true
-        },
-        "apiBaseUrl": {
-          "label": "API Base",
-          "placeholder": "https://wx.juhe.chat"
-        },
-        "wsUrl": {
-          "label": "WebSocket URL",
-          "placeholder": "wss://wx.juhe.chat/ws/sync"
-        },
-        "authcode": {
-          "label": "授权码 (扫码登录后回填)",
-          "sensitive": true
-        },
-        "webhookPort": {
-          "label": "Webhook Port",
-          "placeholder": "4398"
-        },
-        "webhookPath": {
-          "label": "Webhook Path",
-          "placeholder": "/wechatpadpro/webhook"
-        },
-        "webhookHost": {
-          "label": "Webhook Host",
-          "placeholder": "127.0.0.1"
-        },
-        "webhookSecret": {
-          "label": "Webhook Secret",
-          "sensitive": true
-        },
-        "selfWxid": {
-          "label": "Bot self wxid",
-          "placeholder": "wxid_xxx (登录后回填)"
-        },
         "nickname": {
           "label": "Bot 昵称",
           "placeholder": "益融小助理"
         },
-        "groupPolicy": {
-          "label": "群聊策略",
-          "placeholder": "open"
+        "selfWxid": {
+          "label": "当前微信 wxid (只读身份)",
+          "placeholder": "wxid_xxx (登录后回填, 勿改)"
+        },
+        "agent": {
+          "label": "OpenClaw agent id",
+          "placeholder": "wpp-wechat"
+        },
+        "adminUsers": {
+          "label": "管理员 wxid (逗号分隔)"
         },
         "allowFrom": {
-          "label": "允许的私聊发送方 wxid 白名单"
+          "label": "允许私聊发送方 wxid (逗号分隔)"
+        },
+        "groupPolicy": {
+          "label": "群聊策略",
+          "placeholder": "allowlist"
         },
         "groupAllowFrom": {
-          "label": "允许的群 wxid 白名单"
+          "label": "允许群 wxid (逗号分隔)"
+        },
+        "blacklistGroups": {
+          "label": "黑名单群 wxid (逗号分隔)"
         },
         "requireAtMention": {
           "label": "群聊需 @ 才回复"
         },
-        "debounceMs": {
-          "label": "群消息防抖毫秒"
+        "dmPairingEnabled": {
+          "label": "启用 DM 配对码"
         },
-        "webhookBusinessPath": {
-          "label": "Business Callback Path",
-          "placeholder": "/wechatpadpro/default/webhook/business"
+        "friendCirclePublishEnabled": {
+          "label": "朋友圈发布开关"
         },
-        "adminUsers": {
-          "label": "管理员 wxid 列表"
+        "friendCirclePublishAllowFrom": {
+          "label": "朋友圈发布白名单 wxid (逗号分隔)"
         },
-        "commandAllowlist": {
-          "label": "命令白名单"
+        "heartflow": {
+          "label": "心流主动回复"
         },
-        "sync": {
-          "label": "WS 重连 + 同步参数"
+        "jargon": {
+          "label": "群黑话挖掘"
         },
-        "blacklistGroups": {
-          "label": "黑名单群"
-        },
-        "chatroomDebug": {
-          "label": "调试模式"
+        "affection": {
+          "label": "好感度系统"
         }
       }
     }
