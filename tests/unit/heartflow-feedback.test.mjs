@@ -129,16 +129,16 @@ test('11. index.ts: 启动加载 learned + 起 sweep + /heartflow status 只读 
 });
 
 // ===== 4. schema / accounts (dev 侧即时绿) =====
-test('12. openclaw.plugin.json (dev): heartflow.learning schema 存在, enabled default=false', () => {
+// 09-10 老板拍板: UI 只留核心配置, learning/阈值等高级参数文件侧管理, 不回流 UI schema。
+// 运行时权威仍在 accounts/default.json (显式开) + 代码默认 (默认关)。schema 仅守护 UI 暴露面=核心。
+test('12. openclaw.plugin.json (dev): schema heartflow 只暴露 enabled (learning 不回流 UI schema)', () => {
   const d = JSON.parse(read(`${ROOT}/openclaw.plugin.json`));
-  const learn = d.channelConfigs.wechatpadpro.schema.properties.heartflow.properties.learning;
-  assert.ok(learn, 'schema 必须有 heartflow.properties.learning');
-  assert.strictEqual(learn.type, 'object');
-  assert.strictEqual(learn.properties.enabled.default, false, 'schema default learning.enabled=false (dev 兼容)');
-  // 关键参数键在 schema (与代码默认对齐)
-  for (const k of ['minSample', 'lowEngageRate', 'highEngageRate', 'step', 'bandMin', 'bandMax', 'observeWindowSec', 'minChangeCooldownSec']) {
-    assert.ok(learn.properties[k], `schema learning.properties 必须含 ${k}`);
-  }
+  const hf = d.channelConfigs.wechatpadpro.schema.properties.heartflow;
+  assert.ok(hf && hf.properties && hf.properties.enabled, 'schema heartflow 必须保留总开关 enabled');
+  assert.equal(hf.properties.learning, undefined, 'learning 不许回流 UI schema (文件/代码默认权威)');
+  assert.equal(hf.properties.maxRetries, undefined, '高级参数 maxRetries 不许回流 UI schema');
+  assert.equal(hf.properties.replyThreshold, undefined, '高级参数 replyThreshold 不许回流 UI schema');
+  assert.equal(hf.properties.whitelistGroups, undefined, 'whitelistGroups 不许回流 UI schema');
 });
 
 test('13. accounts/default.json (dev): heartflow.learning.enabled=true (生产显式开, 其余走默认)', () => {
@@ -166,9 +166,9 @@ test('16. DEPLOY accounts/default.json learning.enabled=true', () => {
   assert.strictEqual(d.heartflow.learning.enabled, true, 'deploy accounts learning.enabled 必须 true');
 });
 
-test('17. DEPLOY schema heartflow.learning default enabled=false', () => {
+test('17. DEPLOY schema heartflow 只暴露 enabled (learning 不回流 UI schema)', () => {
   const d = JSON.parse(read(`${DEPLOY}/openclaw.plugin.json`));
-  const learn = d.channelConfigs.wechatpadpro.schema.properties.heartflow.properties.learning;
-  assert.ok(learn, 'deploy schema 必须有 learning');
-  assert.strictEqual(learn.properties.enabled.default, false, 'deploy schema default 必须 false');
+  const hf = d.channelConfigs.wechatpadpro.schema.properties.heartflow;
+  assert.ok(hf && hf.properties && hf.properties.enabled, 'deploy schema heartflow 必须保留 enabled');
+  assert.equal(hf.properties.learning, undefined, 'deploy learning 不许回流 UI schema');
 });
