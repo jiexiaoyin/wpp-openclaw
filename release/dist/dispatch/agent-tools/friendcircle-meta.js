@@ -86,9 +86,9 @@ export const FRIEND_CIRCLE_META = {
     ],
     /** /FriendCircle/PushCommnet */
     startFriendCircleCommentTask: [
-        "启动评论检查后台任务, 转发 callback 形式的评论事件.",
-        Type.Object({}),
-        () => getFriendCircleApi().pushComment(),
+        "启动评论检查后台任务, 转发 callback 形式的评论事件. id=朋友圈动态 ID, forwardAddr=评论回调地址.",
+        Type.Object({ id: Type.String(), forwardAddr: Type.String({ description: "评论回调地址" }) }),
+        (id, forwardAddr) => getFriendCircleApi().pushComment(id, forwardAddr),
     ],
     /**
      * v1.3.20 P2-FRIENDCIRCLE: /FriendCircle/MmSnsSync — 查询正在评论/转发的 ID.
@@ -154,9 +154,12 @@ export const FRIEND_CIRCLE_META = {
     //   (原绕过 guard 无 callerWxid 白名单; 发布走 publishCircle/publishImagesCircle/publishVideoCircle 复合工具带 guard)
     /** /FriendCircle/SetBackgroundImage — 设置朋友圈背景图 */
     setCircleBackgroundImage: [
-        "设置朋友圈背景图. imageData=图片 base64.",
-        Type.Object({ imageData: Type.String({ description: "背景图 base64" }) }),
-        (imageData) => getFriendCircleApi().setBackgroundImage(imageData),
+        "设置朋友圈背景图. url=背景大图地址 (先用 uploadCircleImage 上传拿到), thumbUrl 可选缩略图地址.",
+        Type.Object({
+            url: Type.String({ description: "背景大图地址" }),
+            thumbUrl: Type.Optional(Type.String({ description: "背景缩略图地址" })),
+        }),
+        (url, thumbUrl) => getFriendCircleApi().setBackgroundImage(url, thumbUrl ?? ""),
     ],
     /** /FriendCircle/GetCollectCircle — 读取收藏动态 (v1.3.67 新 API) */
     getCollectCircle: [
@@ -201,6 +204,82 @@ export const FRIEND_CIRCLE_META = {
         "查询正在执行的朋友圈评论转发任务.",
         Type.Object({}),
         () => getFriendCircleApi().activeTasks(),
+    ],
+    // ===== v1.6.0 SWAGGER-323: 批量导出 (3) + 自动跟发 (2) =====
+    /**
+     * /FriendCircle/BatchDownload — 建朋友圈批量导出任务.
+     * 三拍流程: 本工具建任务 (拿 task_id) → getFriendCircleExportStatus 轮询 → downloadFriendCircleExport 取文件.
+     * 任务按服务端 authcode 绑定账号隔离 (只看得到自己账号建的任务).
+     */
+    exportFriendCircle: [
+        "建朋友圈批量导出任务 (导出某人的朋友圈为 zip/md). 返回 task_id, 之后用 getFriendCircleExportStatus 轮询进度, 完成后用 downloadFriendCircleExport 取文件.",
+        Type.Object({
+            towxid: Type.String({ description: "目标用户 wxid (要导出谁的朋友圈)" }),
+            since: Type.Optional(Type.String({ description: "起始日期 YYYY-MM-DD, 默认近六个月" })),
+            until: Type.Optional(Type.String({ description: "结束日期 YYYY-MM-DD, 默认今天" })),
+            maxPages: Type.Optional(Type.Number({ description: "最大分页数, 默认/上限 500" })),
+            includeOriginal: Type.Optional(Type.Boolean({ description: "是否下载原图, 默认 true" })),
+        }),
+        (towxid, since, until, maxPages, includeOriginal) => getFriendCircleApi().batchDownload(towxid, { since, until, maxPages, includeOriginal }),
+    ],
+    /** /FriendCircle/BatchDownloadStatus — 查导出任务进度 */
+    getFriendCircleExportStatus: [
+        "查询朋友圈批量导出任务进度 (返回分页/动态/原图/产物生成进度, files 里列出可下载的产物名).",
+        Type.Object({ taskId: Type.String({ description: "exportFriendCircle 返回的 task_id" }) }),
+        (taskId) => getFriendCircleApi().batchDownloadStatus(taskId),
+    ],
+    /**
+     * /FriendCircle/BatchDownloadFile — 取导出产物 (原始文件流, 非 JSON).
+     * 返回 bytes(字节数)+contentType+fileName — 内容本身太大, 不进 agent 上下文.
+     */
+    downloadFriendCircleExport: [
+        "下载朋友圈批量导出的产物文件 (任务完成后才可下载). name 可选: 朋友圈.zip (默认) / 朋友圈.md / 导出信息.json. 返回文件字节数与文件名.",
+        Type.Object({
+            taskId: Type.String({ description: "exportFriendCircle 返回的 task_id" }),
+            name: Type.Optional(Type.String({ description: "产物名, 默认 朋友圈.zip" })),
+        }),
+        async (taskId, name) => {
+            const r = await getFriendCircleApi().batchDownloadFile(taskId, name ?? "");
+            // 文件内容不进 agent 上下文 — 只回报元信息
+            return {
+                Code: r.Code,
+                CodeValue: r.CodeValue,
+                fileName: r.fileName,
+                contentType: r.contentType,
+                sizeBytes: r.bytes?.byteLength ?? 0,
+            };
+        },
+    ],
+    /**
+     * /FriendCircle/AutoForward — 配置朋友圈自动跟发.
+     * ⚠️ 这是**自动发布**开关 (把 sourceWxid 的新动态同步发到自己朋友圈):
+     *   - enabled=true 时厂商要求 content_owner_authorized=true (已获源内容所有者授权), 属调用方合规声明;
+     *   - 与其它发布接口一致, 服务端还会校验 friendCirclePublishEnabled 账号开关 (默认关闭);
+     *   - 首次启用请先确认账号白名单与开关。
+     */
+    setFriendCircleAutoForward: [
+        "配置朋友圈自动跟发 (把 sourceWxid 的新公开动态自动同步发到自己朋友圈). enabled=true 时必须同时传 contentOwnerAuthorized=true 确认已获源内容所有者授权; 且账号级 friendCirclePublishEnabled 开关须已打开.",
+        Type.Object({
+            enabled: Type.Boolean({ description: "是否开启自动跟发" }),
+            sourceWxid: Type.Optional(Type.String({ description: "被跟发的个人 wxid (开启时必填)" })),
+            delaySeconds: Type.Optional(Type.Number({ description: "发现新动态后延迟发布秒数, 0-300" })),
+            locationMode: Type.Optional(Type.Number({ description: "0=保留原位置, 1=移除位置" })),
+            blackList: Type.Optional(Type.Array(Type.String(), { description: "不允许查看跟发动态的 wxid 列表" })),
+            contentOwnerAuthorized: Type.Optional(Type.Boolean({ description: "确认已获源内容所有者同步发布授权, 开启时必须为 true" })),
+        }),
+        (enabled, sourceWxid, delaySeconds, locationMode, blackList, contentOwnerAuthorized) => getFriendCircleApi().autoForward(enabled, {
+            sourceWxid,
+            delaySeconds,
+            locationMode: locationMode === 0 ? 0 : locationMode === 1 ? 1 : undefined,
+            blackList,
+            contentOwnerAuthorized,
+        }),
+    ],
+    /** /FriendCircle/AutoForwardStatus — 查自动跟发策略与最近状态 */
+    getFriendCircleAutoForwardStatus: [
+        "查询朋友圈自动跟发策略 (开关/来源账号) 与最近同步状态、已处理动态统计.",
+        Type.Object({}),
+        () => getFriendCircleApi().autoForwardStatus(),
     ],
 };
 //# sourceMappingURL=friendcircle-meta.js.map

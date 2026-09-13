@@ -117,7 +117,8 @@ export async function sendMessage(p) {
         case "location":
             return callMsg(accountId, (api) => api.shareLocation(toWxid, p.latitude ?? 0, p.longitude ?? 0, p.label));
         case "miniprogram":
-            return callMsg(accountId, (api) => api.sendXCX(toWxid, p.title ?? "", p.desc ?? "", p.content ?? "", p.appId ?? "", p.thumbUrl));
+            // v1.6.2 XCX-PAGEPATH: p.pagePath 给了才走现代卡片 (内部页面), 否则 legacy
+            return callMsg(accountId, (api) => api.sendXCX(toWxid, p.title ?? "", p.desc ?? "", p.content ?? "", p.appId ?? "", p.thumbUrl, p.pagePath, p.username));
         case "emoji":
             return callMsg(accountId, (api) => api.sendEmoji(toWxid, p.content ?? "", p.size ?? 0));
         default:

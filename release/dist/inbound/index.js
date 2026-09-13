@@ -25,10 +25,8 @@ export async function handleWebhookPayload(accountId, payload) {
     if (!msg)
         return null;
     const state = getDefaultAccountRegistry().get(accountId);
-    // v1.5.2 B-fix (2026-08-25 22:28 老板拍 A): 从 state.config.heartflow 取 cfg 传给 enrichAndSaveMessage
-    //   (修复 v1.5.0 B 方案 cfg 链未接 accounts.cfg bug, 让 webhook 路径也能触发心流独立 trigger)
-    const cfg = state?.config?.heartflow;
-    const result = await enrichAndSaveMessage(msg, cfg);
+    // 2026-09-13: enrichAndSaveMessage 不再收 heartflow cfg (其"独立心流 trigger"路径已删, 只落库)
+    const result = await enrichAndSaveMessage(msg);
     if (!result.saved) {
         log.warn(`handleWebhookPayload persist failed: ${result.error}`);
     }

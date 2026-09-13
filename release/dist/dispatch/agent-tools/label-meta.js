@@ -45,5 +45,13 @@ export const LABEL_META = {
         Type.Object({ labelId: Type.Number() }),
         (labelId) => getLab().getWXFriendListByLabel(labelId),
     ],
+    /** /Label/UpdateOrder — 更新标签显示顺序 (v1.6.0 SWAGGER-323 新 API) */
+    updateLabelOrder: [
+        "更新通讯录标签的显示顺序. 数组顺序 = 目标显示顺序, 未列出的标签顺序不变. 标签 ID 用 getLabelList 拿.",
+        Type.Object({
+            labelIds: Type.Array(Type.Number(), { description: "按目标显示顺序排列的标签 ID 列表" }),
+        }),
+        (labelIds) => getLab().updateOrder(labelIds),
+    ],
 };
 //# sourceMappingURL=label-meta.js.map

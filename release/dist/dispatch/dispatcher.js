@@ -21,14 +21,15 @@ import { accountContext } from "./account-context.js";
 import { sendText } from "./outbound.js";
 import { quoteReply } from "../send/quote-reply.js";
 import { buildQuoteContext } from "./reply-helpers.js";
-import { CHANNEL_ID, GROUP_CONTEXT_WINDOW, GROUP_CONTEXT_MAX_IMAGES } from "../core/constants.js";
+import { CHANNEL_ID, GROUP_CONTEXT_WINDOW, GROUP_CONTEXT_MAX_IMAGES, MsgType } from "../core/constants.js";
 import { getMessages, getMessageByMsgIdOrNewId } from "../storage/db/messages.js";
 import { waitForPendingEnrich } from "../inbound/handler.js";
 import { extractReferencedFromReplyContext, extractReferencedFromApp } from "../inbound/parser/quote.js";
 import { classifyGroupIntent, decideIntentWithLlm, needsLlm, normalizeTriggerText, toIntentCandidate } from "./intent-llm.js";
 import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
 import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
-import { recordRawMessage } from "../inbound/heartflow.js";
+import { recordRawMessage, resolveHfLearning, HF_LEARNING_DEFAULTS } from "../inbound/heartflow.js";
+import { persistHfSendOutcome } from "../inbound/heartflow-learn.js";
 import { getGroupMood, buildMoodSystemPrompt } from "../inbound/affection.js";
 // re-export (兼容旧测试/外部引用) — classifyGroupIntent/GroupIntent 定义在 intent-llm.ts
 export { classifyGroupIntent } from "./intent-llm.js";
@@ -715,8 +716,7 @@ async function dispatchOne(msg, ctx = {}) {
         storePath = runtime.session.resolveStorePath?.("", { accountId: msg.accountId }) ?? "";
     }
     catch (e) {
-        // 良性 (comment 见上: 漏传只是拿不到 storePath, 走默认), 几乎每次入站都触发带 stack → 降 debug
-        debug(`dispatch: resolveStorePath failed: ${formatErr(e)}`);
+        warn(`dispatch: resolveStorePath failed: ${formatErr(e)}`);
     }
     // (群聊同 session, 只看 @ 人自己的上下文; 图片≤3 直接 MediaUrls 看图)
     // groupContextEnabled 开关 (默认 false, 显式 true 才注入群聊上下文, 从 registry 读)
@@ -769,7 +769,7 @@ async function dispatchOne(msg, ctx = {}) {
     }
     // 文件消息 (v1 schema, handler 已注入 [文件] + [系统提示-文件限制]) → 绕过 AI 直接回固定模板:
     // 文件内容读不了, AI 自由发挥无价值; 固定模板 100% 不出错、零模型调用、响应最快
-    if (msg.msgType === 49) {
+    if (msg.msgType === MsgType.APP) {
         const autoReply = buildFileAutoReply(msg.content);
         if (autoReply?.isFileMsg && autoReply.replyText) {
             try {
@@ -812,7 +812,7 @@ async function dispatchOne(msg, ctx = {}) {
                         const ossImgUrl = imgUrlMatch?.[1] ?? payload?.mediaUrls?.[0] ?? payload?.mediaUrl ?? "";
                         // 当前全 msgType 引用回复 (老板 v1.1.50 拍板放开)
                         const shouldQuote = true;
-                        debug(`deliver called: textLen=${text.length} hasOssImg=${!!ossImgUrl} msgType=${msg.msgType} shouldQuote=${shouldQuote} replyTo=${msg.msgId}/${msg.newMsgId ?? ""}`);
+                        info(`deliver called: textLen=${text.length} hasOssImg=${!!ossImgUrl} msgType=${msg.msgType} shouldQuote=${shouldQuote} replyTo=${msg.msgId}/${msg.newMsgId ?? ""}`);
                         if (!text && !ossImgUrl)
                             return { ok: true, msgId: "" };
                         // 把被引用消息的元数据传透给 quoteReply (构建完整 refermsg)
@@ -827,6 +827,12 @@ async function dispatchOne(msg, ctx = {}) {
                             createtime: shouldQuote ? msg.ts : undefined,
                             innerType: shouldQuote ? msg.msgType : undefined,
                         });
+                        // v1.6.x HEARTFLOW-LEARN: 仅心流主动回复 send 后落账 (fire-and-forget, 不阻断 deliver 返回)
+                        if (msg.trigger === "heartflow") {
+                            const hfCfg = getDefaultAccountRegistry().get(msg.accountId)?.config.heartflow;
+                            const observeSec = hfCfg ? resolveHfLearning(hfCfg).observeWindowSec : HF_LEARNING_DEFAULTS.observeWindowSec;
+                            void persistHfSendOutcome(msg.accountId, msg.msgId, result, Math.floor(Date.now() / 1000), observeSec);
+                        }
                         info(`[WPP DEBUG-DELIVER] sendAiReply done: ok=${result.ok} error=${result.error ?? "none"} msgId=${result.msgId ?? ""}`);
                         return result;
                     },
