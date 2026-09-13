@@ -44,6 +44,7 @@ import {
 import {
   resolveThresholdOverride,
   persistHfJudged,
+  persistHfJudgedBelowThreshold,
   markHfGroupEngaged,
 } from "./heartflow-learn.js";
 import {
@@ -647,33 +648,42 @@ export function createWppInboundHandler(
               );
               // P1: 无论结果, 标记已 judge (频率闸生效)
               markHeartflowJudged(chatId, nowMs);
+              // v1.6.x HEARTFLOW-FEEDBACK: ledger 行字段两个分支共用 (judge 真出了结果才落;
+              // judgeResult=null 时表示没判定发生, 已有 warn 留痕, 不落台账以免与"判定未过"混淆)
+              const hfRecord = judgeResult
+                ? {
+                    account_id: m.accountId,
+                    inbound_msg_id: m.msgId,
+                    new_msg_id: m.newMsgId ?? null,
+                    group_id: chatId,
+                    from_wxid: m.fromWxid ?? null,
+                    msg_type: m.msgType == null ? null : String(m.msgType),
+                    content_head: (m.content ?? "").replace(/\s+/g, " ").slice(0, 256) || null,
+                    judge_overall: judgeResult.overallScore,
+                    dim_r: judgeResult.dimensions.relevance,
+                    dim_w: judgeResult.dimensions.willingness,
+                    dim_s: judgeResult.dimensions.social,
+                    dim_t: judgeResult.dimensions.timing,
+                    dim_c: judgeResult.dimensions.continuity,
+                    effective_threshold: effCfg.replyThreshold ?? 0.6,
+                    energy: st.energy,
+                    judged_at: Math.floor(nowMs / 1000),
+                  }
+                : null;
               if (judgeResult?.shouldReply) {
                 m.trigger = "heartflow";
                 recordActiveReply(chatId, effCfg, nowMs);
-                // v1.6.x HEARTFLOW-FEEDBACK: judge 通过落 ledger 行 (失败仅 warn 不阻断 dispatch)
-                await persistHfJudged({
-                  account_id: m.accountId,
-                  inbound_msg_id: m.msgId,
-                  new_msg_id: m.newMsgId ?? null,
-                  group_id: chatId,
-                  from_wxid: m.fromWxid ?? null,
-                  msg_type: m.msgType == null ? null : String(m.msgType),
-                  content_head: (m.content ?? "").replace(/\s+/g, " ").slice(0, 256) || null,
-                  judge_overall: judgeResult.overallScore,
-                  dim_r: judgeResult.dimensions.relevance,
-                  dim_w: judgeResult.dimensions.willingness,
-                  dim_s: judgeResult.dimensions.social,
-                  dim_t: judgeResult.dimensions.timing,
-                  dim_c: judgeResult.dimensions.continuity,
-                  effective_threshold: effCfg.replyThreshold ?? 0.6,
-                  energy: st.energy,
-                  judged_at: Math.floor(nowMs / 1000),
-                });
+                // judge 通过落 ledger 行 (失败仅 warn 不阻断 dispatch)
+                if (hfRecord) await persistHfJudged(hfRecord);
                 dispatched.push(m);
                 info(`[WPP HEARTFLOW] trigger: peer=${m.peerId} msgId=${m.msgId} score=${judgeResult.overallScore.toFixed(2)} reasoning=${judgeResult.reasoning.slice(0, 40) ?? ""}`);
               } else {
                 recordPassiveMessage(chatId, hfCfg, nowMs);
-                debug(`[WPP HEARTFLOW] skip (score=${judgeResult?.overallScore.toFixed(2) ?? "null"}): peer=${m.peerId}`);
+                // v1.6.1 留痕: judge 跑了但未过阈值 → 也落一行 (judged→suppressed/ below-threshold).
+                //   否则"judge 跑了但没回"与"群里没消息"在日志/DB 里完全同形 (09-11 静默瘫就藏在这)。
+                //   suppressed 行不进学习样本 ⇒ 闭环行为零变更。
+                if (hfRecord) await persistHfJudgedBelowThreshold(hfRecord, Math.floor(nowMs / 1000));
+                debug(`[WPP HEARTFLOW] skip (score=${judgeResult?.overallScore.toFixed(2) ?? "null"}, threshold=${effCfg.replyThreshold ?? 0.6}): peer=${m.peerId}`);
               }
             } catch (e) {
               warn(`[WPP HEARTFLOW] judge error (skip): ${formatErr(e)}`);
