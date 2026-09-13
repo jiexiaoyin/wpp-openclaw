@@ -668,6 +668,27 @@ export function createMysqlAdapter(cfg) {
                 record.judged_at,
             ]);
         },
+        // v1.6.1 可观测 (只读): 近 N 秒台账按 status/reason 计数. 供 /heartflow status 显示
+        //   「judge 跑了但没回」—— 09-11 静默瘫 3 天就是被这个盲区掩盖的.
+        async countHfLedgerByStatus(accountId, sinceSec) {
+            const p = getPool();
+            const rows = await queryWithTimeout(p, `SELECT status, suppressed_reason, COUNT(*) AS n FROM wpp_hf_ledger
+         WHERE account_id = ? AND judged_at >= ? GROUP BY status, suppressed_reason`, [accountId, sinceSec]);
+            const byStatus = {};
+            const bySuppressedReason = {};
+            let total = 0;
+            for (const r of rows) {
+                const n = Number(r.n) || 0;
+                const st = String(r.status);
+                byStatus[st] = (byStatus[st] ?? 0) + n;
+                total += n;
+                if (r.suppressed_reason != null) {
+                    const rs = String(r.suppressed_reason);
+                    bySuppressedReason[rs] = (bySuppressedReason[rs] ?? 0) + n;
+                }
+            }
+            return { total, byStatus, bySuppressedReason };
+        },
         async setHfLedgerSent(accountId, inboundMsgId, sentAtSec, windowExpiresAtSec) {
             const p = getPool();
             await queryWithTimeout(p, `UPDATE wpp_hf_ledger SET status = 'sent', sent_at = ?, window_expires_at = ?

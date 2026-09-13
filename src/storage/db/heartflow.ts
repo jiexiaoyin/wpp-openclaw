@@ -15,6 +15,14 @@ export async function recordHfJudged(record: HfLedgerRecord): Promise<void> {
   return getAdapter().recordHfJudged(record);
 }
 
+/** v1.6.1 可观测 (只读): 近 sinceSec 秒台账按 status/reason 计数 */
+export async function countHfLedgerByStatus(
+  accountId: string,
+  sinceSec: number,
+): Promise<{ total: number; byStatus: Record<string, number>; bySuppressedReason: Record<string, number> }> {
+  return getAdapter().countHfLedgerByStatus(accountId, sinceSec);
+}
+
 /** judged → sent (guard: 仅 judged) */
 export async function setHfLedgerSent(
   accountId: string,

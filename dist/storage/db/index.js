@@ -6,7 +6,7 @@ export { setBackend, getAdapter, currentBackendName, currentConfig, resetAdapter
 export { saveMessage, getMessages, getMessageById, getMessageByMsgIdOrNewId, findMessageByMd5, saveSvridMapping, getSvridByMd5, saveSynckey, getSynckey, } from "./messages.js";
 export { initDbPool, pingDb, initSchema, closeDb } from "./connection.js";
 export { saveJargonTerm, getJargonTerms, hasJargonTerm } from "./jargon.js";
-export { recordHfJudged, setHfLedgerSent, setHfLedgerSuppressed, markHfEngaged, closeHfExpiredWindows, expireHfStaleJudged, getHfClosedRecent, upsertHfGroupState, getHfGroupState, listHfGroupStates, logHfThresholdChange, getHfLedgerDistinctClosedGroups, } from "./heartflow.js";
+export { recordHfJudged, countHfLedgerByStatus, setHfLedgerSent, setHfLedgerSuppressed, markHfEngaged, closeHfExpiredWindows, expireHfStaleJudged, getHfClosedRecent, upsertHfGroupState, getHfGroupState, listHfGroupStates, logHfThresholdChange, getHfLedgerDistinctClosedGroups, } from "./heartflow.js";
 export { upsertAccount, getAccounts, getAccount } from "./accounts.js";
 export { createMysqlAdapter, queryWithTimeout, closeMysqlForTest, _internal as mysqlInternal, } from "./mysql.js";
 //# sourceMappingURL=index.js.map
