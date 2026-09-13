@@ -447,9 +447,9 @@ export function createWppInboundHandler(
         persistResults.set(m, t);
       }
       const persistBatch = batch.filter((m) => persistResults.get(m)?.via !== "blocked");
-      // v1.5.2 B-fix (2026-08-25 22:28 老板拍 A): 传 opts.heartflow 给 enrichBatch
-      //   (修复 v1.5.0 B 方案 cfg 链未接 accounts.cfg bug, 让 enrichBatch fire-and-forget 用真 accounts cfg)
-      const r = await enrichBatch(persistBatch, opts.heartflow);
+      // 2026-09-13: enrichBatch 现在只落库 (原 cfg 参数只为驱动它内部的"独立心流 trigger" fire-and-forget,
+      //   该路径已删 — 它只 log 决策、从不发送也从不落台账, 且每条群消息双烧 2 次 LLM judge)
+      const r = await enrichBatch(persistBatch);
       if (r.failed > 0) {
         warn(`inbound batch persist: ${r.failed}/${persistBatch.length} failed (skipped ${batch.length - persistBatch.length} blocked)`);
       }

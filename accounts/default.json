@@ -80,8 +80,6 @@
     "minJudgeIntervalSec": 0,
     "maxRetries": 1,
     "timeoutMs": 5000,
-    "independentTrigger": true,
-    "_independentTrigger_note": "v1.5.0 B-fix 20:06 老板拍板 B (3 层分层架构): enrichBatch 写库后, 异步触发心流独立 trigger, 绕过 requireAtMention 限制. 老板原 query 19:51: 非@消息也想进入会话. 默认 dev=false (保持现有兼容), deploy=true (老板实测)",
     "learning": {
       "enabled": true,
       "_note": "v1.6.x 心流反馈闭环: 只对白名单群. enabled=true 但每群满 10 条已收敛样本 (约 1-2 周真实流量) 前阈值不动 = 自然灰, 行为零变更; 之后按接话率双向自动调阈, 区间 [0.3,0.9] 硬钳制 + 单次 0.05 + 4h 变更冷却 + 审计留痕. 想暂缓: 置 false. 想手动干预: /heartflow threshold"
