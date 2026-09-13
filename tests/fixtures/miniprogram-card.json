@@ -1,0 +1,41 @@
+{
+  "_comment": "真实报文 (生产 DB wpp_messages.id=30869, 2026-09-13 20:31:28 老板转发国补小程序卡片). 只删了 raw_xml_json (与 raw_xml 同源的大体积副本), 其余逐字段保真.",
+  "app": {
+    "category": "mini_program",
+    "cover_image": {
+      "aes_key": "94ef57cda2f264bd0f9288481c293d70",
+      "cdn": {
+        "aes_key": "94ef57cda2f264bd0f9288481c293d70",
+        "file_no": "305f020100044b304902010002041b2d632702032e6b3702049806912702046aa697a0042434646534323865642d643735312d343562352d613537392d633035313838333562633438020405140803020100040d004c53db000000000000000000",
+        "height": 576,
+        "length": 158087,
+        "md5": "6947085d28f2bb2645a0621c7168ab00",
+        "width": 720
+      },
+      "cdn_length": 158087,
+      "download_context": {
+        "endpoint": "/api/Tools/DownloadMiniProgramCover",
+        "file_aes_key": "94ef57cda2f264bd0f9288481c293d70",
+        "file_no": "305f020100044b304902010002041b2d632702032e6b3702049806912702046aa697a0042434646534323865642d643735312d343562352d613537392d633035313838333562633438020405140803020100040d004c53db000000000000000000",
+        "variant": "cover"
+      },
+      "file_no": "305f020100044b304902010002041b2d632702032e6b3702049806912702046aa697a0042434646534323865642d643735312d343562352d613537392d633035313838333562633438020405140803020100040d004c53db000000000000000000",
+      "height": 576,
+      "md5": "6947085d28f2bb2645a0621c7168ab00",
+      "width": 720
+    },
+    "description": "国家消费品换新补贴微信端",
+    "icon_url": "https://mmbiz.qpic.cn/mmbiz_png/icqH57e7Oj434j5uSpia4TZka3icGBiaCaAHuMLblSCyicAOz5RAib3FOvc6KPNOSbQib1ylmJiaWiatbmYSaglMjoL3bwQ/640?wx_fmt=png&wxfrom=200",
+    "mini_program": {
+      "app_id": "wx8386cf8f5e76d36a",
+      "page_path": "pages/index/index.html?activity_id=320800",
+      "source_display_name": "国家消费品换新补贴微信端",
+      "source_username": "wx8386cf8f5e76d36a",
+      "type": 2,
+      "username": "gh_55addd727905@app",
+      "version": 31
+    },
+    "raw_xml": "<?xml version=\"1.0\"?>\n<msg>\n\t<appmsg>\n\t\t<title>快来领取政府家电数码补贴，单件最高补1500元</title>\n\t\t<weappinfo>\n\t\t\t<pagepath>pages/index/index.html?activity_id=320800</pagepath>\n\t\t\t<weappiconurl>https://mmbiz.qpic.cn/mmbiz_png/icqH57e7Oj434j5uSpia4TZka3icGBiaCaAHuMLblSCyicAOz5RAib3FOvc6KPNOSbQib1ylmJiaWiatbmYSaglMjoL3bwQ/640?wx_fmt=png&amp;wxfrom=200</weappiconurl>\n\t\t\t<version>31</version>\n\t\t\t<appid>wx8386cf8f5e76d36a</appid>\n\t\t\t<type>2</type>\n\t\t\t<username>gh_55addd727905@app</username>\n\t\t</weappinfo>\n\t\t<sourceusername>wx8386cf8f5e76d36a</sourceusername>\n\t\t<findernamecard>\n\t\t\t<lastGMsgID />\n\t\t\t<content_type>0</content_type>\n\t\t\t<auth_icon_url />\n\t\t\t<auth_icon>0</auth_icon>\n\t\t\t<nickname />\n\t\t\t<avatar />\n\t\t\t<auth_job />\n\t\t\t<ecSource />\n\t\t\t<username />\n\t\t</findernamecard>\n\t\t<appattach>\n\t\t\t<cdnthumbheight>576</cdnthumbheight>\n\t\t\t<cdnthumbmd5>6947085d28f2bb2645a0621c7168ab00</cdnthumbmd5>\n\t\t\t<cdnthumbwidth>720</cdnthumbwidth>\n\t\t\t<cdnthumblength>158087</cdnthumblength>\n\t\t\t<cdnthumburl>305f020100044b304902010002041b2d632702032e6b3702049806912702046aa697a0042434646534323865642d643735312d343562352d613537392d633035313838333562633438020405140803020100040d004c53db000000000000000000</cdnthumburl>\n\t\t\t<cdnthumbaeskey>94ef57cda2f264bd0f9288481c293d70</cdnthumbaeskey>\n\t\t</appattach>\n\t\t<patMsg>\n\t\t\t<records>\n\t\t\t\t<recordNum>0</recordNum>\n\t\t\t</records>\n\t\t</patMsg>\n\t\t<type>33</type>\n\t\t<sourcedisplayname>国家消费品换新补贴微信端</sourcedisplayname>\n\t\t<des>国家消费品换新补贴微信端</des>\n\t\t<md5>6947085d28f2bb2645a0621c7168ab00</md5>\n\t</appmsg>\n\t<fromusername>q139198824</fromusername>\n\t<scene>0</scene>\n\t<appinfo>\n\t\t<version>3</version>\n\t\t<appname>国家消费品换新补贴微信端</appname>\n\t</appinfo>\n\t<commenturl></commenturl>\n</msg>",
+    "title": "快来领取政府家电数码补贴，单件最高补1500元"
+  }
+}
