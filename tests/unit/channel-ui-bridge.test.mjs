@@ -26,9 +26,9 @@ const rmScratch = async (a) => rm(fp(a), { force: true });
 const writeOcj = (o) => writeFile(join(stateDir, 'openclaw.json'), JSON.stringify(o, null, 2));
 
 test('T1 extractChannelAccountsBlock: 平铺→default, accounts 多账号, accounts.default 覆盖', () => {
-  const m = extractChannelAccountsBlock({ enabled: true, nickname: '益融', allowFrom: ['a'], accounts: { smoka: { nickname: 'B', agent: 'wpp-b' } } });
+  const m = extractChannelAccountsBlock({ enabled: true, nickname: 'TESTBOT', allowFrom: ['a'], accounts: { smoka: { nickname: 'B', agent: 'wpp-b' } } });
   assert.ok(m.has('default') && m.has('smoka'));
-  assert.equal(m.get('default').nickname, '益融');
+  assert.equal(m.get('default').nickname, 'TESTBOT');
   assert.equal(m.get('smoka').agent, 'wpp-b');
   const b2 = extractChannelAccountsBlock({ nickname: 'flat', accounts: { default: { nickname: 'nested' } } });
   assert.equal(b2.get('default').nickname, 'nested');
