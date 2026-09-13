@@ -116,6 +116,14 @@ export interface DbAdapter {
   // ====== v1.6.x HEARTFLOW-FEEDBACK (心流反馈闭环) ======
   /** judge 通过落行 (INSERT IGNORE, dup 保留首次决策) */
   recordHfJudged(record: HfLedgerRecord): Promise<void>;
+  /**
+   * v1.6.1 可观测: 近 sinceSec 秒台账按 status (+ suppressed_reason) 计数 (只读, 供 /heartflow status 显示).
+   * 返回 { total, byStatus, bySuppressedReason } —— 让「judge 跑了但没回」在运维面可见.
+   */
+  countHfLedgerByStatus(
+    accountId: string,
+    sinceSec: number,
+  ): Promise<{ total: number; byStatus: Record<string, number>; bySuppressedReason: Record<string, number> }>;
   /** judged → sent (guard: 仅 judged 可推进, 防 deliver 双调重置窗) */
   setHfLedgerSent(
     accountId: string,

@@ -6,6 +6,10 @@ import { getAdapter } from "./factory.js";
 export async function recordHfJudged(record) {
     return getAdapter().recordHfJudged(record);
 }
+/** v1.6.1 可观测 (只读): 近 sinceSec 秒台账按 status/reason 计数 */
+export async function countHfLedgerByStatus(accountId, sinceSec) {
+    return getAdapter().countHfLedgerByStatus(accountId, sinceSec);
+}
 /** judged → sent (guard: 仅 judged) */
 export async function setHfLedgerSent(accountId, inboundMsgId, sentAtSec, windowExpiresAtSec) {
     return getAdapter().setHfLedgerSent(accountId, inboundMsgId, sentAtSec, windowExpiresAtSec);

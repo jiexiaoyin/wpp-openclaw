@@ -9,7 +9,7 @@ import { CHANNEL_ID, PLUGIN_NAME, PLUGIN_VERSION, DEFAULT_BOT_NICKNAME } from ".
 import { loadGlobalConfigAsync, loadAccountConfigAsync, listAccountIds, isConfigured } from "./config.js";
 import { listAccountIds as helperListAccountIds, resolveAccount, defaultAccountId, isConfigured as helperIsConfigured, unconfiguredReason, describeAccount, } from "./config-helpers.js";
 import { getDefaultAccountRegistry } from "./account-state.js";
-import { closeDb, initDbPool, getSynckey, saveSynckey, listHfGroupStates } from "./db.js";
+import { closeDb, initDbPool, getSynckey, saveSynckey, listHfGroupStates, countHfLedgerByStatus } from "./db.js";
 import { WechatpadproWsClient } from "./ws-client.js";
 import { WechatpadproWebhookServer } from "./webhook-receiver.js";
 import { createWppInboundHandler } from "./inbound/handler.js";
@@ -260,7 +260,31 @@ async function handleFeatureCommand(feature, args, send, accountId) {
             catch (e) {
                 learnLine += " (读学习状态失败)";
             }
-            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}`;
+            // v1.6.1 可观测: 近 24h 台账摘要 —— 「judge 跑了但没回」不再是盲区 (09-11 静默瘫教训)
+            let ledgerLine = "";
+            try {
+                const since = Math.floor(Date.now() / 1000) - 86400;
+                const c = await countHfLedgerByStatus(accountId, since);
+                if (c.total === 0) {
+                    ledgerLine = "\n近24h台账: 0 行 (群里无消息 / judge 未跑 / judge 全失败 — 看日志 [WPP HEARTFLOW])";
+                }
+                else {
+                    const replied = (c.byStatus.sent ?? 0) + (c.byStatus.closed ?? 0);
+                    const silent = c.byStatus.suppressed ?? 0;
+                    const pending = c.byStatus.judged ?? 0;
+                    const reasons = Object.entries(c.bySuppressedReason)
+                        .map(([k, v]) => `${k} ${v}`)
+                        .join(", ");
+                    ledgerLine =
+                        `\n近24h台账: judge ${c.total} 次 → 回复 ${replied} / 沉默 ${silent}` +
+                            (pending ? ` / 待发送 ${pending}` : "") +
+                            (reasons ? `\n  沉默原因: ${reasons}` : "");
+                }
+            }
+            catch (e) {
+                ledgerLine = "\n近24h台账: (读台账失败)";
+            }
+            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}${ledgerLine}`;
         }
         await send(`${label} (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}${extra}\n用法: /${feature} on|off|status`);
         return true;

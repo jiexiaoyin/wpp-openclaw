@@ -97,7 +97,9 @@ test('8. handler.ts: effCfg override 注入 + persistHfJudged + markHfGroupEngag
   const h = src('src/inbound/handler.ts');
   assert.match(h, /resolveThresholdOverride\(m\.accountId, chatId, hfCfg\)/, 'judge 前必须 resolveThresholdOverride');
   assert.match(h, /const effCfg = override === undefined \? hfCfg :/, 'override 无则沿用 hfCfg (零 clone)');
-  assert.match(h, /await persistHfJudged\(\{/, 'shouldReply 分支必须 await persistHfJudged');
+  // v1.6.1: ledger 行字段上提为 hfRecord ({judgeResult ? {...} : null}), 两分支共用 → 断言改形不移牙
+  assert.match(h, /await persistHfJudged\(hfRecord\)/, 'shouldReply 分支必须 await persistHfJudged(hfRecord)');
+  assert.match(h, /const hfRecord = judgeResult[\s\S]{0,40}\? \{/, 'ledger 行必须仅在 judgeResult 非空时构造 (judge 崩了不落台账)');
   assert.match(h, /effective_threshold:\s*effCfg\.replyThreshold \?\? 0\.6/, 'ledger 必须记录 effective_threshold (learned??账号级)');
   assert.match(h, /void markHfGroupEngaged\(/, '人类入站必须 fire-and-forget markHfGroupEngaged');
   assert.match(h, /judge_overall:/, 'ledger 必须含 judge_overall');

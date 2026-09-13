@@ -27,6 +27,7 @@ export { initDbPool, pingDb, initSchema, closeDb } from "./connection.js";
 export { saveJargonTerm, getJargonTerms, hasJargonTerm } from "./jargon.js";
 export {
   recordHfJudged,
+  countHfLedgerByStatus,
   setHfLedgerSent,
   setHfLedgerSuppressed,
   markHfEngaged,

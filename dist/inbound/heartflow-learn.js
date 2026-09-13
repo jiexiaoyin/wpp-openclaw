@@ -95,6 +95,31 @@ export async function persistHfJudged(record) {
     }
 }
 /**
+ * judge 跑了、但判定**不回复** → 也落一行 ledger (judged → 立即 suppressed, reason='below-threshold').
+ *
+ * 为什么要有 (2026-09-13): 旧码只在 shouldReply=true 时落 ledger ⇒「judge 跑了但没过」在
+ *   **日志与 DB 里零留痕**, 与「群里压根没消息」外观完全一致。09-11 静默瘫 3 天正是被这一点掩盖:
+ *   台账最后一行停在 09-10, 而真实原因 (judge 恒失败) 只在那条 warn 里。
+ *
+ * 为什么可安全加: suppressed 行**不进阈值学习样本** —— getHfClosedRecent 与
+ *   getHfLedgerDistinctClosedGroups 都要求 `status='closed' AND engaged IS NOT NULL`, 故
+ *   学习闭环与既有行为**零变更**; 频率 = 每群每个 judge 冷却周期最多一行 (minJudgeIntervalSec 闸)。
+ *
+ * 注: 走 INSERT 后再 UPDATE 两步, 复用既有状态机 (INSERT IGNORE 幂等 + 仅 judged 可推进的 guard),
+ *   不新增 SQL 分支。
+ *
+ * @param atSec 收敛时刻 (秒), 与 record.judged_at 同源
+ */
+export async function persistHfJudgedBelowThreshold(record, atSec) {
+    try {
+        await dbRecordHfJudged(record);
+        await setHfLedgerSuppressed(record.account_id, record.inbound_msg_id, "below-threshold", atSec);
+    }
+    catch (e) {
+        warn(`[WPP HF] ledger below-threshold insert failed (non-fatal): ${formatErr(e)}`);
+    }
+}
+/**
  * deliver 之后落发送结果: sent → 开观察窗 (窗口时长由调用方 observeSec 给); suppressed → 收敛.
  * ok=false (pending) 不改 → 留给 sweep 呆账收敛.
  */
