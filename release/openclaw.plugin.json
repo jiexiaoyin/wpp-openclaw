@@ -309,14 +309,14 @@
               },
               "model": {
                 "type": "string",
-                "default": "deepseek-v4-flash",
+                "default": "deepseek-flash",
                 "enum": [
                   "MiniMax-M2.5",
                   "MiniMax-M2.7",
                   "MiniMax-M2.7-highspeed",
-                  "deepseek-v4-flash"
+                  "deepseek-flash"
                 ],
-                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-v4-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
+                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
               },
               "replyThreshold": {
                 "type": "number",
@@ -383,14 +383,14 @@
               },
               "model": {
                 "type": "string",
-                "default": "deepseek-v4-flash",
+                "default": "deepseek-flash",
                 "enum": [
                   "MiniMax-M2.5",
                   "MiniMax-M2.7",
                   "MiniMax-M2.7-highspeed",
-                  "deepseek-v4-flash"
+                  "deepseek-flash"
                 ],
-                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-v4-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
+                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
               },
               "mineIntervalSec": {
                 "type": "number",
@@ -439,14 +439,14 @@
               },
               "model": {
                 "type": "string",
-                "default": "deepseek-v4-flash",
+                "default": "deepseek-flash",
                 "enum": [
                   "MiniMax-M2.5",
                   "MiniMax-M2.7",
                   "MiniMax-M2.7-highspeed",
-                  "deepseek-v4-flash"
+                  "deepseek-flash"
                 ],
-                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-v4-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
+                "description": "判断小模型 (v1.4.1 B-fix 19:39 老板拍 B: deepseek-flash, 切独立集群避免 minimax 端 timeout; 按 8-25 09:35 偏好)"
               },
               "maxUserAffection": {
                 "type": "number",
@@ -510,13 +510,13 @@
           },
           "llmIntentModel": {
             "type": "string",
-            "description": "v1.5.0 P2-fix 20:41 老板拍 A: LLM 判断模型 (消除 hardcode, 走 schema default → accounts cfg 链). 默认 deepseek-v4-flash (跟 heartflow 对齐, 切独立集群按 8-25 09:35 偏好).",
-            "default": "deepseek-v4-flash",
+            "description": "v1.5.0 P2-fix 20:41 老板拍 A: LLM 判断模型 (消除 hardcode, 走 schema default → accounts cfg 链). 默认 deepseek-flash (跟 heartflow 对齐, 切独立集群按 8-25 09:35 偏好).",
+            "default": "deepseek-flash",
             "enum": [
               "MiniMax-M2.5",
               "MiniMax-M2.7",
               "MiniMax-M2.7-highspeed",
-              "deepseek-v4-flash"
+              "deepseek-flash"
             ]
           },
           "llmIntentTimeoutMs": {

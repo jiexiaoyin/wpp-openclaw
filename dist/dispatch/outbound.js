@@ -23,10 +23,29 @@ const TEXT_CHUNK_LIMIT = 6000;
  *   现在: 看 Code && ret, 与 quote-reply.ts:220 已正确判据保持一致
  *   兼容: undefined ret 视为成功 (老 vendor 不返 BaseResponse 兌底)
  */
+/**
+ * 发送成功判据.
+ * v1.3.18: Code=0 只是 HTTP 层, 看 Data.BaseResponse.ret == 0 才算成功.
+ * v1.5.6 SEND-LIST-RET (2026-09-09 华为晨报 ret=-2 静默拒收复盘):
+ *   某些 vendor 端点返 Code=0 + BaseResponse.ret=0, 但逐条结果在 Data.List[].Ret (如 <0 → 拒收),
+ *   只看 BaseResponse.ret 会误报成功 (9/9 华为晨报 30362: BaseResponse.ret=0 但 List[0].Ret=-2 → 群没收到).
+ *   现额外检查 Data.List[]: 只要存在任一条 Ret != 0 → 判失败.
+ *   兼容: 无 List 或 List[].Ret 全为 0/缺省 → 维持原判据.
+ */
 function isSendOk(r) {
     if (r.Code !== 0 && r.Code !== 200)
         return false;
-    const baseRet = r.Data?.BaseResponse?.ret;
+    const d = r.Data;
+    // per-item Ret: 任一条非 0 → 实际拒收 (逐条失败)
+    if (Array.isArray(d?.List) && d.List.length > 0) {
+        for (const item of d.List) {
+            const itemRet = item?.Ret;
+            if (itemRet !== undefined && itemRet !== 0)
+                return false;
+        }
+        return true; // List 全 Ret=0/缺省 → 成功
+    }
+    const baseRet = d?.BaseResponse?.ret;
     return baseRet === 0 || baseRet === undefined;
 }
 /**

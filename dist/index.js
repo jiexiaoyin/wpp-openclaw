@@ -20,6 +20,7 @@ import { sendText as dispatchSendText, sendImage as dispatchSendImage } from "./
 import { AGENT_TOOLS } from "./dispatch/agent-tools/index.js";
 import { getCurrentAccountId } from "./dispatch/account-context.js";
 import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, setAccountField, updateHeartflowGroups, updateBlacklistGroups, ensureWebhookPathToken } from "./config.js";
+import { watchOpenClawChannelConfig, publishAccountCoreFieldsToChannelConfig } from "./channel-ui-bridge.js";
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig } from "./core/runtime-config.js";
 import { resolveAiConfig } from "./config-ai.js";
@@ -1052,6 +1053,21 @@ export const wppChannelPlugin = {
         nativeCommands: false,
         blockStreaming: false,
     },
+    // ============================================================
+    // v1.5.5 CHANNEL-UI-RELOAD (2026-09-10 老板: Channel 页保存 → 即时热生效不掉线)
+    //
+    // 网关 config-reload-plan 按**插件自声明**的 reload 规则决定保存后重启范围:
+    //   - 只声明 noopPrefixes(不声明 configPrefixes!) → channels.wechatpadpro 改动计划 kind="none"
+    //     → 网关对该路径**完全不重启 channel runtime**, 微信连接不掉、网关不重启。
+    //     唯一 applier = channel-ui-bridge 的 fs.watch openclaw.json → merge accounts/<id>.json
+    //     → 既有 watchAccountConfigs 热载引擎 (零重连)。
+    //   - 绝不可再叠加 configPrefixes: 同前缀时 configPrefixes(热=重启该 channel)排序在 noop 前获胜,
+    //     会把编辑变回整 channel 重启 (=掉线)。
+    //   - 不用 accountScopedRestart: extractAccountIdFromPath 对 accountId="default" 返回 null
+    //     (特判整 channel 重启), default 账号无法被账号级重启隔离。
+    reload: {
+        noopPrefixes: ["channels.wechatpadpro"],
+    },
     // OpenClaw channel gateway (start/stop 细粒度入口, 委托 startAccountById/registry.stop)
     gateway: {
         async startAccount(ctx) {
@@ -1158,8 +1174,27 @@ export const plugin = {
         log.info(`plugin.register: registering wppChannelPlugin (v${PLUGIN_VERSION})`);
         api.registerChannel({ plugin: wppChannelPlugin });
         log.info(`plugin.register: wppChannelPlugin registered`);
+        // v1.5.5 CHANNEL-UI-BRIDGE (2026-09-10): fs.watch openclaw.json#channels.wechatpadpro →
+        //   diff 核心字段 → 写回 accounts/<id>.json → 既有 watchAccountConfigs 热载 apply (零重连)。
+        //   openclaw.json 侧保存不会重启 channel (reload.noopPrefixes 声明), 本 watcher 是唯一 applier。
+        //   onAccountEnabled: Channel 页把停用账号翻回启用 → 尽力拉起 (running 账号 enabled 恒 true 不触发)。
+        void watchOpenClawChannelConfig({
+            onAccountEnabled: async (accountId) => {
+                try {
+                    await startAccountById(accountId);
+                    log.info(`[channel-ui] account=${accountId} enabled via Channel 页 → started`);
+                }
+                catch (e) {
+                    log.warn(`[channel-ui] account=${accountId} enabled but start failed: ${formatErr(e)}`);
+                }
+            },
+        });
         // watch accounts/ 目录: 改运行时字段 (allowFrom/groupPolicy/requireAtMention) 零重启生效
         void watchAccountConfigs(async (accountId, newCfg) => {
+            // v1.5.5 CHANNEL-UI-MIRROR (P2): 账号文件被外部(CLI/手动)改动 → 核心字段 publish 回
+            //   openclaw.json#channels.wechatpadpro, Channel 页显示真实值。值相等 → 零写 (双向环打断);
+            //   页面发起的写 (经 bridge) 已是同值 → 天然 no-op。明文凭证永不 publish。
+            void publishAccountCoreFieldsToChannelConfig(accountId).catch((e) => log.warn(`[channel-ui] mirror failed: ${e.message}`));
             const registry = getDefaultAccountRegistry();
             const state = registry.get(accountId);
             if (!state) {
