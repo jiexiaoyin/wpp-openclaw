@@ -263,9 +263,24 @@ export function makeWppMsg(ctx: WppAccountCtx) {
         ToUserName: toWxid,
       }),
 
-    /** 发 XML 应用消息: /Msg/SendApp 是群发端点不能用, 用 /Msg/ShareLink */
+    /** 发 XML 应用消息: /Msg/SendApp 曾被判为群发端点不能用, 用 /Msg/ShareLink (见下 sendAppMsg 的语义变更说明) */
     sendApp: (toWxid: string, xml: string, _appName?: string) =>
       dispatch("/Msg/ShareLink", { ToWxid: toWxid, Type: 5, Xml: xml }),
+
+    /**
+     * /Msg/SendApp — 发送 App 类型消息 (需自行构造 XML).
+     * ⚠️ v1.6.0 SWAGGER-323 **语义已变, 但本包装仍按最保守方式暴露**:
+     *   - 旧 swagger: 本端点 = **群发** (SendGroupMassMsgTextParamDoc), 项目当年专门绕开它改用
+     *     /Msg/ShareLink (见上方 sendApp 与 CHANGELOG v1.1.17 P0-B「群发端点」事故)。
+     *   - 当前容器 swagger (v09102): body = Msg.SendAppMsgParamDoc {ToWxid, Type, Xml}
+     *     —— 与 /Msg/ShareLink **同一个 definition**, summary「发送App消息」, 描述里已无群发字样。
+     *   ⇒ 厂商很可能已把它改成定向发送, 但**无活体证据**且史上有群发事故, 故:
+     *     ① toWxid 是**必传形参** — 结构上不可能发出无收件人的调用;
+     *     ② **不注册 agent 工具** (与 publishCircleRaw 同则: AI 不该有原始 XML 发送能力);
+     *     ③ 首次启用前请在测试账号确认 Code=0 且消息只到 toWxid。
+     */
+    sendAppMsg: (toWxid: string, xml: string, type = 5) =>
+      dispatch("/Msg/SendApp", { ToWxid: toWxid, Type: type, Xml: xml }),
 
     /** /Msg/SendCDNFile — 转发 CDN 文件 (swagger Msg.DefaultParamDoc {Content, ToWxid}; Content=收到文件消息xml) */
     sendCDNFile: (toWxid: string, fileUrl: string) =>

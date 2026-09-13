@@ -1,4 +1,7 @@
 // src/send/tenpay.ts - TenPay tag (7 endpoints: 微信支付/红包)
+// v1.6.0 SWAGGER-323 (2026-09-13): Openwxhb/Qrydetailwxhb/Receivewxhb 三个红包端点此前发的是
+//   `redPacketId` — swagger 里不存在该字段, 且注释内嵌的旧结构 (含 Wxid) 现 definition 已删.
+//   已改为 Xml/SendUserName/TimingIdentifier/Encrypt_* 真实必填项.
 // v1.3.20 P1-TENPAY-FIELDS (2026-08-10): 5 个新端点字段对齐 vendor swagger
 //   - 老端点 GeMaSkd/SjSkd/HongBao*/Openwxhb/Qrydetailwxhb/Receivewxhb 字段名仍为 PascalCase (vendor 老 definition 也是 PascalCase, 保持兼容)
 //   - 新端点 Collectmoney/ConfirmPreTransferApi/GeneratePayQCode/GetRedPacketListApi/WXCreateRedPacketApi 字段对齐 vendor 全小写定义 (TenPay.CollectmoneyModel 等)
@@ -30,17 +33,38 @@ export function makeWppTenPay(ctx: WppAccountCtx) {
         Xml: xml,
       }),
 
-    /** /TenPay/Openwxhb — 拆开红包 (TenPay.OpenwxhbParam: Encrypt_key/Encrypt_userinfo/SendUserName/TimingIdentifier/Wxid/Xml) */
-    openwxhb: (redPacketId: string) =>
-      dispatch("/TenPay/Openwxhb", { redPacketId }),
+    /** /TenPay/Openwxhb — 拆开红包
+     *  v1.6.0 SWAGGER-323 对齐: swagger TenPay.OpenwxhbParamDoc
+     *    {Xml*, SendUserName*, TimingIdentifier*, Encrypt_key, Encrypt_userinfo}
+     *  旧码只发 `redPacketId` — 该字段**在 swagger 里根本不存在**, 且上面注释内嵌的旧结构
+     *  (带 Wxid) 现 definition 也已删除. 参数取自红包消息 (Xml) 与其领取结果. */
+    openwxhb: (xml: string, sendUserName: string, timingIdentifier: string, encryptKey = "", encryptUserinfo = "") =>
+      dispatch("/TenPay/Openwxhb", {
+        Xml: xml,
+        SendUserName: sendUserName,
+        TimingIdentifier: timingIdentifier,
+        ...(encryptKey ? { Encrypt_key: encryptKey } : {}),
+        ...(encryptUserinfo ? { Encrypt_userinfo: encryptUserinfo } : {}),
+      }),
 
-    /** /TenPay/Qrydetailwxhb — 查看红包 (TenPay.QrydetailwxhbParam: Encrypt_key/Encrypt_userinfo/Wxid/Xml) */
-    qrydetailwxhb: (redPacketId: string) =>
-      dispatch("/TenPay/Qrydetailwxhb", { redPacketId }),
+    /** /TenPay/Qrydetailwxhb — 查看红包
+     *  v1.6.0: swagger TenPay.QrydetailwxhbParamDoc {Xml*, Encrypt_key, Encrypt_userinfo} (旧码发 redPacketId). */
+    qrydetailwxhb: (xml: string, encryptKey = "", encryptUserinfo = "") =>
+      dispatch("/TenPay/Qrydetailwxhb", {
+        Xml: xml,
+        ...(encryptKey ? { Encrypt_key: encryptKey } : {}),
+        ...(encryptUserinfo ? { Encrypt_userinfo: encryptUserinfo } : {}),
+      }),
 
-    /** /TenPay/Receivewxhb — 不用 key 打开 (TenPay.ReceivewxhbParam: Encrypt_key/Encrypt_userinfo/InWay/Wxid/Xml) */
-    receivewxhb: (redPacketId: string) =>
-      dispatch("/TenPay/Receivewxhb", { redPacketId }),
+    /** /TenPay/Receivewxhb — 打开红包 (不用 key)
+     *  v1.6.0: swagger TenPay.ReceivewxhbParamDoc {Xml*, InWay, Encrypt_key, Encrypt_userinfo} (旧码发 redPacketId). */
+    receivewxhb: (xml: string, inWay = "", encryptKey = "", encryptUserinfo = "") =>
+      dispatch("/TenPay/Receivewxhb", {
+        Xml: xml,
+        InWay: inWay,
+        ...(encryptKey ? { Encrypt_key: encryptKey } : {}),
+        ...(encryptUserinfo ? { Encrypt_userinfo: encryptUserinfo } : {}),
+      }),
 
     /** /TenPay/SjSkdPayQCode — 商家收款单 (TenPay.SjSkdPayQCodeParam: Money/Name/Remark/Wxid) */
     sjSkdPayQCode: (amount: number, name: string, remark: string, wxid = "") =>
@@ -78,6 +102,16 @@ export function makeWppTenPay(ctx: WppAccountCtx) {
         // transferId 不在 vendor body schema, 仅传给 wxid 关联上下文 (vendor 隐含从 transactionId 取)
         transactionId: transferId,
       }),
+
+    /**
+     * /TenPay/CreatePreTransfer — 创建转账预订单 (v1.6.0 SWAGGER-323 新端点).
+     * swagger: TenPay.CreatePreTransferDoc {toUserName*(转账接收人微信标识), fee*(金额, 单位**分**), description}.
+     * **只创建预订单, 不扣款** — 成功后用响应里的 req_key 调 confirmPreTransfer 完成支付
+     * (付款方式来自 /Tools/GetBandCardList)。
+     * 单位是「分」而非元: 100 = 1.00 元 (与 generatePayQCode 的 money=元 不同, 勿混)。
+     */
+    createPreTransfer: (toUserName: string, feeFen: number, description = "") =>
+      dispatch("/TenPay/CreatePreTransfer", { toUserName, fee: feeFen, description }),
 
     /**
      * /TenPay/GeneratePayQCode — 生成自定义收款二维码
