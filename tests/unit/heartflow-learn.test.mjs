@@ -3,6 +3,7 @@
 // import dist/inbound/heartflow-learn.js (编译产物) 直接测纯算法/分类:
 //   evalHfThreshold (样本不足/死区/上跳/下跳/双端钳制/round2/回落基线/边界 noop)
 //   hfCooldownOk / round2 / classifyHfSend (四态: pending/suppressed×3/sent×2)
+//   clampHfThresholdToBand (v1.6.6 硬地板读取侧钳制: 低于地板抬起/超上限压下/带内原样/边界)
 //
 // dist 缺失 (未 npm run build) → t.skip + 提示, 不红 (编译产物由 CI/deploy 门禁负责).
 // 引用实际常量锚点: 参数默认值用测试内 fixture, 与 heartflow.ts HF_LEARNING_DEFAULTS 解耦,
@@ -18,7 +19,7 @@ try {
   loadErr = e;
 }
 
-const P = { minSample: 10, lowEngageRate: 0.15, highEngageRate: 0.5, step: 0.05, bandMin: 0.3, bandMax: 0.9 };
+const P = { minSample: 10, lowEngageRate: 0.15, highEngageRate: 0.5, step: 0.05, bandMin: 0.5, bandMax: 0.9 };
 
 function skipNoDist(t) {
   if (!hf) t.skip(`dist/inbound/heartflow-learn.js 缺失 (先 npm run build): ${loadErr?.message ?? ''}`);
@@ -99,15 +100,15 @@ test('evalHfThreshold: learned 覆盖回落基线 (cur = learnedThreshold ?? bas
   assert.equal(down.direction, 'down');
   assert.equal(down.newThreshold, 0.75);
 
-  // learned 0.35 + down → 撞 bandMin 0.30 (实变, 到达硬下界)
+  // learned 0.55 + down → 撞 bandMin 0.50 (实变, 到达硬下界)
   const lo = hf.evalHfThreshold({
     stats: { total: 20, engaged: 18 },
-    learnedThreshold: 0.35,
+    learnedThreshold: 0.55,
     baseThreshold: 0.6,
     params: P,
   });
   assert.equal(lo.changed, true);
-  assert.equal(lo.newThreshold, 0.3);
+  assert.equal(lo.newThreshold, 0.5);
 });
 
 test('evalHfThreshold: 双端钳制 clamped-noop (已达硬界仍朝外 → 不变)', (t) => {
@@ -120,14 +121,40 @@ test('evalHfThreshold: 双端钳制 clamped-noop (已达硬界仍朝外 → 不�
     params: P,
   });
   assert.deepEqual(upAtMax, { changed: false, reason: 'clamped-noop' });
-  // bandMin 0.3 仍下调 → 钳回 0.3 == cur → clamped-noop
+  // bandMin 0.5 仍下调 → 钳回 0.5 == cur → clamped-noop
   const dnAtMin = hf.evalHfThreshold({
     stats: { total: 20, engaged: 18 },
-    learnedThreshold: 0.3,
+    learnedThreshold: 0.5,
     baseThreshold: 0.6,
     params: P,
   });
   assert.deepEqual(dnAtMin, { changed: false, reason: 'clamped-noop' });
+});
+
+// ===== v1.6.6 硬地板 (老板 2026-09-16: 阈值最低不能低于 0.5) =====
+
+test('v1.6.6 clampHfThresholdToBand: 低于地板抬起 / 高于上限压下 / 带内原样 / 边界不变', (t) => {
+  skipNoDist(t);
+  assert.equal(hf.clampHfThresholdToBand(0.3, 0.5, 0.9), 0.5, '低于 bandMin → 抬到地板');
+  assert.equal(hf.clampHfThresholdToBand(0.95, 0.5, 0.9), 0.9, '高于 bandMax → 压到上限');
+  assert.equal(hf.clampHfThresholdToBand(0.7, 0.5, 0.9), 0.7, '带内原样');
+  assert.equal(hf.clampHfThresholdToBand(0.5, 0.5, 0.9), 0.5, '恰在地板边界 → 不变');
+  assert.equal(hf.clampHfThresholdToBand(0.9, 0.5, 0.9), 0.9, '恰在上限边界 → 不变');
+});
+
+test('v1.6.6 读取侧为何必须钳: 死区时 evalHfThreshold 不走钳制 ⇒ 库里旧值会绕过地板', (t) => {
+  skipNoDist(t);
+  // 接话率 0.30 ∈ 死区 (0.15, 0.5) → delta=0 → 直接 return in-dead-zone,
+  // 根本执行不到 `Math.max(params.bandMin, ...)` ⇒ sweep 不会把存量的 0.3 修好.
+  // 这就是"只改 bandMin 不够"的原因: 必须靠 resolveThresholdOverride 读时钳一次.
+  const res = hf.evalHfThreshold({
+    stats: { total: 20, engaged: 6 },
+    learnedThreshold: 0.3,
+    baseThreshold: 0.6,
+    params: P,
+  });
+  assert.deepEqual(res, { changed: false, reason: 'in-dead-zone' }, '死区不触发变更 ⇒ 旧值永不被修正');
+  assert.equal(hf.clampHfThresholdToBand(0.3, P.bandMin, P.bandMax), 0.5, '读时钳制把 0.3 抬回地板 0.5');
 });
 
 test('hfCooldownOk: 无记录 (null/undefined) → 立即允许', (t) => {

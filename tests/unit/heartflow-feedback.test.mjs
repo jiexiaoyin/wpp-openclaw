@@ -115,11 +115,23 @@ test('9. dispatcher.ts: send 后 persistHfSendOutcome (仅 msg.trigger==="heartf
 
 test('10. heartflow-learn.ts: 导出算法 + DB 管线 + sweep', () => {
   const hl = src('src/inbound/heartflow-learn.ts');
-  for (const fn of ['evalHfThreshold', 'hfCooldownOk', 'round2', 'classifyHfSend', 'getLearnedThreshold', 'resolveThresholdOverride', 'persistHfJudged', 'persistHfSendOutcome', 'markHfGroupEngaged', 'loadLearnedThresholds', 'resetLearnedThresholdCache', 'runHeartflowSweep', 'startHeartflowSweep']) {
+  for (const fn of ['evalHfThreshold', 'hfCooldownOk', 'round2', 'classifyHfSend', 'clampHfThresholdToBand', 'getLearnedThreshold', 'resolveThresholdOverride', 'persistHfJudged', 'persistHfSendOutcome', 'markHfGroupEngaged', 'loadLearnedThresholds', 'resetLearnedThresholdCache', 'runHeartflowSweep', 'startHeartflowSweep']) {
     assert.match(hl, new RegExp(`export (async )?function ${fn}`), `heartflow-learn.ts 必须 export ${fn}`);
   }
   assert.match(hl, /expireHfStaleJudged\(/, 'sweep 需处理 judged 呆账 (expireHfStaleJudged)');
   assert.match(hl, /closeHfExpiredWindows\(/, 'sweep 需关过期观察窗 (closeHfExpiredWindows)');
+});
+
+test('11b. v1.6.6 硬地板: bandMin 默认 0.5 + 读取侧钳制接线', () => {
+  const h = src('src/inbound/heartflow.ts');
+  assert.match(h, /bandMin:\s*0\.5/, 'HF_LEARNING_DEFAULTS.bandMin 必须为 0.5 (老板 2026-09-16: 阈值最低不能低于 0.5)');
+  const hl = src('src/inbound/heartflow-learn.ts');
+  assert.match(
+    hl,
+    /const eff = clampHfThresholdToBand\(learned, bandMin, bandMax\)/,
+    'resolveThresholdOverride 必须读时钳制 (死区时 evalHfThreshold 不走到钳制, 旧值会绕过地板)',
+  );
+  assert.match(hl, /const \{ bandMin, bandMax \} = resolveHfLearning\(hfCfg\)/, '钳制边界必须取自 resolveHfLearning(hfCfg)');
 });
 
 test('11. index.ts: 启动加载 learned + 起 sweep + /heartflow status 只读 learning 摘要', () => {
