@@ -8,6 +8,7 @@
 // 设计 (老板 2026-09-07 拍板: 双向自适应 + 硬护栏, 只对白名单群):
 //   每次「应触发发送」的心流回复落 ledger → deliver 真发开观察窗 → 人类接话=engaged / 到期无人=ignored
 //   → sweep 按每群最近 closed 样本接话率双向微调 learned 阈值, 区间 [bandMin,bandMax] 钳制 + minSample + 变更冷却 + 审计
+//   v1.6.6: 区间钳制是**双保险** — 写入侧 evalHfThreshold + 读取侧 clampHfThresholdToBand (死区绕过见该函数注释)
 //
 // learned 阈值存 DB (wpp_hf_group_state), 不回写 accounts JSON (高频写会抖 fs.watch)
 import { info, warn, debug, formatErr } from "../core/logger.js";
@@ -54,6 +55,22 @@ export function hfCooldownOk(lastChangeAtSec, nowSec, minCooldownSec) {
 export function round2(n) {
     return Math.round(n * 100) / 100;
 }
+/**
+ * v1.6.6: 把阈值钳进 [bandMin, bandMax] (纯函数).
+ *
+ * 为什么需要它 (只改 bandMin 不够): evalHfThreshold 的钳制**只在 delta≠0 时才执行** ——
+ * 接话率落死区 (lowEngageRate, highEngageRate) 时直接 return in-dead-zone, 根本不走到
+ * `Math.max(bandMin, ...)`. 于是地板被抬高后, 库里存量的旧 learned 值 (如 0.3) 在死区期间
+ * 会继续生效, 永久绕过新地板.
+ * 故读取侧 (resolveThresholdOverride, 即 judge 判定真正用的阈值) 必须再钳一次 —— 这才是
+ * "最低不能低于 bandMin" 的硬保证.
+ *
+ * 不钳 evalHfThreshold 的 cur: 那会让库里旧值变成 clamped-noop 永不修复;
+ *   保持原样则 sweep 在非死区时会把 DB 自愈到地板值.
+ */
+export function clampHfThresholdToBand(t, bandMin, bandMax) {
+    return round2(Math.max(bandMin, Math.min(bandMax, t)));
+}
 export function classifyHfSend(result) {
     if (!result.ok)
         return "pending"; // 等框架重试
@@ -80,9 +97,12 @@ export function resolveThresholdOverride(accountId, groupId, hfCfg) {
     if (learned === undefined)
         return undefined;
     const base = hfCfg.replyThreshold ?? 0.6;
-    if (Math.abs(learned - base) < 1e-9)
+    // v1.6.6 硬地板/上限: 读时再钳一次, 保证 "阈值最低不低于 bandMin" 不依赖 DB 里旧值是否会被 sweep 修好.
+    const { bandMin, bandMax } = resolveHfLearning(hfCfg);
+    const eff = clampHfThresholdToBand(learned, bandMin, bandMax);
+    if (Math.abs(eff - base) < 1e-9)
         return undefined; // == 账号级, 不用 clone
-    return learned;
+    return eff;
 }
 // ============ DB 薄管线 (全 catch, 失败不阻断 dispatch / 收发) ============
 /** judge 通过落 ledger 行 (insert 失败仅 warn, 不阻断 dispatch) */
