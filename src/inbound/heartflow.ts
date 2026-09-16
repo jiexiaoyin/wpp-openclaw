@@ -114,7 +114,12 @@ export const HF_LEARNING_DEFAULTS: Required<Omit<HfLearningConfig, "enabled">> &
   lowEngageRate: 0.15,
   highEngageRate: 0.5,
   step: 0.05,
-  bandMin: 0.3,
+  // v1.6.6 硬地板 0.3 → 0.5 (老板 2026-09-16 拍板: 阈值最低不能低于 0.5).
+  //   起因: 接话率指标饱和 (群内 600s 有任意人类消息即 engaged, 见 handler.ts onFlush) ⇒ 闭环必然
+  //   把阈值推到地板; 华为群 20h 内 0.6→0.3 后卡死 6 天, 群里刷口号时 bot 4 分钟回 5 条长话术.
+  //   ⚠️ 单靠本参数不够: evalHfThreshold 只在 delta≠0 时钳制, 接话率落死区时库里存量旧值会绕过它 ⇒
+  //   读取侧另有 clampHfThresholdToBand (heartflow-learn.ts) 兜底.
+  bandMin: 0.5,
   bandMax: 0.9,
   sampleWindow: 20,
   observeWindowSec: 600,
