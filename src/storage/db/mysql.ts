@@ -18,6 +18,7 @@ import type {
   ContactRecord,
   DbAdapter,
   HfClosedSample,
+  HfGroupHourBucket,
   HfGroupStateRecord,
   HfLedgerRecord,
   HfThresholdAuditRecord,
@@ -256,6 +257,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
       account_id VARCHAR(64) NOT NULL,
       inbound_msg_id VARCHAR(128) NOT NULL,
       new_msg_id VARCHAR(128) NULL,
+      bot_msg_id VARCHAR(128) NULL,
       group_id VARCHAR(128) NOT NULL,
       from_wxid VARCHAR(128) NULL,
       msg_type VARCHAR(32) NULL,
@@ -271,6 +273,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
       status ENUM('judged','sent','suppressed','closed') NOT NULL DEFAULT 'judged',
       suppressed_reason VARCHAR(96) NULL,
       engaged TINYINT(1) NULL,
+      engage_signal VARCHAR(24) NULL,
       judged_at INT UNSIGNED NOT NULL,
       sent_at INT UNSIGNED NULL,
       window_expires_at INT UNSIGNED NULL,
@@ -312,6 +315,11 @@ async function applyMigrations(pool: Pool): Promise<void> {
       KEY idx_hf_audit (account_id, group_id, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  // v1.6.8 心流标签改造: 生产上 wpp_hf_ledger 早已存在, 上面的 CREATE ... IF NOT EXISTS 不会给它加列
+  //   ⇒ 新列只能 ensureColumn 幂等补 (SHOW COLUMNS 判重). 见 heartflow-label.ts 的设计注释.
+  await ensureColumn(pool, "wpp_hf_ledger", "bot_msg_id", "VARCHAR(128) NULL", "new_msg_id");
+  await ensureColumn(pool, "wpp_hf_ledger", "engage_signal", "VARCHAR(24) NULL", "engaged");
 }
 
 /**
@@ -886,18 +894,36 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       }
       return { total, byStatus, bySuppressedReason };
     },
+    // v1.6.8 可观测: 近 N 秒已收敛样本按信号分布 (让"标签换对了没有"在运维面可见)
+    async countHfEngageSignals(accountId, sinceSec) {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT engage_signal, COUNT(*) AS n FROM wpp_hf_ledger
+         WHERE account_id = ? AND status = 'closed' AND judged_at >= ?
+         GROUP BY engage_signal`,
+        [accountId, sinceSec],
+      );
+      const out: Record<string, number> = {};
+      for (const r of rows) {
+        const k = r.engage_signal == null ? "legacy" : String(r.engage_signal);
+        out[k] = (out[k] ?? 0) + (Number(r.n) || 0);
+      }
+      return out;
+    },
     async setHfLedgerSent(
       accountId,
       inboundMsgId,
       sentAtSec,
       windowExpiresAtSec,
+      botMsgId?: string | null,
     ): Promise<void> {
       const p = getPool();
       await queryWithTimeout(
         p,
-        `UPDATE wpp_hf_ledger SET status = 'sent', sent_at = ?, window_expires_at = ?
+        `UPDATE wpp_hf_ledger SET status = 'sent', sent_at = ?, window_expires_at = ?, bot_msg_id = ?
          WHERE account_id = ? AND inbound_msg_id = ? AND status = 'judged'`,
-        [sentAtSec, windowExpiresAtSec, accountId, inboundMsgId],
+        [sentAtSec, windowExpiresAtSec, botMsgId ?? null, accountId, inboundMsgId],
       );
     },
     async setHfLedgerSuppressed(accountId, inboundMsgId, reason, atSec): Promise<void> {
@@ -909,21 +935,46 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
         [reason, atSec, accountId, inboundMsgId],
       );
     },
-    async markHfEngaged(accountId, groupId, atSec): Promise<void> {
+    // v1.6.8 按信号收敛 (替代旧"任意人类消息即 engaged=1+关窗"):
+    //   close=false (弱信号 short-window) → 只记 engaged=1 + 信号, **保持** status='sent' 继续开窗,
+    //     这样晚到的引用/@ 还能把它升级成强信号 (旧码一旦 engaged 就关窗, 升级无从谈起)
+    //   close=true  → 落结论并关窗; WHERE 里允许覆盖 'short-window' (弱→强升级), 但不许覆盖已有强信号
+    async markHfEngaged(accountId, groupId, atSec, engaged: 0 | 1, signal: string, close: boolean): Promise<void> {
       const p = getPool();
+      if (!close) {
+        await queryWithTimeout(
+          p,
+          `UPDATE wpp_hf_ledger SET engaged = 1, engage_signal = ?
+           WHERE account_id = ? AND group_id = ? AND status = 'sent'
+             AND engage_signal IS NULL
+             AND window_expires_at IS NOT NULL AND window_expires_at > ?`,
+          [signal, accountId, groupId, atSec],
+        );
+        return;
+      }
       await queryWithTimeout(
         p,
-        `UPDATE wpp_hf_ledger SET engaged = 1, status = 'closed', closed_at = ?
+        `UPDATE wpp_hf_ledger SET engaged = ?, engage_signal = ?, status = 'closed', closed_at = ?
          WHERE account_id = ? AND group_id = ? AND status = 'sent'
-           AND engaged IS NULL AND window_expires_at IS NOT NULL AND window_expires_at > ?`,
-        [atSec, accountId, groupId, atSec],
+           AND (engage_signal IS NULL OR engage_signal = 'short-window')
+           AND window_expires_at IS NOT NULL AND window_expires_at > ?`,
+        [engaged, signal, atSec, accountId, groupId, atSec],
       );
     },
     async closeHfExpiredWindows(accountId, atSec): Promise<void> {
       const p = getPool();
+      // (1) 已落弱信号但没人升级 → 到期关窗, **保持 engaged=1** (它确实被弱信号命中过)
       await queryWithTimeout(
         p,
-        `UPDATE wpp_hf_ledger SET status = 'closed', engaged = 0, closed_at = ?
+        `UPDATE wpp_hf_ledger SET status = 'closed', closed_at = ?
+         WHERE account_id = ? AND status = 'sent' AND engage_signal = 'short-window'
+           AND window_expires_at IS NOT NULL AND window_expires_at <= ?`,
+        [atSec, accountId, atSec],
+      );
+      // (2) 整窗无任何信号 → 判 silence (engaged=0), 供"冷清群里 bot 说话没人理"沉淀为负样本
+      await queryWithTimeout(
+        p,
+        `UPDATE wpp_hf_ledger SET status = 'closed', engaged = 0, engage_signal = 'silence', closed_at = ?
          WHERE account_id = ? AND status = 'sent' AND engaged IS NULL
            AND window_expires_at IS NOT NULL AND window_expires_at <= ?`,
         [atSec, accountId, atSec],
@@ -942,7 +993,7 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       const p = getPool();
       const rows = await queryWithTimeout<RowDataPacket[]>(
         p,
-        `SELECT engaged, closed_at FROM wpp_hf_ledger
+        `SELECT engaged, closed_at, engage_signal FROM wpp_hf_ledger
          WHERE account_id = ? AND group_id = ? AND status = 'closed' AND engaged IS NOT NULL
          ORDER BY closed_at DESC LIMIT ?`,
         [accountId, groupId, Math.min(Math.max(limit, 1), 500)],
@@ -950,6 +1001,39 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       return rows.map((r) => ({
         engaged: Number(r.engaged),
         closed_at: r.closed_at == null ? null : Number(r.closed_at),
+        engage_signal: r.engage_signal == null ? null : String(r.engage_signal),
+      }));
+    },
+    // v1.6.8 反事实基线: 每群 × 每小时段的**入站人类消息数** (供 hfAmbientP 算"那时段本来多热闹").
+    //   用 create_time (BIGINT epoch, 入库时由 ts 同步而来) 而不是 ts (TIMESTAMP): TIMESTAMP 的
+    //   读写都过 session 时区, 分组小时会随 DB 时区设置漂; create_time 是裸 epoch, 加 localOffsetSec
+    //   偏移后取模即**本地**小时, 与应用侧 new Date().getHours() 语义一致 (TZ 无关).
+    //   COALESCE 兜住极少数 create_time 为 NULL 的旧行 (退回 UNIX_TIMESTAMP(ts), 近似即可).
+    //   ⚠️ **单表查询**是有意的: wpp_messages 是 utf8mb4_unicode_ci, 而 wpp_hf_* 三表是 MariaDB 11
+    //   默认的 utf8mb4_uca1400_ai_ci (2026-09-26 生产实测 wpp_messages.chat_id JOIN wpp_hf_ledger.group_id
+    //   直接报 "Illegal mix of collations"). 将来若要跨表 JOIN, 被比较的两列都必须显式 COLLATE 到同一侧.
+    async listHfGroupMsgHourBuckets(
+      accountId,
+      sinceSec,
+      localOffsetSec,
+    ): Promise<HfGroupHourBucket[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT chat_id AS group_id,
+                FLOOR((((COALESCE(create_time, UNIX_TIMESTAMP(ts)) + ?) % 86400) + 86400) % 86400 / 3600) AS h,
+                COUNT(*) AS n
+         FROM wpp_messages
+         WHERE account_id = ? AND peer_kind = 'group' AND direction = 'inbound'
+           AND chat_id IS NOT NULL AND chat_id <> ''
+           AND ts >= FROM_UNIXTIME(?)
+         GROUP BY group_id, h`,
+        [localOffsetSec, accountId, sinceSec],
+      );
+      return rows.map((r) => ({
+        group_id: String(r.group_id),
+        hour: Number(r.h) || 0,
+        n: Number(r.n) || 0,
       }));
     },
     async upsertHfGroupState(record: HfGroupStateRecord): Promise<void> {

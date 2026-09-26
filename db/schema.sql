@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS wpp_hf_ledger (
   account_id VARCHAR(64) NOT NULL,
   inbound_msg_id VARCHAR(128) NOT NULL,        -- msg.msgId (parser 保证非空; 跨通道稳定)
   new_msg_id VARCHAR(128) NULL,                -- 审计用 (可为 '')
+  bot_msg_id VARCHAR(128) NULL,                -- v1.6.8: bot 发出那条的 msgId (判"有人引用了我那条"); vendor 不回 id 时 NULL
   group_id VARCHAR(128) NOT NULL,              -- chatId (xxx@chatroom)
   from_wxid VARCHAR(128) NULL,
   msg_type VARCHAR(32) NULL,
@@ -160,6 +161,7 @@ CREATE TABLE IF NOT EXISTS wpp_hf_ledger (
   status ENUM('judged','sent','suppressed','closed') NOT NULL DEFAULT 'judged',
   suppressed_reason VARCHAR(96) NULL,          -- dedup/ack-template/empty/no-deliver-outcome/send-failed
   engaged TINYINT(1) NULL,                     -- NULL=suppressed 排除样本外; 1=engaged; 0=ignored
+  engage_signal VARCHAR(24) NULL,              -- v1.6.8 命中信号: quote/mention/negative/short-window/silence (NULL=旧行, 不采信)
   judged_at INT UNSIGNED NOT NULL,
   sent_at INT UNSIGNED NULL,
   window_expires_at INT UNSIGNED NULL,         -- = sent_at + observeWindowSec

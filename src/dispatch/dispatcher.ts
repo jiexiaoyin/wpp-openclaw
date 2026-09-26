@@ -925,10 +925,16 @@ async function dispatchOne(
             innerType: shouldQuote ? msg.msgType : undefined,
           });
           // v1.6.x HEARTFLOW-LEARN: 仅心流主动回复 send 后落账 (fire-and-forget, 不阻断 deliver 返回)
+          // v1.6.8: 一并传 bot 自己那条的 msgId 与弱信号窗长 —— 标签要锚在"我这条"上, 而不是"群里有没有人说话"
           if (msg.trigger === "heartflow") {
             const hfCfg = getDefaultAccountRegistry().get(msg.accountId)?.config.heartflow;
             const observeSec = hfCfg ? resolveHfLearning(hfCfg).observeWindowSec : HF_LEARNING_DEFAULTS.observeWindowSec;
-            void persistHfSendOutcome(msg.accountId, msg.msgId, result, Math.floor(Date.now() / 1000), observeSec);
+            const labelWindowSec = hfCfg ? resolveHfLearning(hfCfg).labelWindowSec : HF_LEARNING_DEFAULTS.labelWindowSec;
+            void persistHfSendOutcome(msg.accountId, msg.msgId, result, Math.floor(Date.now() / 1000), {
+              groupId: msg.chatroomId ?? msg.peerId,
+              observeSec,
+              labelWindowSec,
+            });
           }
           info(`[WPP DEBUG-DELIVER] sendAiReply done: ok=${result.ok} error=${result.error ?? "none"} msgId=${result.msgId ?? ""}`);
           return result;

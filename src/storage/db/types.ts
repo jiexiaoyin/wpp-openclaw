@@ -124,12 +124,20 @@ export interface DbAdapter {
     accountId: string,
     sinceSec: number,
   ): Promise<{ total: number; byStatus: Record<string, number>; bySuppressedReason: Record<string, number> }>;
+  /**
+   * v1.6.8 可观测: 近 sinceSec 秒**已收敛**的样本按命中信号计数
+   * (quote/mention/negative/short-window/silence; NULL 旧行归 'legacy'). 供 /heartflow status
+   * 显示"新标签是否在工作" —— 老板要看的就是这个分布, 而不是又一个被自学的标量.
+   */
+  countHfEngageSignals(accountId: string, sinceSec: number): Promise<Record<string, number>>;
   /** judged → sent (guard: 仅 judged 可推进, 防 deliver 双调重置窗) */
   setHfLedgerSent(
     accountId: string,
     inboundMsgId: string,
     sentAtSec: number,
     windowExpiresAtSec: number,
+    /** v1.6.8: vendor 返回的 bot 发出那条的 msgId (用于"有人引用了我那条"判定; 不回 id 时 NULL) */
+    botMsgId?: string | null,
   ): Promise<void>;
   /** judged → suppressed (guard: 仅 judged) */
   setHfLedgerSuppressed(
@@ -138,8 +146,29 @@ export interface DbAdapter {
     reason: string,
     atSec: number,
   ): Promise<void>;
-  /** 人类接话: sent 开窗且未定 → engaged=1 + closed (立即收敛) */
-  markHfEngaged(accountId: string, groupId: string, atSec: number): Promise<void>;
+  /**
+   * 按信号收敛该群开窗中的账本行.
+   * v1.6.8 起语义变更 (旧码 = 任意人类消息即 engaged=1+关窗, 是标签跑飞的根因, 见 heartflow-label.ts):
+   *   close=false → 只落弱信号 (short-window) 并**保持开窗**, 等更强的信号 (引用/@/负词) 来升级;
+   *   close=true  → 落结论并关窗; WHERE 允许覆盖 'short-window' (弱→强升级), 不覆盖已有强信号.
+   */
+  markHfEngaged(
+    accountId: string,
+    groupId: string,
+    atSec: number,
+    engaged: 0 | 1,
+    signal: string,
+    close: boolean,
+  ): Promise<void>;
+  /**
+   * v1.6.8 反事实基线素材: 近 sinceSec 秒内, **每群 × 每小时段**的入站人类消息数
+   * (hour = 按 localOffsetSec 偏移后的本地小时 0-23). 用于算"该群那时段本来就有多热闹".
+   */
+  listHfGroupMsgHourBuckets(
+    accountId: string,
+    sinceSec: number,
+    localOffsetSec: number,
+  ): Promise<HfGroupHourBucket[]>;
   /** sweep: sent 到期无人接话 → ignored (engaged=0) + closed */
   closeHfExpiredWindows(accountId: string, atSec: number): Promise<void>;
   /** sweep: judged 无发送结果超上限 → suppressed (呆账收敛) */
@@ -212,6 +241,16 @@ export interface HfThresholdAuditRecord {
 export interface HfClosedSample {
   engaged: number; // 0 | 1
   closed_at?: number | null;
+  /** v1.6.8: 命中信号 (quote/mention/negative/short-window/silence) —— 决定该样本是否可采信 */
+  engage_signal?: string | null;
+}
+
+/** v1.6.8: 反事实基线素材行 (每群 × 每小时段的入站人类消息数) */
+export interface HfGroupHourBucket {
+  group_id: string;
+  /** 本地小时 0-23 */
+  hour: number;
+  n: number;
 }
 
 /** v1.3.76: 群黑话词条 row (wpp_jargon_terms) */

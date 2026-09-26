@@ -43,6 +43,19 @@ export const HF_LEARNING_DEFAULTS = {
     bandMax: 0.9,
     sampleWindow: 20,
     observeWindowSec: 600,
+    // v1.6.8 标签锚回 bot 自己那条 (老板 2026-09-26 拍板): 弱信号窗 60s.
+    //   取值不是拍的 —— 拿生产账本 (91 条已收敛行) 实测"窗内出现人类消息"的比例:
+    //     30s→0.242 / 60s→0.330 / 90s→0.396 / 120s→0.440 / 180s→0.462 / 300s→0.538 / 600s→0.681(=旧标签,
+    //     与台账里存量 engaged 率 0.687 逐位吻合 ⇒ 机制诊断被数据证实).
+    //   选 60s 而不是 120s 的理由: 死区是 (lowEngageRate 0.15, highEngageRate 0.5), 中点 0.325。
+    //     120s 的 0.44 离上调上限 0.5 只剩 0.06 (n=91 时 95% 置信区间约 ±0.10 ⇒ 会跨过 0.5),
+    //     而该标签**因果上受 bot 自己影响** (回得多 → 群里反应多 → 比率更高 ⇒ 再下调 = 正反馈跑飞),
+    //     余量太薄会重新点燃同一个飞轮; 60s 的 0.33 正好落在死区中点, 两侧余量对称 (~0.18/0.17)。
+    //   ⚠️ 弱信号窗变窄**不会漏掉真接话**: 引用 bot / @bot / 负词这些强信号在整个 observeWindowSec
+    //     (600s) 内都有效 (见 heartflow-label.ts).
+    labelWindowSec: 60,
+    // v1.6.8 反事实基线: 该群同一时段本来就有 ≥50% 概率有人说话 ⇒ 弱信号/沉默不采信.
+    ambientMax: 0.5,
     minChangeCooldownSec: 4 * 3600,
     sweepIntervalSec: 300,
     staleJudgedMaxSec: 1800,
@@ -61,6 +74,8 @@ export function resolveHfLearning(cfg) {
         bandMax: l?.bandMax ?? D.bandMax,
         sampleWindow: l?.sampleWindow ?? D.sampleWindow,
         observeWindowSec: l?.observeWindowSec ?? D.observeWindowSec,
+        labelWindowSec: l?.labelWindowSec ?? D.labelWindowSec,
+        ambientMax: l?.ambientMax ?? D.ambientMax,
         minChangeCooldownSec: l?.minChangeCooldownSec ?? D.minChangeCooldownSec,
         sweepIntervalSec: l?.sweepIntervalSec ?? D.sweepIntervalSec,
         staleJudgedMaxSec: l?.staleJudgedMaxSec ?? D.staleJudgedMaxSec,

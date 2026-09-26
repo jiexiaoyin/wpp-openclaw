@@ -10,17 +10,25 @@ export async function recordHfJudged(record) {
 export async function countHfLedgerByStatus(accountId, sinceSec) {
     return getAdapter().countHfLedgerByStatus(accountId, sinceSec);
 }
-/** judged → sent (guard: 仅 judged) */
-export async function setHfLedgerSent(accountId, inboundMsgId, sentAtSec, windowExpiresAtSec) {
-    return getAdapter().setHfLedgerSent(accountId, inboundMsgId, sentAtSec, windowExpiresAtSec);
+/** v1.6.8 可观测 (只读): 近 sinceSec 秒已收敛样本按命中信号计数 */
+export async function countHfEngageSignals(accountId, sinceSec) {
+    return getAdapter().countHfEngageSignals(accountId, sinceSec);
+}
+/** judged → sent (guard: 仅 judged). v1.6.8: 一并记 bot 自己那条的 msgId (判"有人引用了我") */
+export async function setHfLedgerSent(accountId, inboundMsgId, sentAtSec, windowExpiresAtSec, botMsgId) {
+    return getAdapter().setHfLedgerSent(accountId, inboundMsgId, sentAtSec, windowExpiresAtSec, botMsgId);
 }
 /** judged → suppressed (guard: 仅 judged) */
 export async function setHfLedgerSuppressed(accountId, inboundMsgId, reason, atSec) {
     return getAdapter().setHfLedgerSuppressed(accountId, inboundMsgId, reason, atSec);
 }
-/** 人类接话: sent 开窗且未定 → engaged=1 + closed */
-export async function markHfEngaged(accountId, groupId, atSec) {
-    return getAdapter().markHfEngaged(accountId, groupId, atSec);
+/** 按信号收敛开窗行 (close=false 只落弱信号并保持开窗, 见 types.ts markHfEngaged 注释) */
+export async function markHfEngaged(accountId, groupId, atSec, engaged, signal, close) {
+    return getAdapter().markHfEngaged(accountId, groupId, atSec, engaged, signal, close);
+}
+/** v1.6.8 反事实基线素材: 每群 × 每小时段的入站人类消息数 (hour 为本地小时) */
+export async function listHfGroupMsgHourBuckets(accountId, sinceSec, localOffsetSec) {
+    return getAdapter().listHfGroupMsgHourBuckets(accountId, sinceSec, localOffsetSec);
 }
 /** sweep: sent 到期无人接话 → ignored + closed */
 export async function closeHfExpiredWindows(accountId, atSec) {

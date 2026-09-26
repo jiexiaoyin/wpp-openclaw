@@ -5,7 +5,7 @@
 #   1. 重建 release/ (build-release.sh: 编译 + 脱敏 + vendor + 文档 + 校验)
 #   2. 同步 /data 发布包 + zip
 #   3. 同步 GitHub main 分支 (脱敏 release/)
-#   4. 同步 GitHub master 分支 (脱敏**源码**快照, v1.6.8 新增 —— 见下)
+#   4. 同步 GitHub master 分支 (脱敏**源码**快照, 2026-09-26 新增 —— 见下)
 #
 # 用法:
 #   bash sync-github.sh            # 完整同步 (重建 + /data + GitHub 双分支)
@@ -13,7 +13,7 @@
 #   bash sync-github.sh --dry-run  # 只重建 + 比较, 不 push / 不写 /data
 #   bash sync-github.sh --main-only # 只同步 main (旧行为)
 #
-# 脱敏 (v1.6.8, 2026-09-26): 规则外置在 ~/.openclaw/wpp-sanitize.rules (WPP_SANITIZE_RULES 可覆盖),
+# 脱敏 (2026-09-26): 规则外置在 ~/.openclaw/wpp-sanitize.rules (WPP_SANITIZE_RULES 可覆盖),
 #   执行器 tools/sanitize-source.sh。本脚本不再内联任何敏感串。
 #   ⚠️ 血泪: 2026-09-26 发现**旧版本脚本自己**把 PERSONAL 正则 (含生产密钥前缀) 内联在文件里,
 #      而它在公开仓 master 分支 ⇒ 公开仓被自己人泄了 62 个提交。任何"要发布的文件"都不得内联敏感串。
@@ -103,6 +103,10 @@ if [ ! -d "$MIRROR_DIR/.git" ]; then
   git clone "$GIT_REPO" "$MIRROR_DIR"
 fi
 cd "$MIRROR_DIR"
+# dry-run 为了给出**真实** diff, 会把文件写进镜像工作树 (后面步骤用 git diff --cached 统计),
+#   但 dry-run **不提交** ⇒ 结束时必须把镜像还原, 否则下一次真跑会在下面这行 `git checkout` 处
+#   被"local changes would be overwritten"挡住 (2026-09-26 实测踩到)。
+DRY_ORIG_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
 git fetch origin 2>/dev/null || true
 BRANCH="$(git remote show origin 2>/dev/null | awk -F': ' '/HEAD branch/{print $2}')"
 [ -z "$BRANCH" ] && BRANCH="main"
@@ -180,6 +184,18 @@ else
       sleep 5
     done
   fi
+fi
+
+# ============ dry-run 收尾: 还原镜像工作树 ============
+# 镜像仓是脚本专属的纯 clone (无 node_modules / 无人工改动), 所以还原到运行前的分支 + 硬重置 + 清未跟踪
+#   是确定性的; 不做这一步, dry-run 会留下未提交改动并挡住下一次真跑 (见上面 DRY_ORIG_BRANCH 注释)。
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "=== (dry-run) 还原镜像工作树 (不留未提交改动) ==="
+  cd "$MIRROR_DIR"
+  git checkout -q -f "$DRY_ORIG_BRANCH" 2>/dev/null || git checkout -q -f "$BRANCH"
+  git reset -q --hard HEAD
+  git clean -qfd
+  echo "  ✓ 镜像已还原: 分支 $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse --short HEAD), 工作树干净"
 fi
 
 echo ""

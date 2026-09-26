@@ -9,7 +9,7 @@ import { CHANNEL_ID, PLUGIN_NAME, PLUGIN_VERSION, DEFAULT_BOT_NICKNAME } from ".
 import { loadGlobalConfigAsync, loadAccountConfigAsync, listAccountIds, isConfigured } from "./config.js";
 import { listAccountIds as helperListAccountIds, resolveAccount, defaultAccountId, isConfigured as helperIsConfigured, unconfiguredReason, describeAccount, } from "./config-helpers.js";
 import { getDefaultAccountRegistry } from "./account-state.js";
-import { closeDb, initDbPool, getSynckey, saveSynckey, listHfGroupStates, countHfLedgerByStatus } from "./db.js";
+import { closeDb, initDbPool, getSynckey, saveSynckey, listHfGroupStates, countHfLedgerByStatus, countHfEngageSignals } from "./db.js";
 import { WechatpadproWsClient } from "./ws-client.js";
 import { WechatpadproWebhookServer } from "./webhook-receiver.js";
 import { createWppInboundHandler } from "./inbound/handler.js";
@@ -284,7 +284,21 @@ async function handleFeatureCommand(feature, args, send, accountId) {
             catch (e) {
                 ledgerLine = "\n近24h台账: (读台账失败)";
             }
-            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}${ledgerLine}`;
+            // v1.6.8 可观测: 近 24h 已收敛样本的**命中信号分布** —— 老板要看的"标签是不是锚在我那条上",
+            //   legacy = v1.6.8 之前的旧标签行 (不采信, 见 heartflow-label.ts)
+            let sigLine = "";
+            try {
+                const since = Math.floor(Date.now() / 1000) - 86400;
+                const sig = await countHfEngageSignals(accountId, since);
+                const entries = Object.entries(sig);
+                sigLine = entries.length
+                    ? `\n信号分布(24h): ${entries.map(([k, v]) => `${k} ${v}`).join(" / ")}\n  (quote/@=强正, negative=强负, short-window=窄窗有人说话, silence=无人接; 强信号恒采信, 弱信号按本底过滤)`
+                    : "\n信号分布(24h): 0 (还没攒到已收敛样本)";
+            }
+            catch (e) {
+                sigLine = "\n信号分布(24h): (读取失败)";
+            }
+            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}${ledgerLine}${sigLine}`;
         }
         await send(`${label} (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}${extra}\n用法: /${feature} on|off|status`);
         return true;

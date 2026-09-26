@@ -24,6 +24,7 @@ import {
   getHfClosedRecent,
   getHfGroupState,
   listHfGroupStates,
+  listHfGroupMsgHourBuckets,
   upsertHfGroupState,
   logHfThresholdChange,
   getHfLedgerDistinctClosedGroups,
@@ -33,6 +34,13 @@ import {
   isHfGroupAllowed,
   type HeartflowConfig,
 } from "./heartflow.js";
+import {
+  asHfEngageSignal,
+  classifyHfEngagement,
+  hfAmbientP,
+  isHfSampleInformative,
+  type HfEngageCandidate,
+} from "./heartflow-label.js";
 
 // ============ 纯算法 (可单测) ============
 
@@ -150,6 +158,26 @@ export function classifyHfSend(result: {
 const _key = (accountId: string, groupId: string): string => `${accountId}:${groupId}`;
 const _learnedThresholds = new Map<string, number>();
 
+/**
+ * v1.6.8: 每群"正在观察中"的心流回复 (onFlush 判定接话要用的最小状态).
+ *
+ * 为什么必须有: 判"有人接了我那句"要知道 **我在这个群刚发了什么/什么时候发的**.
+ *   旧码不知道 (所以只能退化成"群里有没有人说话"); 若改成每条人类消息都查一次 DB, 又是
+ *   群聊热路径上的每消息一次查询. 内存表让"没开窗"这个绝大多数情况零成本直接 return.
+ *
+ * 生命周期: persistHfSendOutcome (真发出) 登记 → markHfGroupEngaged 收敛时删 (弱信号保留)
+ *   → sweep 到期清理 (防重启后残留). 进程重启会丢 ⇒ 丢窗口那几行会按 silence 收敛 (已知降级,
+ *   影响面 = 重启前 10 分钟内发过心流回复的群, 且只损失一次样本).
+ */
+interface HfOpenWindow {
+  /** bot 发出那条的 vendor msgId (null = vendor 未回 id ⇒ 引用匹配退化为"同群 outbound + 窗内") */
+  botMsgId: string | null;
+  sentAtSec: number;
+  observeWindowSec: number;
+  labelWindowSec: number;
+}
+const _openWindows = new Map<string, HfOpenWindow>();
+
 /** 读单群 learned (无则 undefined) */
 export function getLearnedThreshold(accountId: string, groupId: string): number | undefined {
   return _learnedThresholds.get(_key(accountId, groupId));
@@ -213,20 +241,41 @@ export async function persistHfJudgedBelowThreshold(
 }
 
 /**
- * deliver 之后落发送结果: sent → 开观察窗 (窗口时长由调用方 observeSec 给); suppressed → 收敛.
+ * deliver 之后落发送结果: sent → 开观察窗 (窗口时长由调用方给); suppressed → 收敛.
  * ok=false (pending) 不改 → 留给 sweep 呆账收敛.
+ *
+ * v1.6.8: sent 时额外 ① 把 bot 自己那条的 msgId 落库 (判"有人引用了我那条") ② 在内存里登记开窗,
+ *   供 onFlush 的接话判定用 (零 DB IO); 并统一由 opts 传窗长, 避免调用方各自拼参数。
  */
 export async function persistHfSendOutcome(
   accountId: string,
   inboundMsgId: string,
   result: { ok: boolean; msgId?: string; error?: string },
   atSec: number,
-  observeSec: number,
+  opts: {
+    groupId: string;
+    observeSec: number;
+    labelWindowSec: number;
+  },
 ): Promise<void> {
   const outcome = classifyHfSend(result);
   try {
     if (outcome === "sent") {
-      await setHfLedgerSent(accountId, inboundMsgId, atSec, atSec + observeSec);
+      // msgId 可能 undefined (vendor 不回 id) 或占位符; 占位符不会走到这里 (classifyHfSend 已判 suppressed)
+      const botMsgId = result.msgId ? result.msgId : null;
+      await setHfLedgerSent(
+        accountId,
+        inboundMsgId,
+        atSec,
+        atSec + opts.observeSec,
+        botMsgId,
+      );
+      _openWindows.set(_key(accountId, opts.groupId), {
+        botMsgId,
+        sentAtSec: atSec,
+        observeWindowSec: opts.observeSec,
+        labelWindowSec: opts.labelWindowSec,
+      });
       return;
     }
     if (outcome === "suppressed") {
@@ -246,17 +295,51 @@ export async function persistHfSendOutcome(
   }
 }
 
-/** onFlush 人类接话: sent 开窗且未定 → engaged=1+closed (失败仅降级, 窗口留待 sweep 到期关) */
+/**
+ * onFlush 人类消息 → 按信号判定该群开窗行 (v1.6.8 换标签的核心).
+ *
+ * 旧行为 (v1.6.x 起至 v1.6.7): 只要群里出现人类消息就 engaged=1+关窗 ⇒ 活跃群恒饱和 ⇒ 阈值单调降.
+ * 现行为: 见 heartflow-label.ts —— 引用 bot / @bot / 针对 bot 的负词 = 强信号; 窄窗内有人说话 = 弱信号;
+ *   全部候选一起判 (优先级 quote>mention>negative>short-window), 弱信号不关窗留待升级.
+ *
+ * 无开窗 (绝大多数情况) 或本行无信号 → 立刻 return, 不做任何 DB 写.
+ */
 export async function markHfGroupEngaged(
   accountId: string,
   groupId: string,
   atSec: number,
+  candidates: HfEngageCandidate[],
 ): Promise<void> {
+  const key = _key(accountId, groupId);
+  const w = _openWindows.get(key);
+  if (!w) return;
+  const verdict = classifyHfEngagement({
+    sentAtSec: w.sentAtSec,
+    labelWindowSec: w.labelWindowSec,
+    observeWindowSec: w.observeWindowSec,
+    candidates,
+  });
+  if (verdict.signal == null || verdict.engaged == null) return;
   try {
-    await markHfEngaged(accountId, groupId, atSec);
+    await markHfEngaged(accountId, groupId, atSec, verdict.engaged, verdict.signal, verdict.close);
+    // 关窗了才从内存摘掉; 弱信号仍留在表里等更强信号升级
+    if (verdict.close) _openWindows.delete(key);
   } catch (e) {
     debug(`[WPP HF] mark engaged failed (non-fatal): ${formatErr(e)}`);
   }
+}
+
+/**
+ * 取该群开窗信息 (handler 判"引用的这条是不是 bot 刚发的那条").
+ * 返回副本, 调用方不可改写内部状态.
+ */
+export function getOpenHfWindow(
+  accountId: string,
+  groupId: string,
+): { botMsgId: string | null; sentAtSec: number; observeWindowSec: number } | undefined {
+  const w = _openWindows.get(_key(accountId, groupId));
+  if (!w) return undefined;
+  return { botMsgId: w.botMsgId, sentAtSec: w.sentAtSec, observeWindowSec: w.observeWindowSec };
 }
 
 /** 账号启动/热载后从 DB 加载 learned 阈值进内存缓存 */
@@ -276,9 +359,10 @@ export async function loadLearnedThresholds(accountId: string): Promise<number> 
   return n;
 }
 
-/** 测试/重置用: 清空全部内存 learned 缓存 */
+/** 测试/重置用: 清空全部内存 learned 缓存 + 开窗表 */
 export function resetLearnedThresholdCache(): void {
   _learnedThresholds.clear();
+  _openWindows.clear();
 }
 
 // ============ sweep (周期: 关过期窗 + 呆账收敛 + 自适应) ============
@@ -294,6 +378,7 @@ export async function runHeartflowSweep(
   try {
     await closeHfExpiredWindows(accountId, nowSec);
     await expireHfStaleJudged(accountId, nowSec, nowSec - L.staleJudgedMaxSec);
+    pruneOpenWindows(accountId, nowSec);
   } catch (e) {
     warn(`[WPP HF] sweep close/expire failed: ${formatErr(e)}`);
     return;
@@ -301,6 +386,10 @@ export async function runHeartflowSweep(
   if (!cfg.enabled || !L.enabled) return;
 
   try {
+    // v1.6.8 反事实基线: 该群**当前小时段**本来有多热闹 (近 14 天同小时段的入站人类消息数).
+    //   没数据的群 = 该时段本来没人说话 ⇒ ambientP=0 ⇒ 弱信号/沉默都算有效信息.
+    const ambient = await loadAmbientByGroup(accountId, nowSec, L.labelWindowSec);
+
     // 近 7 天有已收敛样本的群 → 逐群滚窗统计 → 判定 → (过冷却才) 应用
     const sinceSec = nowSec - 7 * 86400;
     const groups = await getHfLedgerDistinctClosedGroups(accountId, sinceSec);
@@ -309,11 +398,24 @@ export async function runHeartflowSweep(
       if (!isHfGroupAllowed(groupId, cfg)) continue;
       const samples = await getHfClosedRecent(accountId, groupId, L.sampleWindow);
       if (samples.length === 0) continue;
-      const engaged = samples.reduce((s, x) => s + (x.engaged ? 1 : 0), 0);
+      const ambientP = ambient.get(groupId) ?? 0;
+      // v1.6.8: 只采信"可鉴别"样本 —— 强信号(引用/@/负词)恒采信; 弱信号与沉默仅在
+      //   该时段本来不热闹时采信. v1.6.8 之前的行 engage_signal 为 NULL ⇒ 全部排除
+      //   (= 旧错误标签作废, 不再驱动阈值; 上线后需重新攒够 minSample 条新样本才会再调阈).
+      const usable = samples.filter((s) =>
+        isHfSampleInformative(asHfEngageSignal(s.engage_signal), ambientP, L.ambientMax),
+      );
+      if (usable.length === 0) {
+        debug(
+          `[WPP HF] no informative sample: group=${groupId} window=${samples.length} ambientP=${ambientP.toFixed(3)}`,
+        );
+        continue;
+      }
+      const engaged = usable.reduce((s, x) => s + (x.engaged ? 1 : 0), 0);
       const st = await getHfGroupState(accountId, groupId);
       const baseThreshold = cfg.replyThreshold ?? 0.6;
       const res = evalHfThreshold({
-        stats: { total: samples.length, engaged },
+        stats: { total: usable.length, engaged },
         learnedThreshold: st?.learned_threshold ?? undefined,
         baseThreshold,
         params: {
@@ -329,14 +431,65 @@ export async function runHeartflowSweep(
       // 护栏: 变更冷却
       if (!hfCooldownOk(st?.last_change_at ?? null, nowSec, L.minChangeCooldownSec)) continue;
       const oldEffective = st?.learned_threshold ?? baseThreshold;
-      await applyHfThresholdChange(accountId, groupId, oldEffective, res.newThreshold, res.reason, samples.length, engaged, nowSec);
+      const detail = `${res.reason} skipped=${samples.length - usable.length} ambientP=${ambientP.toFixed(3)} sig=${signalHistogram(usable)}`;
+      await applyHfThresholdChange(accountId, groupId, oldEffective, res.newThreshold, detail, usable.length, engaged, nowSec);
       info(
-        `[WPP HF] threshold adapted: group=${groupId} ${oldEffective.toFixed(2)} → ${res.newThreshold.toFixed(2)} (${res.direction}, ${res.reason})`,
+        `[WPP HF] threshold adapted: group=${groupId} ${oldEffective.toFixed(2)} → ${res.newThreshold.toFixed(2)} (${res.direction}, ${detail})`,
       );
     }
   } catch (e) {
     warn(`[WPP HF] sweep adapt failed: ${formatErr(e)}`);
   }
+}
+
+/**
+ * 该群在当前小时段的本底接话概率 (近 14 天同小时段的入站人类消息数 → 泊松近似).
+ * 一次聚合查询覆盖所有群, 不按群逐个查 (sweep 每 5 分钟一次, 别把 DB 打热).
+ */
+async function loadAmbientByGroup(
+  accountId: string,
+  nowSec: number,
+  labelWindowSec: number,
+): Promise<Map<string, number>> {
+  const mA = new Map<string, number>();
+  const days = HF_AMBIENT_LOOKBACK_DAYS;
+  try {
+    // 本地时区偏移: 让 SQL 分出来的"小时"与应用侧 new Date().getHours() 同义
+    const localOffsetSec = -new Date(nowSec * 1000).getTimezoneOffset() * 60;
+    const buckets = await listHfGroupMsgHourBuckets(accountId, nowSec - days * 86400, localOffsetSec);
+    const curHour = new Date(nowSec * 1000).getHours();
+    for (const b of buckets) {
+      if (b.hour !== curHour) continue;
+      mA.set(b.group_id, hfAmbientP(b.n, days * 3600, labelWindowSec));
+    }
+  } catch (e) {
+    // 拿不到基线 → 返回空表 ⇒ 所有弱信号/沉默都按 ambientP=0 采信 (退回旧行为).
+    // 明知这会让阈值更容易漂, 故留 warn: 基线查询长期失败必须看得见.
+    warn(`[WPP HF] ambient baseline query failed (弱信号将不过滤): ${formatErr(e)}`);
+  }
+  return mA;
+}
+
+/** 反事实基线回看天数 (与 sweep 的 7 天样本窗不同: 本底要更长的历史才稳) */
+const HF_AMBIENT_LOOKBACK_DAYS = 14;
+
+/** 清掉该账号已过期的开窗内存 (sweep 到期关窗后同步; 防长跑进程里表无限增长) */
+function pruneOpenWindows(accountId: string, nowSec: number): void {
+  const prefix = `${accountId}:`;
+  for (const [k, w] of _openWindows) {
+    if (!k.startsWith(prefix)) continue;
+    if (w.sentAtSec + w.observeWindowSec <= nowSec) _openWindows.delete(k);
+  }
+}
+
+/** 样本信号分布 `quote:2,short-window:5` (审计 reason 用, 有界: 信号种类固定 5 种, 样本 ≤ sampleWindow) */
+function signalHistogram(samples: readonly { engage_signal?: string | null }[]): string {
+  const m = new Map<string, number>();
+  for (const s of samples) {
+    const k = s.engage_signal ?? "unknown";
+    m.set(k, (m.get(k) ?? 0) + 1);
+  }
+  return [...m.entries()].map(([k, n]) => `${k}:${n}`).join(",");
 }
 
 async function applyHfThresholdChange(

@@ -43,18 +43,20 @@ test('2. schema.sql (dev): 文末补 3 段 DDL (仅 dev 一致性, 生产由 app
   }
 });
 
-test('3. types.ts: 12 adapter 方法签名 + 4 HF 行类型', () => {
+test('3. types.ts: 14 adapter 方法签名 + 5 HF 行类型', () => {
   const t = src('src/storage/db/types.ts');
   const methods = [
     'recordHfJudged', 'setHfLedgerSent', 'setHfLedgerSuppressed', 'markHfEngaged',
     'closeHfExpiredWindows', 'expireHfStaleJudged', 'getHfClosedRecent',
     'upsertHfGroupState', 'getHfGroupState', 'listHfGroupStates', 'logHfThresholdChange',
     'getHfLedgerDistinctClosedGroups',
+    // v1.6.8 换标签: 信号分布统计 (可观测) + 同小时段素材 (反事实基线)
+    'countHfEngageSignals', 'listHfGroupMsgHourBuckets',
   ];
   for (const mth of methods) {
     assert.match(t, new RegExp(`${mth}\\(`), `DbAdapter 必须声明 ${mth}`);
   }
-  for (const ty of ['HfLedgerRecord', 'HfGroupStateRecord', 'HfThresholdAuditRecord', 'HfClosedSample']) {
+  for (const ty of ['HfLedgerRecord', 'HfGroupStateRecord', 'HfThresholdAuditRecord', 'HfClosedSample', 'HfGroupHourBucket']) {
     assert.match(t, new RegExp(`export interface ${ty}`), `types.ts 必须 export ${ty}`);
   }
 });
@@ -80,7 +82,7 @@ test('6. heartflow.ts: HeartflowConfig.learning + HF_LEARNING_DEFAULTS 参数全
   assert.match(h, /export function isHfGroupAllowed/, 'heartflow.ts 必须 export isHfGroupAllowed');
   assert.match(h, /export function resolveHfLearning/, 'heartflow.ts 必须 export resolveHfLearning');
   // 参数表锚点 (与 HF_LEARNING_DEFAULTS 对齐; 测试不锁数值, 只锁键存在 → 防漏键)
-  for (const k of ['enabled', 'minSample', 'lowEngageRate', 'highEngageRate', 'step', 'bandMin', 'bandMax', 'sampleWindow', 'observeWindowSec', 'minChangeCooldownSec', 'sweepIntervalSec', 'staleJudgedMaxSec']) {
+  for (const k of ['enabled', 'minSample', 'lowEngageRate', 'highEngageRate', 'step', 'bandMin', 'bandMax', 'sampleWindow', 'observeWindowSec', 'minChangeCooldownSec', 'sweepIntervalSec', 'staleJudgedMaxSec', 'labelWindowSec', 'ambientMax']) {
     assert.match(h, new RegExp(`${k}:`), `HF_LEARNING_DEFAULTS 必须含键 ${k}`);
   }
 });

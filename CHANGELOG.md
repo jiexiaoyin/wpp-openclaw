@@ -4,6 +4,103 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.6.8] 心流换标签: engaged 锚回「bot 自己那条」+ 反事实基线 (P0) (2026-09-26)
+
+> 老板 2026-09-26 原话: "我现在设置了 0.5 底线, 因为之前会无限降低, 都到 0.3 左右了。群里回复消息的频率太高了。
+> 这不是我希望的。**但是如果我不设定下限, 就会一直降低**。" 且明确: 要**按每个群的环境自动建画像、应景回复**, "**不愿意设定固定的触发关键词**"。
+> 本版只做 **P0 (把标签换对)**; 频率的结构约束是 v1.6.9 (P0.5), 群画像是 v1.7.0 (P1) —— 三批一起做, 最后**一次**部署。
+
+**根因 (代码级, 不是调参问题)**
+- `handler.ts` 的 `markHfGroupEngaged` 旧触发条件 = 「该群 600s 内**出现过任意人类群消息**」。
+  活跃群这条**恒为真** ⇒ "接话率"饱和 ⇒ `evalHfThreshold` 每轮 sweep 都走**下调**分支 ⇒ 阈值单调递减到 `bandMin`。
+  **它学的是"群里有没有人说话", 不是"我上一条说得怎么样"** —— 这就是"不设下限就会一直降低"的机制本身。
+- 真信号一直存在但没进闭环: judge prompt 里的"上次回复后无人接话 / 群里有热烈讨论"只用于拼提示词, 不落库、不进学习样本。
+- bot 自己那条消息的 id 此前**没入库** (`new_msg_id` 存的是**入站**消息的), 而发送侧拿得到 (`sendAiReply` 返回 `msgId`)
+  ⇒ "有人引用了我那条"这个最可靠的信号此前根本无法判定。
+- v1.6.6 的硬地板 (bandMin=0.5 + 读取侧钳制) 只挡症状, 不治病: 阈值被钉在地板上, 而地板之上的下调压力依旧存在。
+
+### Changed (标签语义)
+- **新增 `src/inbound/heartflow-label.ts`** (纯函数, 无 DB / 无 IO): 把标签锚回 **bot 自己发的那条**:
+  `quote`(有人引用了我那条) / `mention`(@我) / `negative`(针对我那句说"别刷了") 为**强信号**;
+  `short-window`(弱窗内有人说话) 为**弱正**; 窗满无人接话 = `silence`。
+  优先级 `negative > quote > mention > short-window` (引用比 @ 强: 引用带上下文, @ 可能只是叫人)。
+  **强信号在整个 `observeWindowSec`(600s) 内有效** —— 晚到的引用也是真接话; `short-window` 只在
+  `labelWindowSec`(默认 120s) 内成立, 且**先落 `engaged=1` 但不关窗**, 留给更强的信号升级
+  (弱→强可覆盖, 强信号之间不互相覆盖, 已有强结论不被覆盖)。
+- `wpp_hf_ledger` 增两列 (既有 CREATE 块内 + `ensureColumn` 守卫, 因为生产表已存在 `CREATE IF NOT EXISTS` 改不到它):
+  - `bot_msg_id VARCHAR(128) NULL` —— vendor 返回的 bot 那条的 msgId (vendor 不回 id 时为 NULL ⇒ 该行只能拿弱信号, 已知降级);
+  - `engage_signal VARCHAR(24) NULL` —— 命中信号 (可观测 + 审计)。
+- 开窗表在内存里 (`heartflow-learn.ts` 的 `_openWindows`, 按 `${accountId}:${groupId}` 索引), judge 路径**零额外 DB 读**;
+  已知降级: 进程重启会丢掉进行中的窗 ⇒ 那些行按 `silence` 收敛 (不会漏收敛, 只是信号变粗)。
+- 新语义键 (三处齐: 接口 / `HF_LEARNING_DEFAULTS` / `resolveHfLearning`): `labelWindowSec: 60`、`ambientMax: 0.5`。
+  ⚠️ 弱信号窗由计划的 120s **改为 60s**, 依据是下面影子验证的实测曲线 (120s 余量太薄会重新点燃飞轮)。
+  **`observeWindowSec` 保持 600 未动** (账本行寿命 + dispatcher 引用它的字面量被回归门锁死)。配置项仍**不进** UI schema。
+
+### Fixed (治本: 反事实基线 —— 不再把"群本来就热闹"当成绩)
+- 新增 `hfAmbientP(count, observedSec, windowSec) = 1 - exp(-rate * windowSec)` (泊松近似, 纯函数, 无新依赖),
+  `rate` = 该群**同一小时段**近 14 天的入站人类消息速率 (按本地小时分桶, 捕获"该时段本来就这么热闹"而不是被 7 天平均稀释掉)。
+- `isHfSampleInformative(signal, ambientP, ambientMax)`: 强信号**永远**可采信 (引用/@ 是有指向的行为, 群里再热闹也不减损含义);
+  `short-window` / `silence` **仅当 `ambientP < ambientMax`** 才进学习统计。素材来自新增聚合 `listHfGroupMsgHourBuckets`。
+- 效果 (回归门已固化): 饱和群 (`ambientP≈1`) 的弱样本被全部跳过 ⇒ 样本不足 ⇒ `evalHfThreshold` 返回 `changed:false`
+  ⇒ **不再单调下调**; 冷清群的 `silence`(没人理) 照常触发**上调**(少说精选)。`ambientP` 与信号直方图写进调阈审计的 `reason`, 便于回看。
+
+### Added (可观测与回归门)
+- `/heartflow status` 增 "信号分布(近 24h)" (quote/mention/negative/short-window/silence, 旧行归 `legacy`), 新增适配器方法
+  `countHfEngageSignals` + `listHfGroupMsgHourBuckets` (薄封装/barrel/类型齐)。
+- `tests/unit/heartflow-label.test.mjs` (24 例, 纯函数 + 源级接线守卫), 核心是**三条回归门**:
+  ① 饱和群过滤后样本 0 ⇒ 不下调 (同时**先复现旧行为下调**再断言新行为不调, 证明这条门真的在拦);
+  ② 冷清群样本照常参与 (别把学习一起掐死);
+  ③ 负词表**不得出现在触发路径** (`heartflow.ts` 触发/闸门不许引用它) —— 老板红线: 触发必须由心流五维判断, 不许用固定关键词。
+- 既有 `heartflow-feedback.test.mjs` 的清单同步: adapter 方法 12→14, HF 行类型 4→5, `HF_LEARNING_DEFAULTS` 键表 +2。
+
+### 影子验证 (部署前, **只读** 生产库; 2026-09-26)
+拿生产账本 (`wpp_hf_ledger`: 561 行 / 已收敛 91 行 / 3 个群) 与 `wpp_messages` 回放, 不写任何一行数据:
+- **旧标签被逐位证实**: 对那 91 条有 `sent_at` 的行, "该群 600s 内出现人类消息" = **62 条命中 ⇒ 比率 0.681**,
+  与台账里存量 `engaged=1` 比率 **0.687** 吻合 —— 旧闭环学的确实就是"群里有没有人说话"。
+- **阈值确实只会降**: 唯一有学习状态的群 `learned_threshold=0.5`, 而其审计行是
+  `rate=0.800 total=20 engaged=16` (0.8 ≥ `highEngageRate` 0.5 ⇒ 下调分支); 上次变更记录 `old=0.3 → new=0.5`,
+  是 v1.6.6 的**地板钳制**把它抬回来的, 不是学习修正的。
+- **窗长曲线** (同一批 91 行, 换弱信号窗长):
+
+  | 弱窗 | 30s | 60s | 90s | 120s | 180s | 300s | 600s(旧) |
+  |---|---|---|---|---|---|---|---|
+  | 判为 engaged 的比率 | 0.242 | **0.330** | 0.396 | 0.440 | 0.462 | 0.538 | 0.681 |
+
+  死区是 (`lowEngageRate` 0.15, `highEngageRate` 0.5), 中点 0.325。**旧 600s 恒在 0.5 以上 ⇒ 每轮必下调**;
+  120s 的 0.44 虽落进死区, 但离上限只剩 0.06 (n=91 时 95% 置信区间约 ±0.10 ⇒ 会跨过 0.5),
+  而该标签**因果上受 bot 自己影响** (回得多 → 群里反应多 → 比率更高 ⇒ 再下调 = 正反馈), 余量太薄就会重新点燃飞轮;
+  **60s 的 0.33 正好在死区中点, 两侧余量对称 (~0.18/0.17)**, 故取 60s。
+- **反事实基线在当前数据量下不生效 (如实说明)**: 该群最忙的时段是 63 条/小时段 ⇒ `ambientP(60s)=0.08`,
+  远小于 `ambientMax=0.5` ⇒ 弱样本**一条都不会被过滤**; 要过线需该时段持续 ≥21 条/小时。
+  也就是说 **本次止住跑飞靠的是"标签换锚 + 弱窗收窄", 不是反事实过滤**; 过滤器是给"将来某群真的变得极吵"留的闸
+  (以及未来 P1 画像的路标), 现在它在待命而没在工作 —— 这一点不含糊其辞。
+- 顺带修掉一个跨表雷 (仅注释记录, 未改行为): `wpp_messages` 是 `utf8mb4_unicode_ci`, 而 `wpp_hf_*` 三表是
+  MariaDB 11 默认的 `utf8mb4_uca1400_ai_ci` ⇒ **两表 JOIN 会直接报 `Illegal mix of collations`** (实测)。
+  新聚合 `listHfGroupMsgHourBuckets` 刻意做成单表查询; 将来跨表比较必须显式 `COLLATE`。
+
+### 与计划的偏差 / 已知代价 (如实记录)
+- **"消息被撤回"这条负信号按计划本该做, 本次没做**: 判定需要额外 vendor 查询或轮询, 成本与可靠性都不划算,
+  且撤回在群聊里语义含糊 (可能是发错字)。负信号**只保留文本词表** (且分强弱两档: 引用/@ 消息用完整 14 词,
+  窗内裸消息只认 4 个硬词 —— 裸消息没有上下文, 误报代价是冤枉一次好回复, 宁可少判)。
+- **v1.6.8 之前落的账本行没有 `engage_signal` (NULL) ⇒ 一律不采信** (`asHfEngageSignal` → null)。
+  代价: 阈值学习在部署后会先"冻结"一段时间 (每群攒够 `minSample` 条**新**样本才恢复调阈), 这是**有意**的 ——
+  那些行正是**旧错误标签**, 采信它们等于改造白做。
+- 词表位置: `HF_NEGATIVE_PHRASES` (14) / `HF_HARD_NEGATIVE_PHRASES` (4) 在 `heartflow-label.ts`,
+  文件头与常量注释都写明 **"只用于给 bot 自己的发言打分, 不是触发关键词"**。
+- 另一处偏差: 计划里 `labelWindowSec` 写的是 120s, 实测后改为 **60s** (依据见上面影子验证的窗长曲线)。
+
+### 测试状态 (必读: 有 2 条**预期红**, 都是"待部署"绊索)
+- `npm test` = **210 tests / 206 pass / 2 fail / 2 skip**。两条红都是**故意**的"改了就该部署"提醒, 不是回归:
+  1. `deploy-integrity.test.mjs:47`「部署端 `db/schema.sql` 与源码仓逐字节一致」—— 本版改了 `db/schema.sql` (v1.6.5 事故刻意钉下的绊索);
+  2. `p2-cleanup.test.mjs:140` P2-4.2「deploy `openclaw.plugin.json`.version = dev (部署没掉队)」—— 本版版本号 1.6.7→1.6.8 而部署端仍是 1.6.7。
+  两条都在 `deploy-swap.sh` 跑过后自动转绿 (无需改代码)。**改 schema / 改版本前**的基线为 186 tests / 184 pass / 0 fail / 2 skip。
+
+### 部署与生产
+- **尚未部署** (按老板 2026-09-26 拍板: P0+P0.5+P1 **三批一起做、一次部署**)。需要老板明确授权后执行
+  一次 `deploy-swap.sh --force` + `systemctl --user restart openclaw-gateway`。
+- 部署前会先做**只读影子验证**: 拿生产账本回放最近 7 天, 按新判据重算 engaged/信号分布, 输出"旧标签 vs 新标签"对比,
+  并量化"多少行属可采信样本""阈值还会不会继续降"。
+
 ## [运维] 公开仓脱敏加固: 脱敏规则外置单一真源 + `master`/`main` 双分支历史重写 + 发布三门 (2026-09-26, 无插件代码变更)
 
 > 老板指令: **必须脱敏**。这一版没有改插件运行时行为, 改的是"发布链"本身。
