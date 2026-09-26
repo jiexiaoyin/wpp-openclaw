@@ -5,7 +5,7 @@
 //   (tryHeartflowAfterEnrich → tryIndependentTrigger) 已整条删除, 原因 (均为实测事实):
 //     1. 它只 log 决策, **从不发送、从不落台账** ⇒ 对心流行为零影响;
 //     2. 判定用**账号级**阈值 (不走 resolveThresholdOverride) ⇒ 与真实决策用的 per-群 learned
-//        阈值不一致 (华为群 learned=0.30 vs 账号级 0.6), 就算接上发送也是错的;
+//        阈值不一致 (XX群 learned=0.30 vs 账号级 0.6), 就算接上发送也是错的;
 //     3. 它先调 markHeartflowJudged() 消耗 judge 冷却, 而真实路径共用该冷却 ⇒ minJudgeIntervalSec>0
 //        时会把真路径整个闸死 (静默失效地雷);
 //     4. ⚠️⚠️ **同一个群消息被 judge 两次**: enrichBatch 先 map(enrichAndSaveMessage) (内部已 fire
