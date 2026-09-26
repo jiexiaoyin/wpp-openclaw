@@ -8,11 +8,16 @@ import type {
   HfGroupHourBucket,
   HfGroupMsgStats,
   HfGroupProfileRecord,
+  HfGroupShareRow,
   HfGroupStateRecord,
+  HfLayerSampleRow,
+  HfLayerStatRecord,
   HfLedgerRecord,
+  HfOutboundTextRow,
   HfLedgerTrace,
   HfSentCountRow,
   HfThresholdAuditRecord,
+  HfVetoResult,
 } from "./types.js";
 
 /** judge 通过落行 (INSERT IGNORE, dup 保留首次决策) */
@@ -176,4 +181,54 @@ export async function getHfGroupMessageStats(
   sinceSec: number,
 ): Promise<HfGroupMsgStats> {
   return getAdapter().getHfGroupMessageStats(accountId, groupId, sinceSec);
+}
+
+// ===== v1.8.0 分层统计 (wpp_hf_layer_stat) =====
+
+/** 分层输入: 窗口内全部群已收敛行 (一次批量取, 避免逐群 N+1) */
+export async function listHfClosedSince(
+  accountId: string,
+  sinceSec: number,
+  limit: number,
+): Promise<HfLayerSampleRow[]> {
+  return getAdapter().listHfClosedSince(accountId, sinceSec, limit);
+}
+
+/** upsert 一行段统计 (调用方只在内容变化时调) */
+export async function upsertHfLayerStat(record: HfLayerStatRecord): Promise<void> {
+  return getAdapter().upsertHfLayerStat(record);
+}
+
+/** 读账号全部段统计 (启动预热内存缓存用) */
+export async function listHfLayerStats(accountId: string): Promise<HfLayerStatRecord[]> {
+  return getAdapter().listHfLayerStats(accountId);
+}
+
+/** 一键否决: 把该群最近一条已发出标记为 veto (无行可标 ⇒ null) */
+export async function markHfLedgerVeto(
+  accountId: string,
+  groupId: string,
+  atSec: number,
+): Promise<HfVetoResult | null> {
+  return getAdapter().markHfLedgerVeto(accountId, groupId, atSec);
+}
+
+/**
+ * v1.9.0 观测: 每群发言占比素材 (按群 × 方向计数)。
+ * ⚠️ 出站行 chat_id 为 NULL, adapter 侧已 `COALESCE(NULLIF(chat_id,''), peer_id)` 归群。
+ */
+export async function listHfBotMsgShare(
+  accountId: string,
+  sinceSec: number,
+): Promise<HfGroupShareRow[]> {
+  return getAdapter().listHfBotMsgShare(accountId, sinceSec);
+}
+
+/** v1.9.0 观测: 重复率素材 (群聊出站文本, 时间升序) */
+export async function listHfOutboundTexts(
+  accountId: string,
+  sinceSec: number,
+  limit: number,
+): Promise<HfOutboundTextRow[]> {
+  return getAdapter().listHfOutboundTexts(accountId, sinceSec, limit);
 }

@@ -17,13 +17,21 @@
 //    是反馈闭环的输入, 不是触发器.)
 
 /** 命中信号种类 (落 wpp_hf_ledger.engage_signal, 供 /heartflow status 分布与审计) */
-export type HfEngageSignal = "quote" | "mention" | "negative" | "short-window" | "silence";
+export type HfEngageSignal = "quote" | "mention" | "negative" | "veto" | "short-window" | "silence";
 
-/** 强信号 (与群是否本来就热闹无关, 永远算有效学习样本) */
-export const HF_STRONG_SIGNALS: readonly HfEngageSignal[] = ["quote", "mention", "negative"];
+/**
+ * 强信号 (与群是否本来就热闹无关, 永远算有效学习样本)。
+ * v1.8.0 起含 `veto` (人工一键否决 `/heartflow veto`): 它是**人工标注的负样本**, 比任何自动判据都可信 ——
+ * 必须进本表, 否则会被 ambientP 本底过滤掉 (冷清群里 veto 恰好最需要被记住)。
+ */
+export const HF_STRONG_SIGNALS: readonly HfEngageSignal[] = ["quote", "mention", "negative", "veto"];
 
-/** 全部信号 (落库值域; 供 asHfEngageSignal 校验用) */
-const HF_ALL_SIGNALS: readonly string[] = ["quote", "mention", "negative", "short-window", "silence"];
+/**
+ * 全部信号 (落库值域; 供 asHfEngageSignal 校验用)。
+ * ⚠️ 加新信号必须**同时**改这里 + HfEngageSignal 联合类型 + DDL 的 engage_signal 列宽 ——
+ * 漏这里的后果是**静默**的: asHfEngageSignal 返回 null ⇒ 该行被当 legacy 丢弃, 信号完全无效且无报错。
+ */
+const HF_ALL_SIGNALS: readonly string[] = ["quote", "mention", "negative", "veto", "short-window", "silence"];
 
 /**
  * DB 读回来的 engage_signal (string|null) → 收窄成 HfEngageSignal.

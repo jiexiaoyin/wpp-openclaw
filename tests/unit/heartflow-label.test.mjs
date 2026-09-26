@@ -218,11 +218,16 @@ test('asHfEngageSignal: NULL/未知 → null (v1.6.8 前的旧错误标签不得
   assert.equal(L.asHfEngageSignal("quote"), "quote");
   assert.equal(L.asHfEngageSignal("short-window"), "short-window");
   assert.equal(L.asHfEngageSignal("silence"), "silence");
+  // v1.8.0 一键否决: veto 必须能落库读回 —— 漏了值域它会返回 null ⇒ 行被当 legacy 丢弃,
+  //   veto 完全无效**且无报错** (静默失效, 故单列一条断言)
+  assert.equal(L.asHfEngageSignal("veto"), "veto", "veto 必须进 HF_ALL_SIGNALS 值域");
 });
 
-test('HF_STRONG_SIGNALS = quote/mention/negative (只含强信号)', (t) => {
+test('HF_STRONG_SIGNALS = quote/mention/negative/veto (强信号必须含 veto)', (t) => {
   skipNoDist(t);
-  assert.deepEqual([...L.HF_STRONG_SIGNALS].sort(), ["mention", "negative", "quote"]);
+  assert.deepEqual([...L.HF_STRONG_SIGNALS].sort(), ["mention", "negative", "quote", "veto"]);
+  // veto 是**人工标注**的负样本: 必须恒可采信, 否则冷清群里恰好会被 ambientP 本底过滤掉
+  assert.equal(L.isHfSampleInformative("veto", 0.9, 0.5), true, 'veto 不受本底过滤');
 });
 
 // ===== 4. hfAmbientP + 可采信判定 =====
@@ -344,11 +349,17 @@ test('回归门: 标签不再挂在"任意人类消息"上 —— handler 必须
   assert.match(d, /labelWindowSec/, 'dispatcher 必须把 labelWindowSec 传给 persistHfSendOutcome');
   assert.match(d, /HF_LEARNING_DEFAULTS\.observeWindowSec/, '既有点位不许动 (部署门断言字面量)');
   // 学习侧: 反事实基线过滤必须接线到 sweep
+  // v1.8.0 取数与公式**收口到 heartflow-layer** (调阈 pass 与分层 pass 必须共用同一条聚合查询 + 同一个
+  //   ambientP 公式, 否则同一条样本会在两侧判定不一致)。故断言从"learn 里出现函数名"改为**整条链不许断**:
+  //   learn 必须调 ambientPFromHourCounts/loadHfGroupHourCounts, 而它俩必须仍落在 hfAmbientP/listHfGroupMsgHourBuckets 上。
   const hl = src('src/inbound/heartflow-learn.ts');
   assert.match(hl, /isHfSampleInformative\(/, 'sweep 必须按可采信判定过滤样本');
-  assert.match(hl, /hfAmbientP\(/, 'sweep 必须算反事实基线');
-  assert.match(hl, /listHfGroupMsgHourBuckets\(/, '反事实基线素材必须来自同小时段聚合');
+  assert.match(hl, /ambientPFromHourCounts\(/, 'sweep 必须算反事实基线 (单源公式)');
+  assert.match(hl, /loadHfGroupHourCounts\(/, '反事实基线素材必须来自同小时段聚合');
   assert.match(hl, /pruneOpenWindows\(/, 'sweep 必须清理内存开窗 (防泄漏)');
+  const lay = src('src/inbound/heartflow-layer.ts');
+  assert.match(lay, /hfAmbientP\(/, '单源公式的落地处必须仍在 (这是"算反事实基线"的真正实现)');
+  assert.match(lay, /listHfGroupMsgHourBuckets\(/, '单源素材的取数处必须仍在 (同小时段聚合)');
 });
 
 test('回归门: 负词表是**评估用**的, 不得出现在触发路径 (老板 2026-09-26: 不许用固定关键词触发)', (t) => {

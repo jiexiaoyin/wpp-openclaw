@@ -188,6 +188,8 @@ test('classifyHfSend: 占位符 (ok:true 但非真发) → suppressed', (t) => {
   assert.equal(hf.classifyHfSend({ ok: true, msgId: 'dedup-suppressed' }), 'suppressed');
   assert.equal(hf.classifyHfSend({ ok: true, msgId: 'ack-template-dropped' }), 'suppressed');
   assert.equal(hf.classifyHfSend({ ok: true, msgId: '' }), 'suppressed');
+  // v1.9.0 重复闸拦下 (第五态): 不加这条会被判成 sent ⇒ 占预算 + 开 600s 观察窗 ⇒ 毒化学习样本
+  assert.equal(hf.classifyHfSend({ ok: true, msgId: 'repeat-suppressed' }), 'suppressed');
 });
 
 test('classifyHfSend: 真发 (vendor 无回 id=undefined / 有 id) → sent', (t) => {

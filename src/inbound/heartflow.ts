@@ -29,6 +29,9 @@
 import { warn } from "../core/logger.js";
 import { callJudge, resolveJudgeCreds } from "../llm-judge.js";
 import type { HfBudgetConfig } from "./heartflow-budget.js";
+import type { HfDedupeConfig } from "./heartflow-dedupe.js";
+import type { HfLayeredConfig } from "./heartflow-layer.js";
+import type { HfShareGuardConfig } from "./heartflow-observe.js";
 import type { HfProfileConfig } from "./heartflow-profile.js";
 import { peekHfBudget, resolveHfBudget } from "./heartflow-budget.js";
 
@@ -87,6 +90,28 @@ export interface HeartflowConfig {
    * ⚠️ 用 `import type` 只为类型 (heartflow-profile.ts 反向 import 本文件, 值导入会成环)。
    */
   profile?: HfProfileConfig;
+  /**
+   * v1.8.0 分层学习 (群 × 时段): 同一个群上午和深夜的合适频率本就不同, 一个标量管不了。
+   * 每轮 sweep **全量重算**该群各段的样本/接话率, 段内样本够时从群级 learned 出发走**一步**
+   * evalHfThreshold (±step, 被 band 钳死, 不累积不漂移)。
+   * ⚠️ 默认 `apply:false` = **影子**: 照算照记, 只在 `/heartflow why` `/heartflow report` 里显示
+   * "若生效会是多少" —— 老板看够了再手动开。缺省走 HF_LAYERED_DEFAULTS。
+   * ⚠️ 用 `import type` 只为类型 (heartflow-layer.ts 反向 import 本文件, 值导入会成环)。
+   */
+  layered?: HfLayeredConfig;
+  /**
+   * v1.9.0 重复内容闸 (老板 2026-09-26 拍板): 同群 6 小时内高度相似 (≥0.85) 的心流**主动插话**不发。
+   * 生产实测主群 bot 发言重复率 28% —— 这是"不像真人"最刺眼的症状。缺省走 HF_DEDUPE_DEFAULTS。
+   * ⚠️ 只在 dispatcher 的心流 deliver 路径生效 (@/引用/关键词等"被叫到"的回复不拦)。
+   * ⚠️ 用 `import type` 只为类型 (heartflow-dedupe.ts 反向 import 本文件, 值导入会成环)。
+   */
+  dedupe?: HfDedupeConfig;
+  /**
+   * v1.9.0 占比外环 (老板拍板): 该群 bot 发言占比 > 目标 (默认 5%) 且样本够 ⇒ 收紧当日预算。
+   * **不动阈值** —— 只动有界的预算参数 (间隔×2 有 cap, 上限÷2 有 floor), 与画像收紧走同一条复合路径。
+   * 缺省走 HF_SHARE_GUARD_DEFAULTS。
+   */
+  shareGuard?: HfShareGuardConfig;
 }
 
 /**

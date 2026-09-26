@@ -111,7 +111,8 @@ test('7. 唯一 judge 入口仍是 handler.ts 的 via="heartflow" 分支 (别误
   const h = read(`${ROOT}/src/inbound/handler.ts`);
   assert.match(h, /else if \(t\.via === "heartflow" && opts\.heartflow\?\.enabled\)/, 'handler.ts 必须保留 via=heartflow 分支');
   assert.match(h, /await judgeHeartflow\(/, 'handler.ts 必须仍调 judgeHeartflow');
-  assert.match(h, /resolveThresholdOverride\(m\.accountId, chatId, hfCfg\)/, 'learned per-群阈值 override 必须仍在');
+  // v1.8.0 保名加第 4 参 nowSec (分层按当前时段取值) ⇒ 正则放宽为"hfCfg 后跟逗号或右括号"
+  assert.match(h, /resolveThresholdOverride\(m\.accountId, chatId, hfCfg(,|\))/, 'learned per-群阈值 override 必须仍在');
 });
 
 test('8. heartflow.ts 仍保留 judge 主体 (删除只针对独立入口)', () => {

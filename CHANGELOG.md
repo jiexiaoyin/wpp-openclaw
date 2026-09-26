@@ -4,6 +4,157 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.9.0] 心流观测复盘 (P3) + 重复内容闸 + 占比外环 (2026-09-26)
+
+> 承接 v1.6.8 (换标签) / v1.6.9 (发言预算) / v1.7.0 (群画像) / v1.8.0 (分层)。
+> 老板的诉求始终是"bot 像个真人" —— 本版补上**两块一直缺的东西**: 一个能回答
+> "**到底说多了没有**"的观测面 (按需可查, 不推送), 和两道**只收紧**的结构约束
+> (重复内容闸 / 占比外环)。P2+P3 一次部署 (老板 2026-09-26 拍板)。
+
+### Added (观测复盘: 按需 `/heartflow report`, 不推送)
+- **新增 `src/inbound/heartflow-observe.ts`** (纯函数 + **单表**聚合; **无新表、无定时器**):
+  - `hfBotShare` / `fmtHfShare`: 占比口径 = **`bot/(人+bot)`** (有界), 报告同时显示原始条数, 便于对账。
+  - `hfEngagementLift`: 本底 `<0.01` ⇒ `null` (**不除零, 也不吹成 100×**);
+    `hfEngagementSummary` 对每个样本用它**自己那一小时**的本底 (跨时段混算会把"夜里冷清"算成"接了话")。
+  - `hfRepeatRate`: **与重复闸共用 `hfRepeatVerdict`**。若各写一套相似度, 会出现"日报说重复很多、闸一条没拦"
+    —— 那"观测驱动收口"就是假的 (有源级测试钉住)。
+  - `buildHfDigest`: 七节 (发言占比 / 接话率+lift / 被制止率 / 重复率 / 影子分层 / 预算拦截 / 占比外环),
+    **硬 cap 3500 字符**, 逐节限流, 超限从尾部整行丢弃并标 `…(已截断)`。
+  - `/heartflow report [天数]`: 默认 7 天, 钳 1..30; 最多 8 群, 其余折叠 `…其余 N 群`。
+- **出口是 filehelper** (`sendToFileHelper`), **不经 `sendAiReply`** ⇒ 不触发 sha1 去重、不进重复闸、
+  **不落心流台账** —— 日报不是"回复", 不能污染统计样本。
+- 两条新只读单表聚合 `listHfBotMsgShare` / `listHfOutboundTexts`; 与既有 4 条时间聚合同一纪律
+  (单表 —— `wpp_messages` 与 `wpp_hf_*` 的 collation 不同, 跨表会直接报错)。
+
+### Added (重复内容闸: 同群 6 小时内高度相似就不发)
+- **新增 `src/inbound/heartflow-dedupe.ts`**: 同群 **6 小时**窗内、归一化相似度 **≥0.85** 即拦下 (老板拍板),
+  **只对心流主动插话生效** (`proactiveOnly`) —— 被人 @ / 引用叫到时该回还得回。
+- 三道误杀防护 (误杀比漏放贵得多: 群里该接的话 bot 装死, 老板看到的是"bot 变笨了"):
+  1. **归一化后前缀精确匹配优先** (更准也更便宜);
+  2. `minChars=12`: "收到/好的/👌" 不进相似判定 (也不进历史, 否则它们会互相判重);
+  3. **数字保留**: `iPhone 15` 与 `iPhone 16` 报价结构相同但**不是复读**。
+- **钩子点在 `deliver` 回调里、`await sendAiReply` 之前**: 拦在发出之前才有意义;
+  不塞进 `sendAiReply` —— 那是账号级公共出口 (filehelper/私聊/非心流回复都走它), 且已有另一套 sha1 精确去重语义。
+- **`classifyHfSend` 第五态 `repeat-suppressed`**: 不加这条会被判成 `sent` ⇒ (i) 消耗发言预算额度、
+  (ii) 开一个 600s 观察窗 ⇒ 后续人类的正常发言被记成"接了我那句" ⇒ **毒化分层与学习样本**。
+  该分支同时**不写重复历史** (没说出口的话不能拦下一句)、**不进预算**、**不开窗**。
+- 内存态 `(account, group) → 最近 N 条真发出文本`, sweep 每轮按窗口/条数双裁 (防长跑内存增长);
+  `enabled` / `simThreshold` / `windowSec` 等全部可热重载 (异常时关闸即恢复, 无需重启)。
+
+### Added (占比外环: 该群 bot 占比 > 5% ⇒ 收紧当日预算)
+- `hfShareTighten` (纯函数): 占比 **严格 > 5%** 且当日样本足够 (`≥40` 条消息且 `≥5` 条 bot 发言, 防噪声)
+  ⇒ 收紧档 `minGapSec ×2 (cap 900)` / `maxPerHour ×0.5 (floor 2)` / `maxPerDay ×0.5 (floor 10)`。
+- DB 聚合在 **sweep 侧** (每轮一次), 判定侧只读内存 ⇒ **judge 热路径仍是零 DB IO**;
+  内存态随**本地日**翻页自然失效。
+- 消费点 = 与既有画像收紧**再套一层** (`tightenHfBudget(tightenHfBudget(...))`) ⇒ 两层都只能收紧, 复合安全。
+- 生效痕迹进 `/heartflow status` 与 `report` (「占比 > 5% ⇒ 今日预算已收紧」)。
+
+### Changed (时间口径全仓收口: 一切按群聚合都走 `ts`)
+- 四处的 `COALESCE(create_time, UNIX_TIMESTAMP(ts))` 统一改为 **`UNIX_TIMESTAMP(ts)`**。
+  原因 (**2026-09-26 生产只读实测**): `wpp_messages.create_time` 已是**遗留死列** —— 当前代码只读不写,
+  该列的非空值形如 `YYYYMMDDHHMMSS` **不是 epoch**, 且较新的行该列全为 NULL。
+  把它当秒用 ⇒ 那些行被算到公元 60 万年 ⇒ **分桶/排序/窗口全错且不报错**。
+  既有窗口 (≤30 天) 恰好够不到这类行, 属"埋着的雷", 本版一并拆除;
+  并加源级门 (见测试状态) 钉住不得写回。`ensureColumn(...create_time...)` 保留 (仅为兼容老库), 注释写明真实语义。
+- **COALESCE 归群维持不变**: 生产实测出站行的 `chat_id` / `from_wxid` **全为 NULL** (只有入站写这两列)
+  ⇒ 所有"按群"聚合必须 `COALESCE(NULLIF(chat_id,''), peer_id)`, 否则 bot 侧分子恒 0 且**不报错**。
+
+### 与计划的偏差与取舍
+- **闸的实测结论是"空转", 不是"拦得太狠"**: 部署前只读回放真实账本发现 —— 近期群出站文本里
+  相似度 ≥0.85 的重复**全部**来自"每日固定时刻的自动化播报", 其间隔**恒为 24 小时** ⇒ 6h 窗**看不到**它们;
+  而该播报走的是 automation announce, **根本不经心流路径** ⇒ 闸无权干预。
+  故 **6h/0.85 按老板拍板原样保留** (误杀风险 ≈ 0, 它防的是"同一天内心流插话复读", 实测未发生过);
+  若日后要让"复读"更少, 该调的是那个定时播报本身, 不是闸的窗口。
+- **分层达到门槛 ≠ 会改行为**: 回放显示当时唯一达标的那一格落在**群级阈值已在地板** (`bandMin`) 的群上,
+  `evalHfThreshold` 给出 `clamped-noop` (想下调被地板挡死) ⇒ 本版分层即便生效也**无动作空间**。
+  这与 `allowLoosen=false` (只许收紧) 的设计一致, 但说明**分层短期是纯观测** —— 别指望它立刻改变行为。
+- **分层样本从 0 起算**: 信号列 (`engage_signal`) 是 v1.6.8 才有的, 部署前的旧行一律按 legacy 丢弃
+  ⇒ 门槛时钟从**部署日**开始 (与 v1.8.0 的进度预估一致; 部署越晚, 分层可用越晚)。
+- **"重复率"的口径偏差 (报告正文已标注)**: 分母是**全部群出站文本**, 含定时播报与人工手打,
+  ≠ "心流发言的重复率" ⇒ **只看趋势, 不判绝对超标**。要精确到心流需在发送侧落来源标记 (未做: 不动 `wpp_messages` 结构)。
+- **预算拦截计数是进程内累计** (重启清零), 报告如实标注, 不假装"按日统计"。
+
+### 测试状态
+- 新增 `tests/unit/heartflow-dedupe.test.mjs` (16 条) + `tests/unit/heartflow-observe.test.mjs` (15 条), 全绿。
+  结构性门: 闸与重复率**共用同一判定函数** / `suppressed` 分支不占预算·不开窗·不进历史 /
+  闸必须在 `sendAiReply` **之前** / 报告出口走 filehelper 且天数被钳 / 时间口径**不得写回** `create_time` /
+  出站归群必须 `COALESCE` 兜底 (否则分子恒 0)。
+- 既有测试同步: `heartflow-feedback` (方法清单 +2 / 行类型 +2)、`heartflow-learn` (`classifyHfSend` 第五态)。
+- 全量: **317 条 / 313 绿 / 2 红 / 2 skip**; 两条红仍是**刻意的「待部署」绊索**
+  (`deploy-integrity` 的 schema.sql 逐字节一致 + `p2-cleanup` 的部署版本号), 部署后自动转绿, **不要当回归修**。
+
+## [v1.8.0] 心流分层学习: 群 × 时段 (P2) (2026-09-26)
+
+> 承接 v1.6.8 (换标签) / v1.6.9 (发言预算) / v1.7.0 (群画像)。老板 2026-09-26 的原话:
+> "**根据每个群聊环境, 自动理解群身份与特征**" —— 画像解决了"这个群是什么群",
+> 本版解决"**同一个群在不同时段本来就不一样**": 上午的群和深夜的群, 一个标量管不了。
+> 分层**不是新的自学标量**: 它是"从群级阈值出发、按该时段的真实接话率走**一步**"的结果
+> (被硬区间钳死, 不累积不漂移), 段内样本不够就**回落**既有先验 —— 不引入第二套判定参数。
+
+### Added (分层统计: 群 × 时段)
+- **新表 `wpp_hf_layer_stat`** (`(account_id, group_id, layer_kind, layer_key)` 主键;
+  `n` / `engaged` / `ambient_p` / `window_start` / `updated_at`)。新表只用 `CREATE TABLE IF NOT EXISTS`
+  一条路 (applyMigrations + `db/schema.sql`), **不需要 `ensureColumn`**。
+- **新增 `src/inbound/heartflow-layer.ts`** (范式照 `heartflow-profile.ts`: 纯算法 + 内存缓存 + 一个 IO 入口):
+  - `aggregateHfLayerStats` (**纯函数**): 按 `sent_at` 的**本地小时**归段 → 信号值域校验 (旧行丢弃) →
+    **逐样本用它自己那一小时的**本底过滤 (强信号 `quote`/`mention`/`negative`/`veto` 不受过滤) → 计数。
+  - `normalizeHfBuckets`: 分段定义越界/倒置/重叠/非整数/超 6 段 ⇒ **整体**回落默认四段 (不半套生效)。
+  - `getHfLayerStat` / `loadHfLayerStats` / `resetHfLayerCache`: 段统计常驻内存 ⇒ **judge 热路径零 DB 读**
+    (与 P0.5 预算、P1 画像同一原则)。
+  - `loadHfGroupHourCounts`: 每群×每小时入站量的**唯一取数入口** (缓存 120s), 与调阈侧同一公式 ——
+    两处若各写一份, 同一条样本会在一边"可采信"、另一边"不可采信"。
+- **每轮 sweep 全量重算, 只 upsert 有变化的行** (稳态下 0 写)。**绝不做增量累加**: sweep 每 300s 一次,
+  累加会让 `n` 一小时虚涨 12 倍且**永远无法自愈**; 重算是幂等的, 改口径/改分段后自动收敛。
+- `windowDays` 默认 60 上限: 否则"某时段更受欢迎"会被 60 天前的旧样本永久锁死。
+
+### Added (读侧决策 + 影子)
+- `resolveHfThresholdDecision(accountId, groupId, hfCfg, nowSec?)`: 链路 = **段内样本够 且 `layered.apply`
+  ⇒ 分层值** → 否则群级 learned → 否则账号级; 全过读侧 `clampHfThresholdToBand`, 再由 handler 的
+  `max(..., 画像下限)` 兜底 (画像仍只收紧)。**纯内存, 无 await / 无 SQL**。
+- `resolveThresholdOverride` **保名加第 4 参 `nowSec`** (照 `markHfGroupEngaged` 的先例): 分层要按当前时段取值。
+- `layered.allowLoosen` 默认 **false** = 分层**只许收紧** (更克制)。放开"更主动"的权利是一个开关的事,
+  默认不放开是因为 v1.6.6 的教训: "回得多 → 群里反应多 → 比率更高 → 再下调"是会跑飞的正反馈。
+- **`apply` 默认 false = 影子**: 照算照记, 只在 `why` / `layers` 里显示"若生效会是多少"。
+
+### Added (一键反馈: 这条不该回)
+- **`/heartflow veto [群ID]`**: 把该群**最近一条已发出**的发言标成 `engaged=0 / signal='veto'`。
+  五件事缺一件就静默失效, 逐条落地:
+  1. `'veto'` 同时进 `HfEngageSignal` 联合类型 + `HF_ALL_SIGNALS` + `HF_STRONG_SIGNALS`
+     (漏 `HF_ALL_SIGNALS` ⇒ 读回 null ⇒ **完全无效且无报错**; 必须是强信号 ⇒ 冷清群里不被本底过滤)。
+  2. 选行 `ORDER BY sent_at DESC, id DESC` (**不能按 `judged_at`**: 一条被预算拦久的旧 judged 行会盖过刚发出的那条)。
+  3. 调 `forgetHfOpenWindow` 删内存开窗 —— 否则随后有人引用那条消息会把 veto 覆盖成 `engaged=1`,
+     样本从"不该回"翻转成"该回", **比不点更糟**。
+  4. 最近 15 分钟有 **≥2 个群**发过言 ⇒ 拒绝并要求显式群 ID (写错群不可撤销, 错样本会在 60 天窗口里持续污染)。
+  5. 回执**回声**被否决那条的内容开头, 让老板确认删的是哪条。
+
+### Added (可观测)
+- **`/heartflow layers [群ID]`**: 各时段 `n / rate / 本底 / 影子建议 / 是否生效` + **每段样本进度 `n/门槛`**
+  (主力时段约 2–3 周、上午段约 6 周、夜段约 3 个月才够门槛 —— 让老板看得见进度, 否则影子态像"什么都没发生")。
+- **`/heartflow why <群ID>` 加归因行**: `当前有效阈值 X = 分层[段] (n/rate, 生效或影子) ← 群级 / 账号 / 画像下限`。
+- `/heartflow status`: learned 群清单加显示上限 (超出折叠成 `…其余 N 群`) + 分层模式与已达标段摘要。
+
+### Changed
+- `classifyHfSend` / `HfSendOutcome` 等既有算法**未改** (P3 才会新增第五态)。
+- `loadAmbientByGroup` 改为复用 `loadHfGroupHourCounts` (同一条查询 + 同一公式), 语义与取值**完全不变**。
+
+### 与计划的偏差与取舍
+- **话题层降级为"只记不判"**: `layer_kind` 字段与 `'topic'` 槽位预留, 本版不做话题决策 ——
+  每群每天约 4 条发言的量级下话题桶的 `n` 会长期低于门槛 (比最冷的时段还冷), 且会让 `why` 的归因链
+  变成三层不可解释。等时段层样本攒够再评估。
+- **分层不做冷却**: 全量重算天然不累积 + 复用既有死区滞回已经够; 再加冷却会与 `evalHfThreshold`
+  的参数打架 (两套防抖参数互相抵消)。
+- **影子阈值不落库**: 它是 `(n, engaged, 群级阈值, 账号级阈值, 参数)` 的纯函数, 落库反而会漂移
+  (群级阈值变了表里还是旧影子, `why` 自相矛盾); 改为展示时现算。
+
+### 测试状态
+- 新增 `tests/unit/heartflow-layer.test.mjs` (22 条全绿), 含三条**行为级**回归门:
+  分层桶幂等 (同一批输入连跑两次 ⇒ 第二次 upsert 调用数 **0**, 防"累加桶"复活)、
+  veto 能落库读回、判定热路径无 `await`/无 SQL。
+- 既有测试同步: `heartflow-feedback` (表/方法/行类型清单 + `resolveThresholdOverride` 保名加参的正则)、
+  `heartflow-label` (信号值域 + 强信号含 veto)、`schema-sql-split` (注释行数绊索)。
+- `deploy-integrity` 的 schema.sql 逐字节一致 + `p2-cleanup` 的部署版本号**仍是刻意的「待部署」绊索**,
+  部署后自动转绿 —— 不要当回归修。
+
 ## [v1.7.0] 心流群画像: 按群自动理解身份与特征 (P1) (2026-09-26)
 
 > 承接 v1.6.8 (换标签) + v1.6.9 (预算)。老板 2026-09-26 的原话:

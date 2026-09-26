@@ -47,6 +47,12 @@ export {
   getHfGroupProfile,
   listHfGroupProfiles,
   getHfGroupMessageStats,
+  listHfClosedSince,
+  upsertHfLayerStat,
+  listHfLayerStats,
+  markHfLedgerVeto,
+  listHfBotMsgShare,
+  listHfOutboundTexts,
 } from "./heartflow.js";
 export { upsertAccount, getAccounts, getAccount } from "./accounts.js";
 export {

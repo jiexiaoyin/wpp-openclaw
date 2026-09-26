@@ -229,6 +229,41 @@ export interface DbAdapter {
     groupId: string,
     sinceSec: number,
   ): Promise<HfGroupMsgStats>;
+
+  // ====== v1.8.0 HEARTFLOW-LAYERED (群 × 时段分层统计) ======
+  /**
+   * 分层统计的**输入**: 窗口内**全部群**已收敛 (status='closed' 且 engaged 非空) 的台账行, 一次批量取回。
+   * 一次查询覆盖所有群是刻意的 (避免 N+1: 20 个群一次 sweep 打 20 次 DB)。
+   * 只读单表 wpp_hf_ledger (不与 wpp_messages JOIN: collation 不同)。
+   */
+  listHfClosedSince(accountId: string, sinceSec: number, limit: number): Promise<HfLayerSampleRow[]>;
+  /** upsert 一行段统计 (PK = account_id+group_id+layer_kind+layer_key); 调用方只在内容变化时调 */
+  upsertHfLayerStat(record: HfLayerStatRecord): Promise<void>;
+  /** 读账号全部段统计 (启动预热内存缓存; 判定的热路径不读它) */
+  listHfLayerStats(accountId: string): Promise<HfLayerStatRecord[]>;
+  /**
+   * v1.8.0 一键否决: 把该群**最近一条已发出**的台账行标成"这条不该回"
+   * (engaged=0 / engage_signal='veto' / status='closed')。
+   * 选行必须 `ORDER BY sent_at DESC, id DESC` —— **不能按 judged_at**: 一条被预算拦了很久的旧 judged
+   * 行会盖过刚发出的那条。无行可标 ⇒ 返回 null (上层如实回执"没找到")。
+   */
+  markHfLedgerVeto(accountId: string, groupId: string, atSec: number): Promise<HfVetoResult | null>;
+
+  // ====== v1.9.0 HEARTFLOW-OBSERVE (观测复盘 + 占比外环) ======
+  /**
+   * 每群发言占比素材: 窗口内按群 × 方向的条数 (只读**单表** wpp_messages)。
+   *
+   * ⚠️ 出站行的 `chat_id`/`from_wxid` 恒为 NULL (出站只写 peer_kind='group' + peer_id=目标群),
+   *   故归群必须 `COALESCE(NULLIF(chat_id,''), peer_id)` —— 直接 GROUP BY chat_id 会让 bot 侧分子
+   *   **恒为 0 且不报错** (占比永远显示 0%, 外环永远不触发)。
+   * ⚠️ 不与 wpp_hf_* JOIN: 两者 collation 不同 (MariaDB 实测 Illegal mix of collations)。
+   */
+  listHfBotMsgShare(accountId: string, sinceSec: number): Promise<HfGroupShareRow[]>;
+  /**
+   * 重复率素材: 窗口内**群聊出站**文本 (按时间升序, 取最近 limit 条)。
+   * 口径偏差: 出站行含"老板自己用 iPad 手打的消息", 插件发送与人工发送在 wpp_messages 里无法区分。
+   */
+  listHfOutboundTexts(accountId: string, sinceSec: number, limit: number): Promise<HfOutboundTextRow[]>;
 }
 
 /** v1.6.x: 心流 ledger 行类型 (wpp_hf_ledger, 落行字段; 列见 DDL) */
@@ -298,6 +333,59 @@ export interface HfSentCountRow {
   day_count: number;
   /** 最近一次发出的时刻 (unix 秒; 无则 null) */
   last_sent_at: number | null;
+}
+
+/** v1.8.0: 分层统计的输入样本 (已收敛台账行; 只取算得着的列) */
+export interface HfLayerSampleRow {
+  group_id: string;
+  engaged: number;
+  /** 命中信号 (quote/mention/negative/veto/short-window/silence); NULL = v1.6.8 前的旧行 ⇒ 不采信 */
+  engage_signal?: string | null;
+  /** 发出时刻 (unix 秒) —— 归段依据是"什么时候说的", 不是"什么时候收敛的" */
+  sent_at?: number | null;
+}
+
+/** v1.8.0: 一行段统计 (wpp_hf_layer_stat) */
+export interface HfLayerStatRecord {
+  account_id: string;
+  group_id: string;
+  /** 'daypart' (话题层预留未启用) */
+  layer_kind: string;
+  /** 段名, 如 "18-24" (起-止, 自解释) */
+  layer_key: string;
+  n: number;
+  engaged: number;
+  /** 段内本底 (该段各小时 ambientP 最大值; 展示用, 不参与判定) */
+  ambient_p: number | null;
+  /** 统计窗口起点 (unix 秒) */
+  window_start: number;
+}
+
+/** v1.8.0: veto 回执 (被标成"这条不该回"的那一行) */
+export interface HfVetoResult {
+  id: number;
+  /** 被否决那条的内容开头 (回声给老板确认删的是哪条) */
+  content_head: string | null;
+  sent_at: number | null;
+}
+
+/**
+ * v1.9.0: 每群发言占比素材 (wpp_messages 按群 × 方向计数)
+ * `group_id` 已 `COALESCE(NULLIF(chat_id,''), peer_id)` 归一 (出站行 chat_id 为 NULL)。
+ */
+export interface HfGroupShareRow {
+  group_id: string;
+  /** inbound | outbound */
+  direction: string;
+  n: number;
+}
+
+/** v1.9.0: 重复率素材行 (群聊出站文本) */
+export interface HfOutboundTextRow {
+  group_id: string;
+  content: string;
+  /** unix 秒 (取 create_time, 与 listHfGroupMsgHourBuckets 同口径: TIMESTAMP 会随 DB 时区漂) */
+  at_sec: number;
 }
 
 /**

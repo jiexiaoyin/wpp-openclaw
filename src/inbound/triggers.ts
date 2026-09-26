@@ -7,6 +7,7 @@ import type { HeartflowConfig } from "./heartflow.js";
 import { checkHeartflowGate } from "./heartflow.js";
 import { resolveHfBudget, tightenHfBudget } from "./heartflow-budget.js";
 import { getHfProfileBudget } from "./heartflow-profile.js";
+import { getHfShareTighten } from "./heartflow-observe.js";
 
 export type GroupPolicyValue = "open" | "disabled" | "allowlist" | "closed";
 
@@ -161,11 +162,22 @@ export function shouldTrigger(
     const chatId = msg.chatroomId ?? msg.peerId;
     // v1.7.0 画像收紧预算: 画像建议只能让约束更紧 (间隔更长/上限更小), 不许放宽.
     //   画像文本本身走 handler 注入 prompt; 这里只用它的预算字段 (内存缓存查, 零 DB IO).
-    const effBudget = tightenHfBudget(
+    const budgetBase = tightenHfBudget(
       resolveHfBudget(cfg.heartflow),
       getHfProfileBudget(msg.accountId, chatId),
       { applyQuietHours: cfg.heartflow.profile?.applyQuietHours === true },
     );
+    // v1.9.0 占比外环**再套一层**: 该群今日 bot 发言占比 > 目标 (默认 5%) ⇒ 收紧当日预算.
+    //   两层都走 tightenHfBudget ("只能收紧"), 复合安全 —— 取更严的一侧, 不可能被外环放宽.
+    //   占比状态由 sweep 每轮用一条 DB 聚合刷新, 这里是纯内存查 (judge 热路径零 DB IO).
+    const shareTighten = getHfShareTighten(
+      msg.accountId,
+      chatId,
+      budgetBase,
+      cfg.heartflow,
+      Math.floor(Date.now() / 1000),
+    );
+    const effBudget = shareTighten ? tightenHfBudget(budgetBase, shareTighten) : budgetBase;
     const gate = checkHeartflowGate(
       chatId,
       msg.content ?? "",

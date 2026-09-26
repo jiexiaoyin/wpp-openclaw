@@ -1,8 +1,8 @@
 // tests/unit/heartflow-feedback.test.mjs - v1.6.x HEARTFLOW-FEEDBACK 闭环完整性测试
 //
 // 文本断言 (照 independent-trigger.test.mjs 范式) 验证 反馈闭环 8 个触点真实存在:
-//   DB: 4 表 DDL 唯一途径在 applyMigrations (mysql.ts), dev schema.sql 也补 (仅 dev)
-//        adapter 19 方法 + 9 行类型 (types.ts) + 薄封装 (storage/db/heartflow.ts) + barrel (index.ts)
+//   DB: 5 表 DDL 唯一途径在 applyMigrations (mysql.ts), dev schema.sql 也补 (仅 dev)
+//        adapter 23 方法 + 12 行类型 (types.ts) + 薄封装 (storage/db/heartflow.ts) + barrel (index.ts)
 //   config: HeartflowConfig.learning + HF_LEARNING_DEFAULTS + isHfGroupAllowed (heartflow.ts)
 //   judge 埋点: handler.ts effCfg override + persistHfJudged + markHfGroupEngaged
 //   send 埋点: dispatcher.ts persistHfSendOutcome (msg.trigger === "heartflow")
@@ -20,11 +20,11 @@ const DEPLOY = '/root/.openclaw/extensions/wechatpadpro';
 const read = (p) => fs.readFileSync(p, 'utf-8');
 const src = (rel) => read(`${ROOT}/${rel}`);
 
-/** v1.7.0: 新增 wpp_hf_group_profile —— 三处 DDL 断言共用一份清单 (加表只改这里) */
-const HF_TABLES = ['wpp_hf_ledger', 'wpp_hf_group_state', 'wpp_hf_threshold_audit', 'wpp_hf_group_profile'];
+/** v1.7.0: 新增 wpp_hf_group_profile; v1.8.0: 新增 wpp_hf_layer_stat —— 三处 DDL 断言共用一份清单 (加表只改这里) */
+const HF_TABLES = ['wpp_hf_ledger', 'wpp_hf_group_state', 'wpp_hf_threshold_audit', 'wpp_hf_group_profile', 'wpp_hf_layer_stat'];
 
 // ===== 1. DB 层 =====
-test('1. mysql.ts: 4 张 HF 表 DDL 唯一途径在 applyMigrations (生产建表不靠 schema.sql)', () => {
+test('1. mysql.ts: 5 张 HF 表 DDL 唯一途径在 applyMigrations (生产建表不靠 schema.sql)', () => {
   const m = src('src/storage/db/mysql.ts');
   assert.match(m, /async function applyMigrations\(/, 'applyMigrations 必须存在 (生产建表唯一途径)');
   for (const t of HF_TABLES) {
@@ -39,14 +39,14 @@ test('1. mysql.ts: 4 张 HF 表 DDL 唯一途径在 applyMigrations (生产建�
   }
 });
 
-test('2. schema.sql (dev): 文末补 4 段 DDL (仅 dev 一致性, 生产由 applyMigrations 建)', () => {
+test('2. schema.sql (dev): 文末补 5 段 DDL (仅 dev 一致性, 生产由 applyMigrations 建)', () => {
   const s = read(`${ROOT}/db/schema.sql`);
   for (const t of HF_TABLES) {
     assert.match(s, new RegExp(`CREATE TABLE IF NOT EXISTS ${t}`), `db/schema.sql 必须含 ${t}`);
   }
 });
 
-test('3. types.ts: 19 adapter 方法签名 + 9 HF 行类型', () => {
+test('3. types.ts: 25 adapter 方法签名 + 14 HF 行类型', () => {
   const t = src('src/storage/db/types.ts');
   const methods = [
     'recordHfJudged', 'setHfLedgerSent', 'setHfLedgerSuppressed', 'markHfEngaged',
@@ -60,11 +60,15 @@ test('3. types.ts: 19 adapter 方法签名 + 9 HF 行类型', () => {
     // v1.7.0 群画像 (4) + 台账单行追溯 (1)
     'getHfLedgerLast', 'upsertHfGroupProfile', 'getHfGroupProfile', 'listHfGroupProfiles',
     'getHfGroupMessageStats',
+    // v1.8.0 分层统计 (群×时段): 输入样本批量取 + 落库 + 启动预热 + 一键否决
+    'listHfClosedSince', 'upsertHfLayerStat', 'listHfLayerStats', 'markHfLedgerVeto',
+    // v1.9.0 观测复盘: 每群发言占比素材 + 重复率素材 (两条都是只读单表 wpp_messages)
+    'listHfBotMsgShare', 'listHfOutboundTexts',
   ];
   for (const mth of methods) {
     assert.match(t, new RegExp(`${mth}\\(`), `DbAdapter 必须声明 ${mth}`);
   }
-  for (const ty of ['HfLedgerRecord', 'HfGroupStateRecord', 'HfThresholdAuditRecord', 'HfClosedSample', 'HfGroupHourBucket', 'HfSentCountRow', 'HfLedgerTrace', 'HfGroupProfileRecord', 'HfGroupMsgStats']) {
+  for (const ty of ['HfLedgerRecord', 'HfGroupStateRecord', 'HfThresholdAuditRecord', 'HfClosedSample', 'HfGroupHourBucket', 'HfSentCountRow', 'HfLedgerTrace', 'HfGroupProfileRecord', 'HfGroupMsgStats', 'HfLayerSampleRow', 'HfLayerStatRecord', 'HfVetoResult', 'HfGroupShareRow', 'HfOutboundTextRow']) {
     assert.match(t, new RegExp(`export interface ${ty}`), `types.ts 必须 export ${ty}`);
   }
 });
@@ -105,7 +109,13 @@ test('7. heartflow.ts: 默认 heartbeat 不含 learning (默认关, 旧行为等
 // ===== 3. 埋点层 =====
 test('8. handler.ts: effCfg override 注入 + persistHfJudged + markHfGroupEngaged', () => {
   const h = src('src/inbound/handler.ts');
-  assert.match(h, /resolveThresholdOverride\(m\.accountId, chatId, hfCfg\)/, 'judge 前必须 resolveThresholdOverride');
+  // v1.8.0 保名加参: 分层要按"当前时段"取值 ⇒ 第 4 参 nowSec (照 markHfGroupEngaged 的先例)
+  assert.match(
+    h,
+    /resolveThresholdOverride\(m\.accountId, chatId, hfCfg(,|\))/,
+    'judge 前必须 resolveThresholdOverride',
+  );
+  assert.match(h, /resolveThresholdOverride\(m\.accountId, chatId, hfCfg, Math\.floor\(nowMs \/ 1000\)\)/, 'v1.8.0 必须传当前时刻 (分层按段取值)');
   // v1.7.0: 有效阈值 = max(learned override ?? 账号阈值, 画像下限) —— 画像只能抬高, 不能下压
   assert.match(h, /const profileFloor = getHfProfileBandFloor\(m\.accountId, chatId\)/, 'v1.7.0 必须取画像阈值下限');
   assert.match(
@@ -133,7 +143,9 @@ test('9. dispatcher.ts: send 后 persistHfSendOutcome (仅 msg.trigger==="heartf
 
 test('10. heartflow-learn.ts: 导出算法 + DB 管线 + sweep', () => {
   const hl = src('src/inbound/heartflow-learn.ts');
-  for (const fn of ['evalHfThreshold', 'hfCooldownOk', 'round2', 'classifyHfSend', 'clampHfThresholdToBand', 'getLearnedThreshold', 'resolveThresholdOverride', 'persistHfJudged', 'persistHfSendOutcome', 'markHfGroupEngaged', 'loadLearnedThresholds', 'resetLearnedThresholdCache', 'runHeartflowSweep', 'startHeartflowSweep']) {
+  for (const fn of ['evalHfThreshold', 'hfCooldownOk', 'round2', 'classifyHfSend', 'clampHfThresholdToBand', 'getLearnedThreshold', 'resolveThresholdOverride', 'persistHfJudged', 'persistHfSendOutcome', 'markHfGroupEngaged', 'loadLearnedThresholds', 'resetLearnedThresholdCache', 'runHeartflowSweep', 'startHeartflowSweep',
+    // v1.8.0 分层决策 + 一键否决
+    'resolveHfThresholdDecision', 'hfLayerAnchorFor', 'hfLayerStep', 'forgetHfOpenWindow']) {
     assert.match(hl, new RegExp(`export (async )?function ${fn}`), `heartflow-learn.ts 必须 export ${fn}`);
   }
   assert.match(hl, /expireHfStaleJudged\(/, 'sweep 需处理 judged 呆账 (expireHfStaleJudged)');
@@ -158,6 +170,12 @@ test('11. index.ts: 启动加载 learned + 起 sweep + /heartflow status 只读 
   assert.match(i, /startHeartflowSweep\(state, accountId,/, '必须 startHeartflowSweep (含 getCfg 取热载配置)');
   assert.match(i, /listHfGroupStates\(/, 'status 摘要必须 listHfGroupStates');
   assert.match(i, /learning/, '/heartflow status 分支必须提 learning');
+  // v1.8.0: 启动预热分层缓存 (judge 热路径零 DB 读) + status 显示分层模式 + layers/veto 子命令
+  assert.match(i, /loadHfLayerStats\(accountId\)/, 'startAccountById 必须预热分层缓存');
+  assert.match(i, /listHfLayerStats\(/, 'status 分层摘要必须 listHfLayerStats');
+  assert.match(i, /arg === "layers"/, '必须实现 /heartflow layers 子命令');
+  assert.match(i, /arg === "veto"/, '必须实现 /heartflow veto 子命令');
+  assert.match(i, /forgetHfOpenWindow\(/, 'veto 必须删内存开窗 (否则随后的引用会把 veto 覆盖成 engaged=1)');
 });
 
 // ===== 4. schema / accounts (dev 侧即时绿) =====
