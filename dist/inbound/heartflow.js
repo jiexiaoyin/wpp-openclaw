@@ -298,6 +298,11 @@ export function buildHeartflowPrompt(input, cfg) {
         : "";
     const lastReplyStr = input.lastBotReply || "暂无上次回复记录";
     const sinceMin = input.secondsSinceLastReply > 0 ? Math.round(input.secondsSinceLastReply / 60) : "从未回复";
+    // v1.7.0 群画像 (可选): 只提供"这个群是什么群、我在这该怎么说话"的背景, 不改变打分口径;
+    //   文本已在上游截断 (heartflow-profile.renderHfProfileForPrompt), 这里不做二次裁剪.
+    const profilePart = input.groupProfile
+        ? `\n\n## 本群画像 (系统按历史消息自动归纳, 供你应景参考)\n${input.groupProfile}`
+        : "";
     return `你是群聊机器人的决策系统，需要判断是否应该主动回复以下消息。
 
 ## 机器人角色设定
@@ -309,7 +314,7 @@ ${input.botNickname ? `我是 ${input.botNickname}，一个群聊机器人助手
 - 上次发言: ${sinceMin}${typeof sinceMin === "number" ? "分钟前" : ""}
 
 ## 群聊基本信息
-${input.chatContext}
+${input.chatContext}${profilePart}
 
 ## 最近${cfg.contextMessagesCount ?? 5}条对话历史
 ${input.recentMessages}
@@ -471,7 +476,13 @@ export function resetHeartflowJudgeIntervals() {
 export function markHeartflowJudged(chatId, nowMs) {
     lastJudgeAt.set(chatId, nowMs);
 }
-export function checkHeartflowGate(chatId, content, cfg, nowMs, accountId, candidateAtSec) {
+export function checkHeartflowGate(chatId, content, cfg, nowMs, accountId, candidateAtSec, 
+/**
+ * v1.7.0: 画像收紧后的有效预算 (调用方用 tightenHfBudget 与账号配置取交集)。
+ * 缺省 = 只用账号配置。**用参数而不是在函数内 import 画像模块**: heartflow.ts 被 heartflow-profile.ts
+ * 反向 import (拿 isHfGroupAllowed / HF_LEARNING_DEFAULTS), 从这边再 import 回去就成环。
+ */
+budgetOverride) {
     if (!cfg.enabled)
         return { allowed: false, reason: "disabled" };
     if (cfg.whitelistGroups && cfg.whitelistGroups.length > 0) {
@@ -498,7 +509,7 @@ export function checkHeartflowGate(chatId, content, cfg, nowMs, accountId, candi
     //   用 peek (判定+计数+debug 日志), 真正的计数落账在发送成功时 (heartflow-learn.persistHfSendOutcome),
     //   这样"判了但被下游拦掉"的不会占用预算额度。
     const nowSec = Math.floor(nowMs / 1000);
-    const verdict = peekHfBudget(accountId, chatId, resolveHfBudget(cfg), nowSec, candidateAtSec ?? nowSec);
+    const verdict = peekHfBudget(accountId, chatId, budgetOverride ?? resolveHfBudget(cfg), nowSec, candidateAtSec ?? nowSec);
     if (!verdict.allowed)
         return { allowed: false, reason: verdict.reason ?? "budget" };
     return { allowed: true };

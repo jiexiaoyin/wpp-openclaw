@@ -200,3 +200,21 @@ CREATE TABLE IF NOT EXISTS wpp_hf_threshold_audit (
   PRIMARY KEY (id),
   KEY idx_hf_audit (account_id, group_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 心流群画像 (v1.7.0 2026-09-26 新增: 每群每日一份 LLM 生成的画像 + 统计快照)
+-- 数据源: heartflow-profile.ts 生成 (调用方只在解析成功时写 ⇒ 不会出现空画像行)
+-- 用途: judge prompt 注入"这是什么样的群 / bot 在这里该怎么说话"; 只能收紧约束, 不许放开
+-- 生产建表唯一途径 = applyMigrations (deploy 不拷 db/, 本文件只在 dev 生效)
+CREATE TABLE IF NOT EXISTS wpp_hf_group_profile (
+  account_id VARCHAR(64) NOT NULL,
+  group_id VARCHAR(128) NOT NULL,
+  profile_json TEXT NULL,                      -- 结构化画像 JSON (解析失败即视为无画像)
+  stats_json TEXT NULL,                        -- 生成时的统计快照 (审计)
+  sample_msgs INT UNSIGNED NOT NULL DEFAULT 0, -- 参与生成的样本消息数
+  model VARCHAR(64) NULL,
+  version INT UNSIGNED NOT NULL DEFAULT 1,     -- 每次重生成 +1
+  generated_at INT UNSIGNED NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (account_id, group_id),
+  KEY idx_hf_profile_gen (account_id, generated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
