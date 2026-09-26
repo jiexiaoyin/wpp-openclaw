@@ -199,14 +199,14 @@ test('10. buildHfDigest: 六节齐全 + 逐节口径标注 + 硬 cap 3500', (t) 
   const inp = {
     nowSec: now,
     days: 7,
-    shares: [{ groupId: 'groupA', inbound: 350, outbound: 54, share: 54 / 404 }],
-    engagement: { usable: 45, skipped: 12, rate: 0.31, ambientP: 0.04 },
+    shares: [{ groupId: 'groupA', inbound: 210, outbound: 30, share: 30 / 240 }],
+    engagement: { usable: 40, skipped: 10, rate: 0.3, ambientP: 0.05 },
     stopped: { negative: 1, veto: 2, total: 20 },
-    repeat: { total: 54, repeats: 15, rate: 15 / 54, prefix: 10, similar: 5 },
-    repeatSampleTotal: 54,
-    layers: [{ groupId: 'groupA', layerKey: '18-24', n: 41, engaged: 4, rate: 0.098, suggestion: 0.65, applied: false }],
+    repeat: { total: 30, repeats: 6, rate: 6 / 30, prefix: 4, similar: 2 },
+    repeatSampleTotal: 30,
+    layers: [{ groupId: 'groupA', layerKey: '18-24', n: 40, engaged: 4, rate: 0.1, suggestion: 0.7, applied: false }],
     budget: { 'budget-gap': 12, 'budget-hour': 3 },
-    shareGuard: [{ groupId: 'groupA', share: 0.154, total: 404, botSends: 54, from: BASE, to: { minGapSec: 360, maxPerHour: 4, maxPerDay: 30 } }],
+    shareGuard: [{ groupId: 'groupA', share: 30 / 240, total: 240, botSends: 30, from: BASE, to: { minGapSec: 360, maxPerHour: 4, maxPerDay: 30 } }],
   };
   const text = o.buildHfDigest(inp);
   for (const sec of ['【发言占比】', '【接话率】', '【被制止率】', '【重复率】', '【分层 群×时段】', '【预算拦截】', '【占比外环】']) {
@@ -214,10 +214,10 @@ test('10. buildHfDigest: 六节齐全 + 逐节口径标注 + 硬 cap 3500', (t) 
   }
   assert.match(text, /ts 口径/, '占比/重复率必须标 ts 口径');
   assert.match(text, /judged_at 口径/, '被制止率必须标 judged_at 口径 (与上两节不同窗)');
-  assert.match(text, /lift 7\.8×/, '本底 0.04 ⇒ lift = 0.31/0.04 = 7.75 ≈ 7.8×');
+  assert.match(text, /lift 6\.0×/, '本底 0.05 ⇒ lift = 0.3/0.05 = 6.0×');
   assert.match(text, /未生效/, '影子分层必须标"未生效"');
   assert.match(text, /gap 12/, '预算拦截计数要显示');
-  assert.ok(text.includes('54/404'), '占比必须带原始条数');
+  assert.ok(text.includes('30/240'), '占比必须带原始条数');
   assert.ok(text.length <= o.HF_DIGEST_MAX_CHARS, `正文不得超过硬 cap (实测 ${text.length})`);
 
   // 极端: 200 个群 + 大量素材 ⇒ 仍然 ≤ 3500 且带截断标记
