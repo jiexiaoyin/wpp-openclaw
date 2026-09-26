@@ -27,6 +27,7 @@
 //   - 范围 [0.1, 1.0]
 import { warn } from "../core/logger.js";
 import { callJudge, resolveJudgeCreds } from "../llm-judge.js";
+import { peekHfBudget, resolveHfBudget } from "./heartflow-budget.js";
 /** v1.6.x 心流学习参数缺省表 (代码默认; schema default 与 accounts JSON 缺省保持一致) */
 export const HF_LEARNING_DEFAULTS = {
     enabled: false,
@@ -454,7 +455,11 @@ export async function judgeHeartflow(input, cfg, opts) {
  * - 群白名单 (非空) 且 chatId 不在 → 拒绝
  * - 空消息 → 拒绝
  * - 冷却期 (minReplyIntervalSec) → 拒绝
+ * - v1.6.9 发言预算 (每群最小间隔/每小时/每天/静默段/陈旧触发) → 拒绝
  * 通过后由调用方调 judgeHeartflow 做 LLM 打分。
+ *
+ * @param accountId 预算计数按账号分桶用; 省略时退化为 `*` 桶 (group id 本身全局唯一, 不会串群)
+ * @param candidateAtSec 本次候选消息的时刻 (秒); 省略 = nowMs/1000 (仅用于预算的陈旧触发判定)
  */
 /** P1: 每群最近一次 LLM judge 时间 (minJudgeIntervalSec 频率闸用) */
 const lastJudgeAt = new Map();
@@ -466,7 +471,7 @@ export function resetHeartflowJudgeIntervals() {
 export function markHeartflowJudged(chatId, nowMs) {
     lastJudgeAt.set(chatId, nowMs);
 }
-export function checkHeartflowGate(chatId, content, cfg, nowMs) {
+export function checkHeartflowGate(chatId, content, cfg, nowMs, accountId, candidateAtSec) {
     if (!cfg.enabled)
         return { allowed: false, reason: "disabled" };
     if (cfg.whitelistGroups && cfg.whitelistGroups.length > 0) {
@@ -489,6 +494,13 @@ export function checkHeartflowGate(chatId, content, cfg, nowMs) {
             return { allowed: false, reason: "judge-cooldown" };
         }
     }
+    // v1.6.9 发言预算 (结构层频率约束): 放在最后、judge 之前 —— 被拦的消息连 LLM 都不调。
+    //   用 peek (判定+计数+debug 日志), 真正的计数落账在发送成功时 (heartflow-learn.persistHfSendOutcome),
+    //   这样"判了但被下游拦掉"的不会占用预算额度。
+    const nowSec = Math.floor(nowMs / 1000);
+    const verdict = peekHfBudget(accountId, chatId, resolveHfBudget(cfg), nowSec, candidateAtSec ?? nowSec);
+    if (!verdict.allowed)
+        return { allowed: false, reason: verdict.reason ?? "budget" };
     return { allowed: true };
 }
 //# sourceMappingURL=heartflow.js.map
