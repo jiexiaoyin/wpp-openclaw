@@ -50,6 +50,7 @@ import {
   getOpenHfWindow,
 } from "./heartflow-learn.js";
 import type { HfEngageCandidate } from "./heartflow-label.js";
+import { noteHfHumanMessage } from "./heartflow-budget.js";
 import {
   updateJargonFromMessage,
   recordJargonMessage,
@@ -666,10 +667,15 @@ export function createWppInboundHandler(
           const atBot =
             !!opts.triggerCtx.botWxid && extractAtUserList(text).includes(opts.triggerCtx.botWxid);
           const quotesBot = await isQuotingBotReply(m, groupId, win);
-          g.cands.push({ atSec: Math.floor(Date.now() / 1000), quotesBot, mentionsBot: atBot, text });
+          // atSec 用**消息自己的时刻** (m.ts, unix 秒) 而不是 flush 的墙上时间: 窗是与 bot 那条的
+          // sent_at 比较的, 用 flush 时间会把 debounce 延迟算进窗内 (一条早于 bot 发言的消息被误判成"接话")
+          g.cands.push({ atSec: m.ts, quotesBot, mentionsBot: atBot, text });
         }
+        const nowSec = Math.floor(Date.now() / 1000);
         for (const g of byGroup.values()) {
-          void markHfGroupEngaged(g.accountId, g.groupId, Math.floor(Date.now() / 1000), g.cands);
+          void markHfGroupEngaged(g.accountId, g.groupId, nowSec, g.cands);
+          // v1.6.9 发言预算: 顺手记"该群有人类消息" (零额外 IO; lastHumanAtSec 目前仅用于观测, 见 budget 模块注释)
+          noteHfHumanMessage(g.accountId, g.groupId, nowSec);
         }
       }
 

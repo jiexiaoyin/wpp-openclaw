@@ -169,6 +169,15 @@ export interface DbAdapter {
     sinceSec: number,
     localOffsetSec: number,
   ): Promise<HfGroupHourBucket[]>;
+  /**
+   * v1.6.9 发言预算回填: 每群在 `[hourSinceSec, now]` / `[daySinceSec, now]` 内的**已发出**条数 + 最近发出时刻。
+   * 一条条件聚合搞定 (judge 热路径零 DB 读, 只在账号启动时跑一次)。
+   */
+  listHfSentCountsRecent(
+    accountId: string,
+    hourSinceSec: number,
+    daySinceSec: number,
+  ): Promise<HfSentCountRow[]>;
   /** sweep: sent 到期无人接话 → ignored (engaged=0) + closed */
   closeHfExpiredWindows(accountId: string, atSec: number): Promise<void>;
   /** sweep: judged 无发送结果超上限 → suppressed (呆账收敛) */
@@ -251,6 +260,17 @@ export interface HfGroupHourBucket {
   /** 本地小时 0-23 */
   hour: number;
   n: number;
+}
+
+/** v1.6.9: 发言预算回填行 (每群已发出的条数 + 最近发出时刻) */
+export interface HfSentCountRow {
+  group_id: string;
+  /** 近 1 小时 (本地小时桶) 内已发出条数 */
+  hour_count: number;
+  /** 近 24 小时内已发出条数 */
+  day_count: number;
+  /** 最近一次发出的时刻 (unix 秒; 无则 null) */
+  last_sent_at: number | null;
 }
 
 /** v1.3.76: 群黑话词条 row (wpp_jargon_terms) */

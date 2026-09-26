@@ -19,6 +19,7 @@ import type {
   DbAdapter,
   HfClosedSample,
   HfGroupHourBucket,
+  HfSentCountRow,
   HfGroupStateRecord,
   HfLedgerRecord,
   HfThresholdAuditRecord,
@@ -1034,6 +1035,35 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
         group_id: String(r.group_id),
         hour: Number(r.h) || 0,
         n: Number(r.n) || 0,
+      }));
+    },
+    // v1.6.9 发言预算回填: 每群近 1 小时 / 近 24 小时的**已发出**条数 + 最近发出时刻 (账号启动时一次).
+    //   "已发出" = sent_at 非空 (sent 行还在观察窗内, closed 行已收敛) ⇒ 两种状态都算, 与运行时
+    //   noteHfReplySent 的记账口径一致 (发送成功即占额度, 不因后续收敛而退还)。
+    //   两个边界由调用方给: `hourSinceSec` 必须是**本地整点** (与运行时小时桶键同口径), 否则上一小时的
+    //   尾巴会被算进本小时, 让新小时一开始就少一条额度 (调用方见 seedHfBudgetStates)。
+    async listHfSentCountsRecent(
+      accountId,
+      hourSinceSec,
+      daySinceSec,
+    ): Promise<HfSentCountRow[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT group_id,
+                SUM(sent_at >= ?) AS hour_count,
+                COUNT(*) AS day_count,
+                MAX(sent_at) AS last_sent_at
+         FROM wpp_hf_ledger
+         WHERE account_id = ? AND sent_at IS NOT NULL AND sent_at >= ?
+         GROUP BY group_id`,
+        [hourSinceSec, accountId, daySinceSec],
+      );
+      return rows.map((r) => ({
+        group_id: String(r.group_id),
+        hour_count: Number(r.hour_count) || 0,
+        day_count: Number(r.day_count) || 0,
+        last_sent_at: r.last_sent_at == null ? null : Number(r.last_sent_at),
       }));
     },
     async upsertHfGroupState(record: HfGroupStateRecord): Promise<void> {

@@ -40,7 +40,8 @@ import type { WppTriggerConfig, WppAccountTriggerCtx } from "./inbound/triggers.
 import type { WppInboundMessage } from "./types.js";
 import { resolveAiConfig } from "./config-ai.js";
 import { defaultHeartflowConfig } from "./inbound/heartflow.js";
-import { loadLearnedThresholds, startHeartflowSweep } from "./inbound/heartflow-learn.js";
+import { loadLearnedThresholds, loadHfBudgetSeed, startHeartflowSweep } from "./inbound/heartflow-learn.js";
+import { hfBudgetBlockedSnapshot, resolveHfBudget } from "./inbound/heartflow-budget.js";
 import { defaultJargonConfig } from "./inbound/jargon.js";
 import { defaultAffectionConfig } from "./inbound/affection.js";
 import type { WppSendMessageParams, WppSendType } from "./dispatch/send-message.js";
@@ -364,7 +365,23 @@ async function handleFeatureCommand(
       } catch (e) {
         sigLine = "\n信号分布(24h): (读取失败)";
       }
-      extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}${ledgerLine}${sigLine}`;
+      // v1.6.9 可观测: 发言预算档位 + 进程内拦截计数 (计数**重启归零**, 故标注"本次运行")
+      let budgetLine = "";
+      try {
+        const hfCfg = runtimeHeartflow.get(accountId);
+        const b = resolveHfBudget(hfCfg);
+        const blocked = hfBudgetBlockedSnapshot();
+        const blockedStr = Object.keys(blocked).length
+          ? Object.entries(blocked).map(([k, v]) => `${k} ${v}`).join(" / ")
+          : "无";
+        budgetLine =
+          `\n发言预算: ${b.enabled ? "开" : "关"} (每群 ≥${b.minGapSec}s / ≤${b.maxPerHour}条·小时 / ≤${b.maxPerDay}条·天` +
+          `${b.quietHours.length ? ` / 静默段 ${b.quietHours.map(([s, e]) => `${s}-${e}时`).join(",")}` : " / 静默段 关"})` +
+          `\n本次运行拦截: ${blockedStr}`;
+      } catch (e) {
+        budgetLine = "\n发言预算: (读取失败)";
+      }
+      extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}${ledgerLine}${sigLine}${budgetLine}`;
     }
     await send(`${label} (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}${extra}\n用法: /${feature} on|off|status`);
     return true;
@@ -653,6 +670,10 @@ export async function startAccountById(
   //   幂等性由 startHeartflowSweep 内部 clear-then-reschedule 保证 (含 in-flight race 已启动再进)
   void loadLearnedThresholds(accountId).then((n) => {
     if (n > 0) log.info(`[WPP HF] learned thresholds loaded: account=${accountId} groups=${n}`);
+  });
+  // v1.6.9 发言预算: 回填小时/天计数 (重启不清零额度, 否则"重启刷额度"成了后门)
+  void loadHfBudgetSeed(accountId).then((n) => {
+    if (n > 0) log.info(`[WPP HF] budget seed loaded: account=${accountId} groups=${n}`);
   });
   startHeartflowSweep(state, accountId, () => runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig());
 

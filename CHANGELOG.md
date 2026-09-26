@@ -4,6 +4,71 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.6.9] 心流发言预算: 频率约束上移到结构层 (P0.5) (2026-09-26)
+
+> 承接 v1.6.8。老板 2026-09-26: "**群里回复消息的频率太高了**" + "如果我不设定下限, 就会一直降低"。
+> v1.6.8 修的是**标签学错了** (根因之一); 本版修**第二个根因**: **拿一个被自学的标量去控频率, 它必然漂到边界**。
+> 阈值是"要不要开口"的**质量**判据, 不该同时兼任"多久能开口一次"的**频率**闸。
+> 档位由老板当轮拍板 = **中等**; 静默段**默认关** (机制做好, 等 v1.7.0 画像按群自动填)。
+
+### Added (结构层频率约束)
+- **新增 `src/inbound/heartflow-budget.ts`** (纯函数 + 进程内计数, judge 热路径**零 DB IO**):
+  每群**最小发言间隔** / **每小时上限** / **每天上限** / **静默段** / **陈旧触发防重放**。
+  默认档 `HF_BUDGET_DEFAULTS` = `minGapSec 180` (1 条/3 分钟) · `maxPerHour 8` · `maxPerDay 60` ·
+  `noConsecutiveWithoutHuman true` · `quietHours []` (关)。
+  挂 `HeartflowConfig.budget?: HfBudgetConfig`, 可在 `accounts/default.json` 按账号覆盖。
+- 判定是**纯函数** `checkHfBudget(state, cfg, nowSec, candidateAtSec)`, 只报**第一条**命中原因:
+  `quiet-hours` → `budget-gap` → `budget-consecutive` → `budget-hour` → `budget-day` (从最绝对到最软),
+  便于 `/heartflow status` 归因, 不叠加。
+- 静默段按本地小时、**半开区间** `[start, end)` (相邻段 `[9,12)`/`[12,15)` 不重叠; `start===end` 视为**空段**,
+  防 `[0,0]` 变成全天静默); `start > end` 表示跨零点 (`[23, 7]`)。
+- `/heartflow status` 增一行**发言预算**: 生效档位 + **本次运行**的拦截计数 (按原因分布; 计数在内存, 重启归零, 故标注)。
+
+### Changed (落点与计数)
+- 闸落在 `checkHeartflowGate` 内**既有冷却/judge 频率闸之后、judge 之前** ⇒ 被拦的消息**连 LLM 都不调**
+  (顺带省掉被拦那次的 maxtoken 花销)。
+- **只有真正发出去才占额度**: 记账点是 `persistHfSendOutcome` 的 `sent` 分支 (与"开观察窗"同一时刻同一条件);
+  `suppressed` (模板回复被丢 / 去重 / 空文本) **不占额度** —— 判了但被下游拦掉的不该吃掉预算。
+- 计数在内存 Map (`key = ${accountId}:${groupId}`), 账号启动时用**一条** `GROUP BY group_id` 聚合
+  (`listHfSentCountsRecent`) 回填小时/天计数 ⇒ **重启不清零额度** (否则"重启刷额度"成了后门)。
+  回填边界走**本地整点/零点** (`hfHourStartSec`/`hfDayStartSec`, 与运行时桶键同口径; 用 `now-3600` 会把上一小时的
+  尾巴算进本小时, 新小时一开局就少一条额度); 回填失败只 warn, **不打断账号启动**。
+- 陈旧触发的候选时刻用**消息自己的时刻** (`msg.ts`, parser 给的 unix 秒) 而非 debounce flush 的墙上时间。
+- 既有机制**一律保留不动**: `energy` 状态机 (软性精力衰减, 影响 judge 的 willingness 维度)、
+  `minReplyIntervalSec` (冷却)、`minJudgeIntervalSec` (LLM 调用闸)。
+  预算不是替代品, 是**结构兜底**: 前两者会随状态漂移, 本条天然有界。
+
+### 与计划的偏差与取舍 (如实记录)
+- 计划里 `noConsecutiveWithoutHuman` 写的是"**无人类插话不得连发第 2 条**"。**照字面实现会永远不生效**:
+  心流的每次触发本身就源自一条人类消息, 故"上次发言后没有人类消息"在门禁处不可能成立。
+  本版落成 **陈旧触发防重放** (候选消息不晚于我们上次发言 ⇒ 同批/重试/补扫的重复处理, 拦住它)。
+  真频率约束由 `minGapSec`/`maxPerHour`/`maxPerDay` 承担。配置项名保留 (语义按注释为准)。
+- `lastHumanAtSec` **仅用于观测, 不参与判定**: 它在 handler 按**墙上时间**记录, 而门禁按**消息时间**判定,
+  两者有抖动量级偏差; 拿它当闸会误拦紧随其后的正常消息。**宁可少一条规则, 不要一个会误杀的规则**。
+  已知降级: 该字段**无法从账本回填** ⇒ 重启后为空 (不影响判定, 只看观测)。
+- 静默段**默认关**是老板的决定 (各组活跃时段不同, 不擅自改夜间行为), 机制与配置项已就绪, 等 v1.7.0 画像按群填。
+- 新增聚合**只查 `wpp_hf_ledger` 单表**: 避开 v1.6.8 记录过的 collation 地雷
+  (线上 `wpp_hf_*` 是 `utf8mb4_uca1400_ai_ci`, 而 `wpp_messages` 是 `utf8mb4_unicode_ci`, 跨表 JOIN 直接报
+  `Illegal mix of collations`)。
+
+### 测试状态
+- **240 tests / 236 pass / 2 fail / 2 skip**。
+- 新增 `tests/unit/heartflow-budget.test.mjs` (**30 条全绿**): 档位与覆盖 / 桶键与回填口径同源 / 静默段半开与跨零点与空段 /
+  五条闸各自拦住 + 边界值不误拦 (恰好第 8 条、第 60 条放行) / 跨小时跨天滚动 / 纯函数性 (不改入参) /
+  进程内状态 (判定记账·回填·脏值收敛·快照·重置·账号与群互不串账) / **7 条源级接线守卫**
+  (闸在 judge 之前且挂在冷却之后、触发侧传账号与消息时刻、真发出去才占额度、handler 记人类消息、启动回填、既有机制仍在)。
+  源级守卫自带**自检**: 切片必须真的限定在该函数内 + 函数被改名时必须报错, 防止守卫退化成"假绿"。
+- **2 条 fail 是刻意钉下的「待部署」绊索, 不是回归** (v1.6.5 事故后加的):
+  `deploy-integrity.test.mjs` 的"部署端 `db/schema.sql` 与源码仓逐字节一致" (v1.6.8 改过 schema.sql)
+  与 `p2-cleanup.test.mjs` 的"部署端 manifest 版本 = 源码仓" (部署端仍是 1.6.7, 源码仓 1.6.9)。
+  `deploy-swap.sh` 跑过后**两条自动转绿**, 基线恢复 0 fail。
+
+### 部署与生产
+- **尚未部署**。P0+P0.5+P1 按老板拍板"三批一起做、一次部署" ⇒ 本版继续留在 dev。
+- 需要: 一次 `deploy-swap.sh --force` + `systemctl --user restart openclaw-gateway` (**外部动作, 等老板明确授权**)。
+- 部署后观察口径: `/heartflow status` 的预算拦截原因分布 + 每群日发言条数 (应从"4 分钟 5 条"量级显著下降)
+  + 阈值是否不再贴地板 + 回填计数是否与账本一致 (重启后额度不应回到满格)。
+
 ## [v1.6.8] 心流换标签: engaged 锚回「bot 自己那条」+ 反事实基线 (P0) (2026-09-26)
 
 > 老板 2026-09-26 原话: "我现在设置了 0.5 底线, 因为之前会无限降低, 都到 0.3 左右了。群里回复消息的频率太高了。
@@ -94,6 +159,12 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
   1. `deploy-integrity.test.mjs:47`「部署端 `db/schema.sql` 与源码仓逐字节一致」—— 本版改了 `db/schema.sql` (v1.6.5 事故刻意钉下的绊索);
   2. `p2-cleanup.test.mjs:140` P2-4.2「deploy `openclaw.plugin.json`.version = dev (部署没掉队)」—— 本版版本号 1.6.7→1.6.8 而部署端仍是 1.6.7。
   两条都在 `deploy-swap.sh` 跑过后自动转绿 (无需改代码)。**改 schema / 改版本前**的基线为 186 tests / 184 pass / 0 fail / 2 skip。
+
+### Fixed (发布链)
+- `sync-github.sh --dry-run` 会**留下脏镜像**: dry-run 为了让 `git diff --cached --stat` 输出真实差异, 会把文件写进
+  本地镜像 `/root/git/wpp-openclaw` 的工作树, 但**不提交** ⇒ 下一次真跑在 `git checkout main` 处报
+  "local changes would be overwritten ... Aborting" (2026-09-26 实测踩到)。现在 dry-run 会记录运行前的分支,
+  结束时还原 (`checkout -f` + `reset --hard` + `clean -fd`, 镜像仓是脚本专属纯 clone) 并打印还原点。
 
 ### 部署与生产
 - **尚未部署** (按老板 2026-09-26 拍板: P0+P0.5+P1 **三批一起做、一次部署**)。需要老板明确授权后执行

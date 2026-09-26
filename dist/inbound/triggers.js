@@ -67,9 +67,11 @@ export function shouldTrigger(msg, cfg, ctx) {
     }
     // v1.3.75 HEARTFLOW: 未@群消息 → 心流候选 (同步门禁 + 异步 LLM 打分由 handler 完成)
     //   门禁通过 → via:"heartflow" (pending), handler 用 judgeHeartflow 判断是否真触发
-    //   门禁不过 (disabled/白名单外/空/冷却) → via:null (不触发)
+    //   门禁不过 (disabled/白名单外/空/冷却/预算) → via:null (不触发)
     if (msg.peerKind === "group" && cfg.heartflow?.enabled) {
-        const gate = checkHeartflowGate(msg.chatroomId ?? msg.peerId, msg.content ?? "", cfg.heartflow, Date.now());
+        const gate = checkHeartflowGate(msg.chatroomId ?? msg.peerId, msg.content ?? "", cfg.heartflow, Date.now(), 
+        // v1.6.9: 预算计数按账号分桶 + 用**消息自己的时刻**判陈旧触发 (msg.ts 是 unix 秒, 见 parser.ts)
+        msg.accountId, msg.ts);
         if (gate.allowed) {
             return { triggered: true, via: "heartflow" };
         }

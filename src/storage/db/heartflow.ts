@@ -8,6 +8,7 @@ import type {
   HfGroupHourBucket,
   HfGroupStateRecord,
   HfLedgerRecord,
+  HfSentCountRow,
   HfThresholdAuditRecord,
 } from "./types.js";
 
@@ -72,6 +73,15 @@ export async function listHfGroupMsgHourBuckets(
   localOffsetSec: number,
 ): Promise<HfGroupHourBucket[]> {
   return getAdapter().listHfGroupMsgHourBuckets(accountId, sinceSec, localOffsetSec);
+}
+
+/** v1.6.9 发言预算回填: 每群近 1 小时 / 近 24 小时已发出条数 + 最近发出时刻 */
+export async function listHfSentCountsRecent(
+  accountId: string,
+  hourSinceSec: number,
+  daySinceSec: number,
+): Promise<HfSentCountRow[]> {
+  return getAdapter().listHfSentCountsRecent(accountId, hourSinceSec, daySinceSec);
 }
 
 /** sweep: sent 到期无人接话 → ignored + closed */

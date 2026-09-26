@@ -36,6 +36,7 @@ export {
   expireHfStaleJudged,
   getHfClosedRecent,
   listHfGroupMsgHourBuckets,
+  listHfSentCountsRecent,
   upsertHfGroupState,
   getHfGroupState,
   listHfGroupStates,

@@ -30,6 +30,10 @@ export async function markHfEngaged(accountId, groupId, atSec, engaged, signal, 
 export async function listHfGroupMsgHourBuckets(accountId, sinceSec, localOffsetSec) {
     return getAdapter().listHfGroupMsgHourBuckets(accountId, sinceSec, localOffsetSec);
 }
+/** v1.6.9 发言预算回填: 每群近 1 小时 / 近 24 小时已发出条数 + 最近发出时刻 */
+export async function listHfSentCountsRecent(accountId, hourSinceSec, daySinceSec) {
+    return getAdapter().listHfSentCountsRecent(accountId, hourSinceSec, daySinceSec);
+}
 /** sweep: sent 到期无人接话 → ignored + closed */
 export async function closeHfExpiredWindows(accountId, atSec) {
     return getAdapter().closeHfExpiredWindows(accountId, atSec);

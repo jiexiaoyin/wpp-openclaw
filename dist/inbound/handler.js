@@ -20,6 +20,7 @@ import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1C
 import { getDefaultAccountRegistry } from "../account-state.js";
 import { judgeHeartflow, recordRawMessage, getChatState, buildChatContextSummary, getRawBuffer, formatRawMessages, lastBotReply, secondsSinceLastReply, recordActiveReply, recordPassiveMessage, markHeartflowJudged, } from "./heartflow.js";
 import { resolveThresholdOverride, persistHfJudged, persistHfJudgedBelowThreshold, markHfGroupEngaged, getOpenHfWindow, } from "./heartflow-learn.js";
+import { noteHfHumanMessage } from "./heartflow-budget.js";
 import { updateJargonFromMessage, recordJargonMessage, shouldTriggerMine, mineJargonForGroup, getGroupMessageCount, } from "./jargon.js";
 import { processAffectionMessage, } from "./affection.js";
 // 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
@@ -577,10 +578,15 @@ export function createWppInboundHandler(opts) {
                     const text = m.content ?? "";
                     const atBot = !!opts.triggerCtx.botWxid && extractAtUserList(text).includes(opts.triggerCtx.botWxid);
                     const quotesBot = await isQuotingBotReply(m, groupId, win);
-                    g.cands.push({ atSec: Math.floor(Date.now() / 1000), quotesBot, mentionsBot: atBot, text });
+                    // atSec 用**消息自己的时刻** (m.ts, unix 秒) 而不是 flush 的墙上时间: 窗是与 bot 那条的
+                    // sent_at 比较的, 用 flush 时间会把 debounce 延迟算进窗内 (一条早于 bot 发言的消息被误判成"接话")
+                    g.cands.push({ atSec: m.ts, quotesBot, mentionsBot: atBot, text });
                 }
+                const nowSec = Math.floor(Date.now() / 1000);
                 for (const g of byGroup.values()) {
-                    void markHfGroupEngaged(g.accountId, g.groupId, Math.floor(Date.now() / 1000), g.cands);
+                    void markHfGroupEngaged(g.accountId, g.groupId, nowSec, g.cands);
+                    // v1.6.9 发言预算: 顺手记"该群有人类消息" (零额外 IO; lastHumanAtSec 目前仅用于观测, 见 budget 模块注释)
+                    noteHfHumanMessage(g.accountId, g.groupId, nowSec);
                 }
             }
             const triggerResults = persistResults; // Step 2 已算 (same ctxForTrigger + shouldTrigger)

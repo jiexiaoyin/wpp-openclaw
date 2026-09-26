@@ -25,6 +25,7 @@ import {
   getHfGroupState,
   listHfGroupStates,
   listHfGroupMsgHourBuckets,
+  listHfSentCountsRecent,
   upsertHfGroupState,
   logHfThresholdChange,
   getHfLedgerDistinctClosedGroups,
@@ -41,6 +42,12 @@ import {
   isHfSampleInformative,
   type HfEngageCandidate,
 } from "./heartflow-label.js";
+import {
+  noteHfReplySent,
+  seedHfBudgetStates,
+  hfHourStartSec,
+  hfDayStartSec,
+} from "./heartflow-budget.js";
 
 // ============ 纯算法 (可单测) ============
 
@@ -276,6 +283,8 @@ export async function persistHfSendOutcome(
         observeWindowSec: opts.observeSec,
         labelWindowSec: opts.labelWindowSec,
       });
+      // v1.6.9 发言预算: **真发出去**才占额度 (判了但被下游拦掉的不占) —— 与上面开窗同一时刻同一条件
+      noteHfReplySent(accountId, opts.groupId, atSec);
       return;
     }
     if (outcome === "suppressed") {
@@ -357,6 +366,30 @@ export async function loadLearnedThresholds(accountId: string): Promise<number> 
     warn(`[WPP HF] loadLearnedThresholds failed (account starts w/o learned): ${formatErr(e)}`);
   }
   return n;
+}
+
+/**
+ * v1.6.9 账号启动: 从账本回填发言预算的小时/天计数 (重启不清零额度)。
+ *
+ * 为什么必须回填: 预算计数在内存里 —— 若只在进程内累加, 一次重启就把"今天已发 60 条"清零,
+ *   等于给"重启刷额度"开了后门 (插件在部署/热重载时会重启, 那不是老板想要的豁免)。
+ * 边界口径: 小时边界取**本地整点**、天边界取**本地零点**, 与运行时桶键 (hfHourBucketKey/hfDayBucketKey)
+ *   完全一致; 否则新小时/新的一天会带着上一段的余数开局。
+ * 已知降级: `lastHumanAtSec` 无法从账本回填 (账本没有人类消息时刻) ⇒ 留空。
+ */
+export async function loadHfBudgetSeed(
+  accountId: string,
+  nowSec: number = Math.floor(Date.now() / 1000),
+): Promise<number> {
+  try {
+    const rows = await listHfSentCountsRecent(accountId, hfHourStartSec(nowSec), hfDayStartSec(nowSec));
+    const n = seedHfBudgetStates(accountId, rows, nowSec);
+    if (n > 0) debug(`[WPP HF] budget seed loaded: account=${accountId} groups=${n}`);
+    return n;
+  } catch (e) {
+    warn(`[WPP HF] budget seed failed (counters start at 0): ${formatErr(e)}`);
+    return 0;
+  }
 }
 
 /** 测试/重置用: 清空全部内存 learned 缓存 + 开窗表 */
