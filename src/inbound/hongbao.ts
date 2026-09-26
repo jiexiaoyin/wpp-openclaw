@@ -2,6 +2,7 @@
 // 红包消息有特定 msgType (appmsg subtype) 或 content 含特定 marker; 提供 detect + 处理建议 (不自动拆)
 
 import { warn, info, formatErr } from "../core/logger.js";
+import { isRelayMessage } from "./relay.js";
 import type { WppInboundMessage } from "../types.js";
 
 /**
@@ -11,6 +12,14 @@ import type { WppInboundMessage } from "../types.js";
  * - raw.appmsg.type === 2002 (微信原生 red packet type)
  */
 export function isRedPacketMessage(msg: WppInboundMessage): boolean {
+  // v1.9.1 接龙优先 (2026-09-27 老板报"昨晚接龙没回复"): 群接龙文案**自带"红包"字样**
+  //   (如 "提升业绩, 领取红包🧧" / "红包100元"), 而下面的 heuristic 1 是**内容关键词**判定 ⇒ 接龙被误判成红包;
+  //   handler 两处红包拦截 (静默入库 / 不触发 AI) 于是把接龙**整条丢掉且无任何报错**。
+  //   实测 (只读回放生产账本): 接龙文案加上"红包"二字之后的那批接龙**条条零回复**, 而此前不带"红包"的
+  //   接龙条条有回复, 相关性是完美对应的; 且日志只留一行 "red packet detected: … url=missing" ——
+  //   看着像"来了个没 url 的红包", 极易误诊成 vendor 侧问题。
+  //   结构性识别 (msgType===49 + "#接龙") 比关键词启发式可靠得多, 必须优先。
+  if (isRelayMessage(msg)) return false;
   // heuristic 1: content 含 "红包" 关键字
   if (typeof msg.content === "string" && /红包|red.?packet/i.test(msg.content)) {
     return true;
