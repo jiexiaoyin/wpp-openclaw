@@ -4,6 +4,61 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.6.7] 适配 OpenClaw 2026.9.6+ plugin source capture (插件根解析单一真源) + deploy-swap `--dry-run` 谎报修复 (2026-09-26)
+
+> 起因: OpenClaw 升级 2026.9.4 → 2026.9.6 后, **可变的账号配置写到了临时副本里**。
+> (2026.9.6 换树失败/回滚的排查见 git log + `/data/openclaw-preupgrade-2026.9.4-1790389681/`; 停 Gateway 后从独立 shell 重跑 `openclaw update --yes` 成功。)
+
+**根因 —— 「插件根」解析到了 openclaw 的临时源捕获副本**
+- OpenClaw 2026.9.6 起, 本地插件在**每次 CLI 调用 / gateway 加载**时会被「源捕获」(plugin source capture) **实体复制**到
+  `<stateDir>/tmp/plugin-captures/<instance-uuid>/captures/openclaw-plugin-build-XXXX/package-0/node_modules/wechatpadpro/`;
+  该副本**临时**(进程退出即 `sweepPluginSourceCaptureDirectories()` 清掉, 实测 uuid 根已轮换 4 个: `da5eaf4e` / `a5dfa290` / `3a591cca` / `9c6531d9`)。
+  捕获上下文是 openclaw 内部 `AsyncLocalStorage`, **不对插件 SDK 暴露** ⇒ 插件侧拿不到"真实源目录"。
+- 插件原有 **3 份各自独立的** 向上 walk (`core/paths.ts#findPluginRoot`、`config-helpers.ts#findPluginRootSync`、`channel-ui-bridge.ts#resolveManifestRoot`)
+  都停在副本根 —— 副本里同样有 `openclaw.plugin.json` + `package.json`。于是
+  `join(findPluginRoot(), "accounts" | "config.json" | "db/schema.sql")` 全部落到副本。
+- **真实故障证据** (2026-09-26 10:41, `openclaw status --all` 期间, 生产 journal):
+  `WARN [WPP v1.6.6] config hot-reload failed: default: account config not found:
+  /root/.openclaw/tmp/plugin-captures/3a591cca-…/openclaw-plugin-build-KjW3dz/package-0/node_modules/wechatpadpro/accounts/default.json`
+  ⇒ 账号配置**读**不到 / **写**进临时目录 = 进程结束即丢 (线上 `accounts/default.json` 未被破坏纯属时机运气: 部署副本最后写入 09-16 18:53, 副本拷贝恰好一致)。
+
+### Changed
+- **`src/core/paths.ts` 成为插件根解析单一真源**: `findPluginRoot()`(async) + 新增 `findPluginRootSync()`(sync, 共用同一 cache)。
+  解析到 capture 路径时映射回**稳定安装根**:
+  `stateDir` 由副本路径 `/tmp/plugin-captures/` 之前片段反推 (再退化到 `OPENCLAW_STATE_DIR` / `~/.openclaw`) →
+  `name` 取副本 `package.json#name` (再退化到目录名) → 命中 `<stateDir>/extensions/<name>`, 否则扫 `extensions/*` 比对
+  `package.json#name` / `openclaw.plugin.json#id` → **都失败则保留副本路径并只 warn 一次**(降级, 绝不因探测失败让插件起不来)。
+  副本识别看**整条路径**(`openclaw-plugin-build-*` 标记在祖先里, 8 层 walk 停下的通常是它下面的插件根)。
+- `config-helpers.ts` / `channel-ui-bridge.ts`: 删除各自的第二、三份 walk, 改用共享解析器 (消除三处漂移风险; sync 语义保持, 见文件内 `listAccountIds` 必须 sync 的 P0 记录)。
+- 版本 1.6.6 → 1.6.7 (`package.json` = 单一来源, manifest 同步)。
+
+### Fixed (部署脚本)
+- **`deploy-swap.sh --dry-run` 此前是「谎报的只读」**: `DRY_RUN` 只被最后那句 `echo` 使用 ⇒ `--dry-run` 实际执行**完整真实部署**
+  (备份 / `rm -rf $DEPLOY` / 拷贝 / 重启 gateway), 却打印"没真写任何文件"; 且 gate 条件里含 `DRY_RUN` ⇒ 同时绕过
+  「必须刚跑过 `deploy.sh`」的防呆。现在 7 个步骤里的写操作全部由 `DRY_RUN` 真正把门 (dry-run 只做只读预检)。
+- 新增 `--skip-build` / `SKIP_BUILD=1` (复用当前 `dist/`, 便于验证脚本本身)。
+
+### Added (防回归门)
+- `tests/unit/plugin-capture-paths.test.mjs` (10 例, 全在 `/tmp`, 不碰生产): 用**真编译产物**放进**真形状的 capture 树**,
+  断言 async/sync 都映射回稳定根、目录名≠包名/manifest id 兜底、找不到稳定根时降级不抛、正常安装路径行为不变、
+  `OPENCLAW_STATE_DIR` 兜底; 并用**假 OPENCLAW_ROOT 真跑一次 `deploy-swap.sh --dry-run`** 断言哨兵文件/`openclaw.json`/备份目录逐字节未变 + 源码仓三处解析器已收口。
+  (基线: `npm test` 174 pass / 0 fail。)
+
+### 部署与生产验证 (2026-09-26 10:47)
+- `deploy.sh` dry-run PASS(19) / WARN(0) → `deploy-swap.sh --force`: 备份 `/data/wpp-deploy-swap-1790390847/`(12846 文件, 与新部署清单逐项一致),
+  **`openclaw.json` sha256 未变** (`dce0dc37…`, 铁律), gateway 10:47:36 起 (PID 679070)。
+- 生产日志实证 (3 次捕获构建各自命中): `[WPP v1.6.7] [paths] plugin source capture 适配: …/captures/openclaw-plugin-build-jxFTKW/… → 稳定根 /root/.openclaw/extensions/wechatpadpro`;
+  `watching accounts dir: /root/.openclaw/extensions/wechatpadpro/accounts`; `applySchemaSql: 11 statements applied from …/extensions/wechatpadpro/db/schema.sql`;
+  `ws connected` / `setWebhook OK` / `setBusinessWebhook OK` / `startAutoSync OK` / `[WPP v1.6.7 STARTUP] … selfWxid=WXID_PLACEHOLDER`, 新进程 error/fail = 0。
+- 热重载实测: `touch accounts/default.json`(内容 hash 不变) ⇒ `config hot-reload detected: default (change)` → `hot-reload: account default runtime config updated` (旧版此路径读的是副本)。
+
+### 观察 (未改, 留档)
+- 同一 gateway 进程内插件会被注册多次 (**每次注册各自 capture 一份**), 修复后多了几个 watcher 同时 watch **同一个**真实 `accounts/` 目录
+  ⇒ 一次配置变更会产生 N 次 apply (实测 1 次 `runtime config updated` + 2 次 `not running, config cache refreshed only`, 内容相同 ⇒ 幂等, 无重连/无重起账号)。
+  若将来 apply 变成非幂等 (如每次 apply 都重连), 需在此处去重。
+
+> 注: v1.6.6 (心流阈值硬地板 0.5) 未在本文留条目, 详情见 git log (`ab24ae0`)。
+
 ## [运维] agent 拿不到发卡工具: `tools.alsoAllow` 白名单把 channel agentTools 全挡了 (2026-09-13, 无代码变更)
 
 > 起因 (老板): 让 wpp-wechat agent「将这个卡片转发给我」, 它回了 **"已转发 ✅ 卡片已转到你微信"** ——

@@ -17,10 +17,9 @@
 
 import { readFile, writeFile, rename } from "node:fs/promises";
 import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { logObj as log } from "./core/logger.js";
-import { findPluginRoot } from "./core/paths.js";
+import { findPluginRoot, findPluginRootSync } from "./core/paths.js";
 import { DEFAULT_ACCOUNT_ID } from "./core/constants.js";
 import { isValidAccountId, invalidateConfigCache } from "./config.js";
 import { stringifyLargeInts } from "./util/bigint.js";
@@ -77,20 +76,16 @@ const CORE_FIELDS_FALLBACK: CoreFieldSpec[] = [
 // 防 schema 未来误引入明文 secret 属性 (双保险; schema 现已无)
 const SECRET_KEY_RE = /^(tokenKey|authcode|webhookSecret|webhookPathToken)$/;
 
-/** manifest 所在插件根 (dist/ 的上一级; src 下同理向上找含 openclaw.plugin.json 的目录) */
-function resolveManifestRoot(): string {
-  let dir = dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 8; i++) {
-    try {
-      if (readFileSync(join(dir, "openclaw.plugin.json"), "utf8").length >= 0) return dir;
-    } catch {
-      /* keep walking up */
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return dir;
+/**
+ * manifest 所在插件根 (dist/ 的上一级; src 下同理向上找含 openclaw.plugin.json 的目录)。
+ *
+ * v1.6.7 (2026-09-26): 改为走 core/paths.ts 的共享解析器 —— 旧实现是本文件**第三份**独立 walk,
+ * 2026.9.6 plugin source capture 下会停在临时副本根 (副本里也有 manifest), 副本被 sweep 时
+ * manifest 读不到 → core fields 静默退化。共享解析器会把副本映射回稳定安装根。
+ * 返回 null = 未解析到 (调用方走 fallback)。
+ */
+function resolveManifestRoot(): string | null {
+  return findPluginRootSync();
 }
 
 function schemaNodeToKind(node: Record<string, unknown>): { kind: CoreFieldKind; enumValues?: string[] } {
@@ -124,8 +119,13 @@ function deriveCoreFields(props: Record<string, unknown>, prefix = "", out: Core
 let _derivedCoreFields: CoreFieldSpec[] | null = null;
 function loadChannelUiCoreFields(): CoreFieldSpec[] {
   if (_derivedCoreFields) return _derivedCoreFields;
+  const manifestRoot = resolveManifestRoot();
+  if (!manifestRoot) {
+    _derivedCoreFields = CORE_FIELDS_FALLBACK;
+    return _derivedCoreFields;
+  }
   try {
-    const m = JSON.parse(readFileSync(join(resolveManifestRoot(), "openclaw.plugin.json"), "utf8")) as {
+    const m = JSON.parse(readFileSync(join(manifestRoot, "openclaw.plugin.json"), "utf8")) as {
       channelConfigs?: { wechatpadpro?: { schema?: { properties?: Record<string, unknown> } } };
     };
     const props = m.channelConfigs?.wechatpadpro?.schema?.properties;
