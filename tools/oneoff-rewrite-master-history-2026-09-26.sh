@@ -5,7 +5,7 @@
 #    它把 GitHub 公开仓的 master (源码分支) 历史重写成脱敏版:
 #      · 每个提交的**文件内容**按 ~/.openclaw/wpp-sanitize.rules 脱敏 (含旧脚本内联的生产密钥前缀)
 #      · 从全部历史移除 node_modules/ coverage/ release/ dist-release/ accounts/default.json
-#      · 提交信息里的个人串同样脱敏; 作者邮箱 jiexiaoyin@users.noreply.github.com → GitHub noreply
+#      · 提交信息里的个人串同样脱敏; 作者邮箱 个人 gmail → GitHub noreply
 #      · 保留全部提交与提交信息 (--prune-empty never), 只换内容 ⇒ 所有 SHA 变化
 #
 # 为什么需要: 2026-09-26 审计发现 master 从 Initial commit 起 62 个提交全部带个人信息
@@ -45,10 +45,17 @@ echo "  备份: $BACKUP (+ ${BACKUP%.git}-master.bundle)"
 # ============ [2/5] 规则 → filter-repo 格式 + mailmap ============
 echo "=== [2/5] 生成 filter-repo 规则 + mailmap ==="
 bash "$SANITIZER" --emit-filter-repo "$WORK-rules.txt" || die "规则生成失败"
-cat > "$WORK-mailmap.txt" <<'MAP'
-jiexiaoyin <jiexiaoyin@users.noreply.github.com> <jiexiaoyin@users.noreply.github.com>
-MAP
 chmod 600 "$WORK-rules.txt"
+# mailmap 从**规则文件**里取 (旧邮箱 = 那条邮箱替换规则的键): 本脚本内不写邮箱字面量,
+#   否则"要发布的脚本自带敏感串"——正是本仓库 2026-09-26 事故的模式 (旧版 heredoc 里就有,
+#   结果发布快照里那行被脱敏器改写成了自己映射自己, 全是噪音)。
+old_raw="$(grep -E '^regex:[A-Za-z0-9._%+-]+@[A-Za-z0-9.\\-]+==>' "$WORK-rules.txt" | head -1)" || true
+[ -n "$old_raw" ] || die "规则文件里找不到邮箱替换规则 (mailmap 无从生成)"
+key="${old_raw#regex:}"; key="${key%%==>*}"
+OLD_ADDR="$(printf '%s' "$key" | sed 's/\\//g')"
+NEW_ADDR="${old_raw##*==>}"
+printf '%s <%s> <%s>\n' "$(git -C "$MIRROR" config user.name || echo jiexiaoyin)" "$NEW_ADDR" "$OLD_ADDR" > "$WORK-mailmap.txt"
+chmod 600 "$WORK-mailmap.txt"
 
 # 注: 校验不自己拼 grep 正则 —— 规则里含前后视断言 (?<!...), ERE grep 表达不了会给出**假结论**
 #     (第一次跑就踩到: git grep 对 (?<! 只发 warning 然后"看起来 0 命中")。判据统一交给执行器。

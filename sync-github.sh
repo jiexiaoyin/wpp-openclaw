@@ -19,6 +19,7 @@
 #      而它在公开仓 master 分支 ⇒ 公开仓被自己人泄了 62 个提交。任何"要发布的文件"都不得内联敏感串。
 #
 # 前置: build-release.sh 的脱敏校验通过 + 两个分支的快照都过 sanitize-source.sh --check (有残留 exit 1)
+#       新建的提交还要过 tools/check-commit-metadata.sh (作者/提交者邮箱, 不看文件内容)
 # 凭证: 走 git credential store (jiexiaoyin token)
 
 set -e
@@ -42,6 +43,18 @@ SOURCE_EXCLUDES=(--exclude='.git/' --exclude='node_modules/' --exclude='coverage
 DRY_RUN=0
 NO_BUILD=0
 MAIN_ONLY=0
+
+# 提交后门: 校验刚建的提交的**作者/提交者邮箱**与提交信息 (2026-09-26 二次事故).
+#   文件内容门 (--check 全树) 看不见 git 元数据 —— 当时镜像仓 .git/config 的 user.email 是老板个人 gmail,
+#   每次同步新建的提交都把 gmail 又带回已脱敏的历史里 (main 27 个提交 + master 1 个提交中招)。
+#   不通过 ⇒ 撤销该提交并中止 (不 push), 由人修 .git/config 后重跑。
+require_clean_commit() {
+  if ! bash "$DEV_DIR/tools/check-commit-metadata.sh" "$MIRROR_DIR" HEAD; then
+    echo "  撤销本次提交 (改动仍在暂存区); 修: git config user.email jiexiaoyin@users.noreply.github.com"
+    git reset --soft HEAD~1
+    exit 1
+  fi
+}
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
@@ -111,6 +124,7 @@ else
   else
     # v1.4.0 12:53 老板拍板 C: 不再传 -c user.name/email, 让 git 自动从本地镜像 .git/config 读
     git commit -q -m "sync: WPP 插件更新 (build-release.sh 重建, ${TS})"
+    require_clean_commit
     # git push 网络不稳 → 重试 3 次
     for i in 1 2 3; do
       if git push origin "$BRANCH" 2>&1; then
@@ -155,6 +169,7 @@ else
   else
     echo "  ✓ 变更: $(git diff --cached --stat | tail -1)"
     git commit -q -m "chore(source): 同步 dev 源码快照 (脱敏, ${TS})"
+    require_clean_commit
     # DEV.md §6: 推送用 --force-with-lease 而非 --force (master 曾被重写, 防覆盖别人/自己的新提交)
     for i in 1 2 3; do
       if git push --force-with-lease origin master 2>&1; then

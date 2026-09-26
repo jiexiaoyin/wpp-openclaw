@@ -140,6 +140,40 @@ test('发布链脚本不得内联脱敏串 (2026-09-26 泄漏成因: 规则外�
   }
 });
 
+test('提交元数据门: 作者邮箱命中规则被拦下, 干净提交放行 (文件内容门看不见元数据)', () => {
+  const { dir, env } = fixture(['boss@personal.example\tboss@noreply.example']);
+  const repo = path.join(dir, 'repo');
+  const git = (...a) => spawnSync('git', ['-C', repo, ...a], { encoding: 'utf-8' });
+  fs.mkdirSync(repo);
+  git('init', '-q');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'content with no secret\n');
+  const gateScript = path.join(ROOT, 'tools', 'check-commit-metadata.sh');
+  const runGate = () => {
+    const r = spawnSync('bash', [gateScript, repo, 'HEAD'], { encoding: 'utf-8', env });
+    return { code: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  };
+
+  // 干净身份 ⇒ 放行
+  git('config', 'user.name', 'tester');
+  git('config', 'user.email', 'tester@example.com');
+  git('add', '-A'); git('commit', '-qm', 'clean commit');
+  assert.strictEqual(runGate().code, 0, '干净提交必须放行');
+
+  // 换成个人 gmail 作者 ⇒ 必须拦下 (2026-09-26 二次事故的复现)
+  git('config', 'user.email', 'boss@personal.example');
+  fs.appendFileSync(path.join(repo, 'a.txt'), 'more\n');
+  git('add', '-A'); git('commit', '-qm', 'leaky author');
+  const bad = runGate();
+  assert.strictEqual(bad.code, 1, '个人 gmail 作者必须被拦下');
+  assert.match(bad.out, /boss@personal\.example/, '报错必须指出是哪个身份');
+
+  // 规则文件缺失 ⇒ 同样拒绝 (绝不静默放过元数据)
+  const noRules = spawnSync('bash', [gateScript, repo, 'HEAD'], {
+    encoding: 'utf-8', env: { ...env, WPP_SANITIZE_RULES: path.join(dir, 'nope.txt') },
+  });
+  assert.strictEqual(noRules.status ?? 1, 1, '规则缺失时必须拒绝');
+});
+
 test('真实规则文件不在仓内, 且在仓外时权限为 0600 (dev 侧)', () => {
   const real = process.env.WPP_SANITIZE_RULES || path.join(os.homedir(), '.openclaw', 'wpp-sanitize.rules');
   assert.ok(!real.startsWith(ROOT), '真实规则文件绝不能放进仓库');

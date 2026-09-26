@@ -105,13 +105,23 @@ npm run test:single -- <file>        # 单个
   `sync-github.sh` 把 `PERSONAL` 正则内联在自己文件里，而这两个脚本自己在 `master` 里
   ⇒ 2026-09-26 审计发现 master **从 Initial commit 起 62 个提交全部**带个人信息
   （真实 wxid / 群 ID / 老板登录名 / vendor host / 生产密钥前缀，46 个文件命中），**含一把明文 API key**。
-  该历史已重写（`tools/oneoff-rewrite-master-history-2026-09-26.sh`，旧 SHA `bb78ca4` → 新 `133aabd`）。
+  该历史已重写（`tools/oneoff-rewrite-master-history-2026-09-26.sh`，旧 SHA `bb78ca4` → `133aabd`）。
+- **二次事故（同一次审计抓出，两个"假安全"）**: ① `main` 27 个提交 + `master` 新提交的**作者/提交者邮箱**是老板
+  个人 gmail —— 根因是本地镜像仓 `.git/config` 的 `user.email` 就是它，**每次同步新建的提交都把 gmail 带回来**
+  ⇒ **只查 tip 的门 = 假安全**，meta 也不在"文件内容"门的视野里；② `main` 历史里 1 个提交（2026-08-20）的
+  `USAGE.md` 把真实群 ID 当示例写了（后续提交改掉了 ⇒ **只看 tip 同样看不出来**）。
+  两个分支的元数据+历史内容已二次重写（`tools/oneoff-scrub-author-email-2026-09-26.sh`，
+  `--mailmap` + `--replace-text`；**两分支 tip 树 SHA 不变** ⇒ 公开的当前内容零变化）：
+  `master` `32fd6e5` → `3a6b1edf`，`main` `456bdf68` → `0144fdaa`。
+  根因同修：镜像仓 `git config user.email` = `jiexiaoyin@users.noreply.github.com`。
 - **执行器**: `tools/sanitize-source.sh`（本文件无敏感串，可发布）
-  `--check <dir|file>`（门）/ `--apply <dir>` / `--check-history <repo> [ref]`（逐提交校验整条历史）
+  `--check <dir|file>`（门）/ `--apply <dir>` / `--check-history <repo> [ref]`（**逐提交**校验整条历史）
   / `--emit-filter-repo <f>`（历史重写用）。规则是 **Python regex**（要前后视断言，见下）。
 - **master 发布快照排除项**: `node_modules/` `coverage/` `release/` `dist-release/`（依赖与产物）、
   `accounts/default.json`（本机运行期账号配置：真实 wxid/管理员/群白名单；公开仓只留 `.example`）。
-- **发布前门**: 快照必须过 `--check`（0 命中）；历史改动后过 `--check-history`。有残留 ⇒ 拒绝上传。
+- **发布门（三道，缺一不可）**: ① 快照 `--check` 0 命中（内容）；② 每次 commit 后
+  `tools/check-commit-metadata.sh` 查**作者/提交者邮箱**（元数据，不过则 `git reset --soft` 撤销提交并中止）；
+  ③ 历史改动后 `--check-history` **逐提交**核树 + 提交信息 + 作者。有残留 ⇒ 拒绝上传。
 - **为什么用前后视断言**: 如"11 位手机号但两侧不是数字"——否则长数字 ID / hex 里的片段会被误伤
   （实测 `9007199254740992` 里能"匹配"出手机号）。sed 的 ERE 表达不了 ⇒ 执行器用 python3，
   与历史重写（git-filter-repo = Python re）语义一致，树脱敏与历史重写可逐字节对齐。

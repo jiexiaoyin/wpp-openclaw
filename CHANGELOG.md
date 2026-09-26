@@ -4,11 +4,15 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
-## [运维] 公开仓脱敏加固: 脱敏规则外置单一真源 + `master` 源码分支历史重写 + 发布双门 (2026-09-26, 无插件代码变更)
+## [运维] 公开仓脱敏加固: 脱敏规则外置单一真源 + `master`/`main` 双分支历史重写 + 发布三门 (2026-09-26, 无插件代码变更)
 
 > 老板指令: **必须脱敏**。这一版没有改插件运行时行为, 改的是"发布链"本身。
-> 事故性质: 公开仓 `jiexiaoyin/wpp-openclaw` 的 **`master`(源码分支) 从 Initial commit 起 62 个提交全部**
-> 带个人信息, 46 个文件命中; `main`(脱敏 release) 历史干净 (29 提交 0 命中)。
+> 事故性质 (两轮审计): 公开仓 `jiexiaoyin/wpp-openclaw` 的 **`master`(源码分支) 从 Initial commit 起 62 个提交全部**
+> 带个人信息, 46 个文件命中。第一轮重写 master 后, 用**逐提交**校验 (`--check-history`) 复核时又抓出两类:
+> ① **元数据**泄漏 —— `main` 27 个提交 + `master` 新增的 1 个提交, 作者/提交者邮箱是老板**个人 gmail**
+> (根因: 本地镜像仓 `.git/config` 的 `user.email` 一直是它, 每次同步**新建**的提交又把 gmail 带回来);
+> ② `main` 的**历史**里有 1 个提交 (2026-08-20) 的 `USAGE.md` 把真实群 ID 当示例写了。
+> ⚠️ 教训: ①的根因说明"**只查 tip 的门 = 假安全**", ②的根因说明"**只看文件内容的门看不见 git 元数据**"。
 
 **根因 —— 脱敏规则内联在"要发布的脚本"里**
 - 旧版 `build-release.sh` / `sync-github.sh` 各自内联了一份 `PERSONAL` 正则 + `sanitize_file()` 替换清单
@@ -37,23 +41,33 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 ### Fixed
 - **`master` 历史重写并强推** (`tools/oneoff-rewrite-master-history-2026-09-26.sh`, 保留全部 62 个提交与提交信息,
   提交数、作者、消息都校验过): 每个提交的文件内容重新脱敏; 历史里移除 `node_modules/` `coverage/` `release/`
-  `dist-release/` `accounts/default.json`; 作者邮箱 `jiexiaoyin@users.noreply.github.com` → GitHub noreply。
-  旧 tip `bb78ca4` → 新 tip `133aabd`。`main` 未动。备份: `/data/wpp-github-mirror-backup-20260926-111713.git`。
-- 发布门升级: 快照必须过 `--check` 0 命中; 历史改动后过 `--check-history`(逐提交 + 提交信息/作者) 才算过。
+  `dist-release/` `accounts/default.json`; 作者邮箱由个人 gmail 改为 GitHub noreply。
+  旧 tip `bb78ca4` → `133aabd`。备份: `/data/wpp-github-mirror-backup-20260926-111713.git`。
+- **`master` + `main` 元数据/历史内容二次重写并强推** (`tools/oneoff-scrub-author-email-2026-09-26.sh`):
+  `--mailmap` 把个人 gmail 全换成 noreply (`main` 27 提交 + `master` 1 提交) + `--replace-text` 清掉
+  `main` 历史里那处群 ID; 提交数不变、**两分支 `tip` 树 SHA 不变** (公开的当前内容逐字节零变化),
+  逐提交校验 0 命中。`master` `32fd6e5` → `3a6b1edf`; `main` `456bdf68` → `0144fdaa`。
+  备份: `/data/wpp-github-mirror-backup-20260926-112330.git` (含各分支 bundle)。
+  根因同时修掉: 镜像仓 `git config user.email` → **`jiexiaoyin@users.noreply.github.com`** (身份来源收口)。
+- 发布门升级为**三道**: 快照 `--check` 0 命中 / 新建提交过 `check-commit-metadata.sh` (查作者·提交者邮箱) /
+  历史改动后过 `--check-history`(**逐提交**树 + 提交信息 + 作者)。只查 tip 等于假安全。
 
 ### Added
 - 回归测试 `tests/unit/sanitize-rules.test.mjs` (全在 `/tmp`, 不碰生产/不读真实规则文件):
   临时规则文件驱动 apply/check、前后视断言不误伤长数字、替换值不自我匹配 (无死循环)、规则缺失时**拒绝工作**、
-  以及"公开仓源文件里不得内联敏感串"的静态断言。
-- `DEV.md §6.1 脱敏` 写清发布链、排除项、门的用法与本次事故教训。
+  "公开仓源文件里不得内联敏感串"的静态断言, 以及**提交元数据门**的拦下/放行双向测试。
+- **`tools/check-commit-metadata.sh`**: 提交元数据门 (作者/提交者邮箱 + 提交信息过同一套规则);
+  `sync-github.sh` 每次 commit 后必过, 不过则 `git reset --soft HEAD~1` 撤销提交并中止 push。
+- `DEV.md §6.1 脱敏` 写清发布链、排除项、三道门的用法与本次事故教训。
 
 ### 部署与生产
 - **无插件代码变更 ⇒ 不打版本号、不部署** (生产插件仍为 v1.6.7; `package.json` / `openclaw.plugin.json` 保持 1.6.7,
   免得触发"改了版本没重新部署"的回归门)。本条目按仓库惯例用 `[运维]` 前缀。
 
 ### 遗留 / 提醒
-- force-push 后 GitHub 上**旧对象在服务端 GC 前仍可按 SHA 访问**(`bb78ca4…` 及其父提交)。
-  要彻底消除须删仓重建或联系 GitHub Support —— 老板若要求"一点都不能留", 这是唯一彻底路径。
+- force-push **不会**从 GitHub 删掉旧对象: 在服务端 GC 前, 被替换掉的历史仍可按旧 SHA 直接访问
+  (`bb78ca4…` / `133aabd…` / `32fd6e5…` / `456bdf68…` 及其父提交)。要彻底消除须**删仓重建**或联系
+  GitHub Support —— 老板若要求"一点都不能留", 这是唯一彻底路径。
 - 已公开的那把 API key 请确认作废 (若还在用 ⇒ 立即轮换)。
 
 ## [v1.6.7] 适配 OpenClaw 2026.9.6+ plugin source capture (插件根解析单一真源) + deploy-swap `--dry-run` 谎报修复 (2026-09-26)
