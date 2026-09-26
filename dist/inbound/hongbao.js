@@ -3,6 +3,15 @@
 import { warn, info, formatErr } from "../core/logger.js";
 import { isRelayMessage } from "./relay.js";
 /**
+ * v1.9.2: 是否"卡片类" App 消息 (msgType=49)
+ * 红包/转账/接龙/小程序/文件/链接 这些**被包装过**的消息都由 49 承载 (正文里含 XML/摘要),
+ * 纯文本 (1) / 图片 (3) / 表情 (47) 等不是卡片。判定放在这里而不是散在各处, 是为了让
+ * "哪些启发式只对卡片成立"这件事有单一可读的来源。
+ */
+function isCardMessage(msg) {
+    return msg.msgType === 49;
+}
+/**
  * 检测消息是否是红包
  * - msgType 包含 "hongbao" / "redpacket" (vendor-specific)
  * - content 含 "红包" 关键字 (heuristic, 可能误判但够安全)
@@ -18,8 +27,12 @@ export function isRedPacketMessage(msg) {
     //   结构性识别 (msgType===49 + "#接龙") 比关键词启发式可靠得多, 必须优先。
     if (isRelayMessage(msg))
         return false;
-    // heuristic 1: content 含 "红包" 关键字
-    if (typeof msg.content === "string" && /红包|red.?packet/i.test(msg.content)) {
+    // heuristic 1: content 含 "红包" 关键字 —— v1.9.2 起**只在卡片类消息上采信** (老板 2026-09-27 拍板)
+    //   真红包在本系统里是 App 卡片 (msgType=49), 正文由厂商译成"微信红包"四字; 而**纯文本**里出现
+    //   "红包"二字绝大多数是人在聊天 (如"@某某 群收红包"/"抓紧领大红包"), 拿关键词静默它们 = 把群友的话吞了。
+    //   实测 (只读回放生产账本): 真红包**全部**是卡片形态 (msgType=49), 纯文本形态**一条没有**
+    //   ⇒ 收窄=零漏判, 同时救回一批被误吞的群聊。若将来厂商改用纯文本推红包卡片, 这条注释就是排查入口。
+    if (typeof msg.content === "string" && /红包|red.?packet/i.test(msg.content) && isCardMessage(msg)) {
         return true;
     }
     // heuristic 2: raw.appmsg.type === 2002 (微信 native red packet)
