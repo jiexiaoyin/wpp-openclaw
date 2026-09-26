@@ -88,10 +88,35 @@ npm run test:single -- <file>        # 单个
 
 开发一处改完同步到三处保持幂等（老板 2026-08 拍板）：
 1. **dev**: 本仓库 `src/` 改 + `npm run build`。
-2. **GitHub**: 提交 + `git push origin master`。凭证不入 git（本地 `.git/config` 管 `[user]`）。推送用 `force-with-lease` 而非 `--force`（避免覆盖）。
-3. **deploy**: 用 `./build-release.sh`（含备份到 `/data/`，脱敏 host/token/wxid）产出释放包 → `/root/.openclaw/extensions/wechatpadpro/`，再 `systemctl --user restart openclaw-gateway`。
+2. **GitHub**: **`bash sync-github.sh`** 是唯一发布通道（2026-09-26 起）——它一次做四件事：
+   `release/` 重建（`build-release.sh`，脱敏 + 门）→ `/data` 发布包 + zip → `main` 分支（脱敏 release）→
+   `master` 分支（**脱敏源码快照**）。凭证不入 git（本地镜像 `.git/config` 管 `[user]`）；
+   推送用 `--force-with-lease` 而非 `--force`。
+3. **deploy**: 用 `./build-release.sh` 产出释放包 → `/root/.openclaw/extensions/wechatpadpro/`，
+   再 `systemctl --user restart openclaw-gateway`（或 `deploy-swap.sh --force` 走 atomic 换树）。
 
 **铁律**: 部署/重启是外部动作，需老板明确授权后执行。改动只落在 dev+GitHub 不算上线。
+
+### 6.1 脱敏（2026-09-26 事故后加固：两处都必须脱敏）
+公开仓 = `jiexiaoyin/wpp-openclaw`。`main` = 脱敏 release，`master` = 脱敏**源码快照**。
+
+- **规则单一真源（不进仓、不发布）**: `~/.openclaw/wpp-sanitize.rules`（0600，`WPP_SANITIZE_RULES` 可覆盖）。
+  规则含真实敏感串 ⇒ **绝不能内联进任何会发布的文件**。血的教训：旧版 `build-release.sh` /
+  `sync-github.sh` 把 `PERSONAL` 正则内联在自己文件里，而这两个脚本自己在 `master` 里
+  ⇒ 2026-09-26 审计发现 master **从 Initial commit 起 62 个提交全部**带个人信息
+  （真实 wxid / 群 ID / 老板登录名 / vendor host / 生产密钥前缀，46 个文件命中），**含一把明文 API key**。
+  该历史已重写（`tools/oneoff-rewrite-master-history-2026-09-26.sh`，旧 SHA `bb78ca4` → 新 `133aabd`）。
+- **执行器**: `tools/sanitize-source.sh`（本文件无敏感串，可发布）
+  `--check <dir|file>`（门）/ `--apply <dir>` / `--check-history <repo> [ref]`（逐提交校验整条历史）
+  / `--emit-filter-repo <f>`（历史重写用）。规则是 **Python regex**（要前后视断言，见下）。
+- **master 发布快照排除项**: `node_modules/` `coverage/` `release/` `dist-release/`（依赖与产物）、
+  `accounts/default.json`（本机运行期账号配置：真实 wxid/管理员/群白名单；公开仓只留 `.example`）。
+- **发布前门**: 快照必须过 `--check`（0 命中）；历史改动后过 `--check-history`。有残留 ⇒ 拒绝上传。
+- **为什么用前后视断言**: 如"11 位手机号但两侧不是数字"——否则长数字 ID / hex 里的片段会被误伤
+  （实测 `9007199254740992` 里能"匹配"出手机号）。sed 的 ERE 表达不了 ⇒ 执行器用 python3，
+  与历史重写（git-filter-repo = Python re）语义一致，树脱敏与历史重写可逐字节对齐。
+- **`master` 别再手工 push**: 手工 push 就是这次泄漏的成因（无可避免地夹带本机串）。
+  dev 本地仓的旧 `master` 分支已改名 `archive/pre-sanitize-master-2026-09-26`（防误 push）。
 
 ---
 

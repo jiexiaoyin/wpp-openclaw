@@ -12,10 +12,11 @@
 #   bash build-release.sh --check    # 只校验当前 release/ 是否干净
 #   bash build-release.sh --help     # 帮助
 #
-# 脱敏映射 (dev 真实 → release 泛化):
-#   WPP_VENDOR_HOST.example.com            → WPP_VENDOR_HOST.example.com  (vendor host, env 可覆盖)
-#   机器人 (intent-llm)      → 微信机器人                    (bot 名泛化, 分类逻辑不受影响)
-#   XX (relay 注释示例)     → XX                         (示例文本泛化)
+# 脱敏 (v1.6.8, 2026-09-26 起): 规则**外置**在 $WPP_SANITIZE_RULES (默认 ~/.openclaw/wpp-sanitize.rules),
+#   执行器 tools/sanitize-source.sh (本脚本与执行器都不含任何敏感串 ⇒ 可安全发布到公开仓)。
+#   旧版把 PERSONAL 正则内联在本文件里, 而本文件自己在 GitHub 公开仓 master 分支 ⇒ 脚本本身即泄漏源。
+#   覆盖: vendor host / bot 名 / 业务名 / 真实 wxid·登录名·邮箱 / 真实机器路径 / 真实群 ID
+#   (具体串只存在于规则文件里 —— 本文件里一个字都不写, 这样本文件可原样发布)
 
 set -e
 
@@ -24,49 +25,17 @@ cd "$(dirname "$0")"
 DEVOPS_DIR="$(pwd)"
 RELEASE_DIR="$DEVOPS_DIR/release"
 BACKUP_ROOT="${BACKUP_ROOT:-/data}"
+SANITIZER="$DEVOPS_DIR/tools/sanitize-source.sh"
 
-# ============ 敏感串 (必须脱敏) ============
-# 与 sync-github.sh PERSONAL 对齐; 命中即阻止上传
-PERSONAL="USER_PLACEHOLDER|WXID_PLACEHOLDER|WXID_PLACEHOLDER|CRED_PREFIX_REDACTED|CRED_PREFIX_REDACTED|USER_PLACEHOLDER|USER_PLACEHOLDER|XX|XX|XX|机器人|juhe\.chat|/usr/local/silk"
-
-# ============ 脱敏替换函数 ============
-# 参数: 目标文件
-sanitize_file() {
-  local f="$1"
-  # vendor host 默认值 → 泛化占位 (保留 process.env.WPP_VENDOR_HOST 读取逻辑)
-  sed -i 's|"wx\.juhe\.chat"|"WPP_VENDOR_HOST.example.com"|g' "$f"
-  sed -i 's|https://wx\.juhe\.chat|https://WPP_VENDOR_HOST.example.com|g' "$f"
-  sed -i 's|wss://wx\.juhe\.chat|wss://WPP_VENDOR_HOST.example.com|g' "$f"
-  # 注释里的 vendor host
-  sed -i 's|wx\.juhe\.chat|WPP_VENDOR_HOST.example.com|g' "$f"
-  # bot 名泛化 (intent-llm system prompt)
-  sed -i 's|微信机器人|微信机器人|g' "$f"
-  sed -i 's|@机器人|@机器人|g' "$f"
-  # 业务名泛化 (注释/示例)
-  sed -i 's|XX|XX|g' "$f"
-  sed -i 's|XX|XX|g' "$f"
-  # 个人信息 (wxid/手机号片段)
-  sed -i 's|USER_PLACEHOLDER|USER_PLACEHOLDER|g' "$f"
-  sed -i 's|WXID_PLACEHOLDER|WXID_PLACEHOLDER|g' "$f"
-  sed -i 's|WXID_PLACEHOLDER|WXID_PLACEHOLDER|g' "$f"
-  sed -i 's|USER_PLACEHOLDER|USER_PLACEHOLDER|g' "$f"
-  sed -i 's|USER_PLACEHOLDER|USER_PLACEHOLDER|g' "$f"
-  # silk 编解码器路径 (真实机器路径)
-  sed -i 's|/usr/local/silk|/usr/local/silk|g' "$f"
+# ============ 脱敏 / 扫描 (全部经外置规则执行器) ============
+sanitize_tree() {
+  [ -x "$SANITIZER" ] || { echo "✗ 缺 $SANITIZER"; exit 1; }
+  bash "$SANITIZER" --apply "$1"
 }
 
-# ============ 敏感扫描 ============
+# 敏感扫描: 规则同源; 命中即阻止发布 (exit 1)
 scan_release() {
-  local leaks
-  leaks=$(grep -rlE "$PERSONAL" "$RELEASE_DIR" --exclude-dir=.git 2>/dev/null \
-    | grep -vE 'vendor/README|GETTING_STARTED|DEPLOY|FACE-LOGIN|^\./README|release/vendor/README' | head -5 || true)
-  if [ -n "$leaks" ]; then
-    echo "✗ 敏感残留, 阻止发布:"
-    echo "$leaks"
-    return 1
-  fi
-  echo "  ✓ 敏感扫描通过"
-  return 0
+  bash "$SANITIZER" --check "$RELEASE_DIR"
 }
 
 # ============ --check 模式 ============
@@ -102,9 +71,8 @@ echo "=== [3/4] 组装 release/ + 脱敏 ==="
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
-# 3a: dist (脱敏后)
+# 3a: dist (脱敏在 3g 统一做)
 cp -a dist "$RELEASE_DIR/dist"
-find "$RELEASE_DIR/dist" -name "*.js" | while read -r f; do sanitize_file "$f"; done
 
 # 3b: 顶层文件
 cp openclaw.plugin.json "$RELEASE_DIR/"
@@ -132,15 +100,11 @@ cp -a scripts "$RELEASE_DIR/" 2>/dev/null || true
 cp -a images "$RELEASE_DIR/" 2>/dev/null || true
 cp -a vendor "$RELEASE_DIR/" 2>/dev/null || true
 
-# 3g: 清理 release 里的敏感残留 (脱敏 release 顶层文档)
-for f in "$RELEASE_DIR"/*.md "$RELEASE_DIR"/scripts/*.js "$RELEASE_DIR"/deploy*.sh; do
-  [ -f "$f" ] && sanitize_file "$f"
-done
+# 3g: 整个 release/ 统一脱敏 (v1.6.8 起: 全树, 不再只挑 *.js/*.md — 旧清单漏过 dist/*.map 之类)
+#     dist / 文档 / manifest / config / accounts 模板 / db / scripts / vendor 都在规则覆盖内
+sanitize_tree "$RELEASE_DIR"
 
 echo "  release/ 组装完成: $(find "$RELEASE_DIR" -name '*.js' | wc -l) .js"
-
-# 3h: manifest 脱敏 (openclaw.plugin.json: vendor host 默认值 / 描述里的业务名)
-sed -i 's|https://wx\.juhe\.chat|https://WPP_VENDOR_HOST.example.com|g; s|wss://wx\.juhe\.chat|wss://WPP_VENDOR_HOST.example.com|g; s|wx\.juhe\.chat|WPP_VENDOR_HOST.example.com|g; s|XX|XX|g' "$RELEASE_DIR/openclaw.plugin.json"
 
 # ============ 步骤 4: 校验 ============
 echo "=== [4/4] 敏感扫描 ==="

@@ -4,6 +4,58 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [运维] 公开仓脱敏加固: 脱敏规则外置单一真源 + `master` 源码分支历史重写 + 发布双门 (2026-09-26, 无插件代码变更)
+
+> 老板指令: **必须脱敏**。这一版没有改插件运行时行为, 改的是"发布链"本身。
+> 事故性质: 公开仓 `jiexiaoyin/wpp-openclaw` 的 **`master`(源码分支) 从 Initial commit 起 62 个提交全部**
+> 带个人信息, 46 个文件命中; `main`(脱敏 release) 历史干净 (29 提交 0 命中)。
+
+**根因 —— 脱敏规则内联在"要发布的脚本"里**
+- 旧版 `build-release.sh` / `sync-github.sh` 各自内联了一份 `PERSONAL` 正则 + `sanitize_file()` 替换清单
+  (含真实 wxid / 群 ID / 老板登录名 / vendor host / 机器路径 / **生产密钥前缀**)。
+- 这两个脚本**自己在 `master` 分支里** ⇒ 脚本本身成了泄漏源; 而"每次更新同步 GitHub"是铁律
+  ⇒ 每发布一次就把这份清单再公开一次。
+- 审计另发现 `CHANGELOG.md` 里躺着一把**明文 API key**(`sk-…`, 已脱敏为 `sk-REDACTED`)。
+  该 key **不在** `/root/.openclaw/.env` 中 (疑似早已作废/未启用), 但既然公开过 ⇒ 必须假定已泄露并作废。
+
+### Changed
+- **脱敏规则外置为单一真源**: `~/.openclaw/wpp-sanitize.rules` (0600, `WPP_SANITIZE_RULES` 可覆盖, **绝不入仓**)。
+  规则 = `<匹配串>\t<替换串>` + `@scan\t<扫描串>\t<改写串>`。
+- **新增执行器 `tools/sanitize-source.sh`** (本文件无任何敏感串 ⇒ 可发布):
+  `--check <dir|file>` / `--apply <dir>` / `--check-history <repo> [ref]` / `--emit-filter-repo <f>`。
+  用 **python3 + 前后视断言** 而不是 sed: 手机号/群 ID 这类规则必须能表达"两侧不是数字",
+  否则长数字 ID 与 hex 里的片段会被误伤 (实测 `9007199254740992` 能"匹配"出手机号);
+  且 python `re` 与历史重写工具 (git-filter-repo) 语义一致 ⇒ 树脱敏与历史重写结果可逐字节对齐。
+- `build-release.sh` / `sync-github.sh` 改为调用执行器, **脚本内不再内联任何敏感串**;
+  release 脱敏范围从 `*.js`+`*.md` 扩到**整棵 `release/`** (旧清单漏过 `dist/*.map` 一类)。
+- `sync-github.sh`: 新增 `[4/4] master 脱敏源码快照同步` (`--main-only` 可只跑旧行为);
+  快照排除 `node_modules/` `coverage/` `release/` `dist-release/` `accounts/default.json`
+  ⇒ master 不再靠手工 push (手工 push 正是本次泄漏的成因)。
+- 规则新增覆盖面: 真实手机号 / 真实群 ID (含未列举的, 兜底 `[0-9]{10,12}@chatroom`) / 明文 `sk-` key /
+  生产文件名里的 ID / 老板邮箱 → GitHub noreply。
+
+### Fixed
+- **`master` 历史重写并强推** (`tools/oneoff-rewrite-master-history-2026-09-26.sh`, 保留全部 62 个提交与提交信息,
+  提交数、作者、消息都校验过): 每个提交的文件内容重新脱敏; 历史里移除 `node_modules/` `coverage/` `release/`
+  `dist-release/` `accounts/default.json`; 作者邮箱 `jiexiaoyin@users.noreply.github.com` → GitHub noreply。
+  旧 tip `bb78ca4` → 新 tip `133aabd`。`main` 未动。备份: `/data/wpp-github-mirror-backup-20260926-111713.git`。
+- 发布门升级: 快照必须过 `--check` 0 命中; 历史改动后过 `--check-history`(逐提交 + 提交信息/作者) 才算过。
+
+### Added
+- 回归测试 `tests/unit/sanitize-rules.test.mjs` (全在 `/tmp`, 不碰生产/不读真实规则文件):
+  临时规则文件驱动 apply/check、前后视断言不误伤长数字、替换值不自我匹配 (无死循环)、规则缺失时**拒绝工作**、
+  以及"公开仓源文件里不得内联敏感串"的静态断言。
+- `DEV.md §6.1 脱敏` 写清发布链、排除项、门的用法与本次事故教训。
+
+### 部署与生产
+- **无插件代码变更 ⇒ 不打版本号、不部署** (生产插件仍为 v1.6.7; `package.json` / `openclaw.plugin.json` 保持 1.6.7,
+  免得触发"改了版本没重新部署"的回归门)。本条目按仓库惯例用 `[运维]` 前缀。
+
+### 遗留 / 提醒
+- force-push 后 GitHub 上**旧对象在服务端 GC 前仍可按 SHA 访问**(`bb78ca4…` 及其父提交)。
+  要彻底消除须删仓重建或联系 GitHub Support —— 老板若要求"一点都不能留", 这是唯一彻底路径。
+- 已公开的那把 API key 请确认作废 (若还在用 ⇒ 立即轮换)。
+
 ## [v1.6.7] 适配 OpenClaw 2026.9.6+ plugin source capture (插件根解析单一真源) + deploy-swap `--dry-run` 谎报修复 (2026-09-26)
 
 > 起因: OpenClaw 升级 2026.9.4 → 2026.9.6 后, **可变的账号配置写到了临时副本里**。
