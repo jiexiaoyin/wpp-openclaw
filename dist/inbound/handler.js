@@ -647,7 +647,7 @@ export function createWppInboundHandler(opts) {
                         try {
                             const nowMs = Date.now();
                             // v1.6.x HEARTFLOW-FEEDBACK: 该群若有 learned 阈值且 ≠ 账号级 → shallow clone override (judge prompt 与判定同用 effCfg)
-                            const override = resolveThresholdOverride(m.accountId, chatId, hfCfg);
+                            const override = resolveThresholdOverride(m.accountId, chatId, hfCfg, Math.floor(nowMs / 1000));
                             // v1.7.0 画像阈值下限: 画像说"这个群我该谨慎"时, 只把阈值**抬高**(取 max),
                             //   绝不下压 —— 激进的后果是刷屏, 正是老板要治的病 (见 heartflow-profile.ts 文件头)
                             const profileFloor = getHfProfileBandFloor(m.accountId, chatId);

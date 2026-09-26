@@ -9,7 +9,7 @@ import { CHANNEL_ID, PLUGIN_NAME, PLUGIN_VERSION, DEFAULT_BOT_NICKNAME } from ".
 import { loadGlobalConfigAsync, loadAccountConfigAsync, listAccountIds, isConfigured } from "./config.js";
 import { listAccountIds as helperListAccountIds, resolveAccount, defaultAccountId, isConfigured as helperIsConfigured, unconfiguredReason, describeAccount, } from "./config-helpers.js";
 import { getDefaultAccountRegistry } from "./account-state.js";
-import { closeDb, initDbPool, getSynckey, saveSynckey, listHfGroupStates, countHfLedgerByStatus, countHfEngageSignals, getHfLedgerLast, getHfGroupProfile, } from "./db.js";
+import { closeDb, initDbPool, getSynckey, saveSynckey, listHfGroupStates, countHfLedgerByStatus, countHfEngageSignals, getHfLedgerLast, getHfGroupProfile, listHfLayerStats, listHfSentCountsRecent, markHfLedgerVeto, listHfClosedSince, listHfBotMsgShare, listHfOutboundTexts, } from "./db.js";
 import { WechatpadproWsClient } from "./ws-client.js";
 import { WechatpadproWebhookServer } from "./webhook-receiver.js";
 import { createWppInboundHandler } from "./inbound/handler.js";
@@ -24,12 +24,17 @@ import { watchOpenClawChannelConfig, publishAccountCoreFieldsToChannelConfig } f
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig } from "./core/runtime-config.js";
 import { resolveAiConfig } from "./config-ai.js";
-import { defaultHeartflowConfig } from "./inbound/heartflow.js";
-import { getLearnedThreshold, loadLearnedThresholds, loadHfBudgetSeed, startHeartflowSweep } from "./inbound/heartflow-learn.js";
-import { getHfBudgetState, hfBudgetBlockedSnapshot, resolveHfBudget } from "./inbound/heartflow-budget.js";
+import { defaultHeartflowConfig, resolveHfLearning } from "./inbound/heartflow.js";
+import { forgetHfOpenWindow, getLearnedThreshold, hfLayerAnchorFor, hfLayerStep, loadLearnedThresholds, loadHfBudgetSeed, resolveHfThresholdDecision, startHeartflowSweep, } from "./inbound/heartflow-learn.js";
+import { ambientPFromHourCounts, HF_LAYER_DB_ROW_CAP, hfLayerKeyFor, loadHfGroupHourCounts, loadHfLayerStats, resolveHfLayeredCfg, } from "./inbound/heartflow-layer.js";
+import { getHfBudgetState, hfBudgetBlockedSnapshot, hfLocalHour, resolveHfBudget } from "./inbound/heartflow-budget.js";
+import { resolveHfDedupeCfg } from "./inbound/heartflow-dedupe.js";
+import { buildHfDigest, hfBotShare, hfEngagementSummary, hfRepeatRate, hfShareGuardSnapshot, resolveHfShareGuardCfg, } from "./inbound/heartflow-observe.js";
 import { getHfProfileBandFloor, getHfProfilePromptText, parseHfGroupProfileRow, resolveHfProfileCfg, } from "./inbound/heartflow-profile.js";
 import { defaultJargonConfig } from "./inbound/jargon.js";
 import { defaultAffectionConfig } from "./inbound/affection.js";
+/** v1.8.0: /heartflow status 里已学阈值群 / layers 里群的显示上限 (超出折叠成 "…其余 N 群") */
+const HF_STATUS_MAX_GROUPS = 5;
 // 每账号 triggerConfig/triggerCtx 可变容器: handler 闭包持有对象引用, 热重载 update 字段即刻生效
 const runtimeTriggerConfigs = new Map();
 const runtimeTriggerCtxs = new Map();
@@ -207,7 +212,8 @@ export const FILEHELPER_COMMANDS = [
     {
         // v1.3.79-80 AI-COMMAND: 三功能统一命令 (通用处理器 handleFeatureCommand)
         name: "/heartflow",
-        desc: "心流 on/off/status/threshold/group",
+        // v1.9.0: 补 report/layers/veto —— 命令面板里看不见的子命令等于不存在
+        desc: "心流 on/off/status/report [天数]/layers [群ID]/veto [群ID]/why <群ID>/profile <群ID>/threshold/group",
         example: "/heartflow on",
         handler: async ({ accountId, toWxid, args }) => {
             await handleFeatureCommand("heartflow", args, (t) => sendToFileHelper(accountId, toWxid, t), accountId);
@@ -247,13 +253,16 @@ async function handleFeatureCommand(feature, args, send, accountId) {
             try {
                 const learned = await listHfGroupStates(accountId);
                 if (learned.length > 0) {
-                    learnLine += `\n已学阈值群 (${learned.length}):\n` + learned
+                    // v1.8.0: 上限 HF_STATUS_MAX_GROUPS —— 群多了之后这条消息会长到看不清 (无上限时 20 群 ≈ 20 行)
+                    const shown = learned.slice(0, HF_STATUS_MAX_GROUPS);
+                    learnLine += `\n已学阈值群 (${learned.length}):\n` + shown
                         .map((s) => {
                         const cur = s.learned_threshold == null ? "回落账号级" : Number(s.learned_threshold).toFixed(2);
                         const last = s.last_change_new == null ? "" : ` (上次 ${s.last_change_old == null ? "账号级" : Number(s.last_change_old).toFixed(2)}→${Number(s.last_change_new).toFixed(2)})`;
                         return `- ${s.group_id} → ${cur}${last}`;
                     })
-                        .join("\n");
+                        .join("\n") +
+                        (learned.length > shown.length ? `\n…其余 ${learned.length - shown.length} 群` : "");
                 }
                 else {
                     learnLine += " (暂无已学阈值 — 样本收集中, 满 10 条才自动调)";
@@ -317,7 +326,48 @@ async function handleFeatureCommand(feature, args, send, accountId) {
             catch (e) {
                 budgetLine = "\n发言预算: (读取失败)";
             }
-            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}${ledgerLine}${sigLine}${budgetLine}`;
+            // v1.8.0 可观测: 分层模式 + 已达门槛的段 (老板要看"到底有没有在分层学", 否则影子态像"什么都没发生")
+            let layerLine = "";
+            try {
+                const LAY = resolveHfLayeredCfg(runtimeHeartflow.get(accountId));
+                const rows = await listHfLayerStats(accountId);
+                const qualified = rows.filter((r) => r.n >= LAY.minSamples);
+                const detail = qualified
+                    .slice(0, HF_STATUS_MAX_GROUPS)
+                    .map((r) => `${r.group_id}[${r.layer_key}] n=${r.n} rate=${r.n > 0 ? (r.engaged / r.n).toFixed(3) : "-"}`)
+                    .join(" / ");
+                layerLine =
+                    `\n分层(群×时段): ${!LAY.enabled ? "❌ 关闭" : LAY.apply ? "✅ 生效" : "影子 (只记录不生效)"}` +
+                        ` (门槛 n≥${LAY.minSamples} / 窗口 ${LAY.windowDays} 天 / ${LAY.allowLoosen ? "允许放宽" : "只许收紧"})` +
+                        `\n  已达标段 ${qualified.length} 个` +
+                        (detail ? `: ${detail}` : " (样本仍在攒)") +
+                        (qualified.length > HF_STATUS_MAX_GROUPS ? ` …其余 ${qualified.length - HF_STATUS_MAX_GROUPS} 个` : "");
+            }
+            catch (e) {
+                layerLine = "\n分层(群×时段): (读取失败)";
+            }
+            // v1.9.0 可观测: 重复闸 + 占比外环 —— 老板要能一眼看到"重复闸拦了多少"(误杀信号) 与"外环收紧了谁"
+            let v19Line = "";
+            try {
+                const hfCfg = runtimeHeartflow.get(accountId);
+                const DED = resolveHfDedupeCfg(hfCfg);
+                const SG = resolveHfShareGuardCfg(hfCfg);
+                const hits = hfShareGuardSnapshot(accountId, resolveHfBudget(hfCfg), hfCfg, Math.floor(Date.now() / 1000));
+                const suppressed = (await countHfLedgerByStatus(accountId, Math.floor(Date.now() / 1000) - 86400)).bySuppressedReason;
+                v19Line =
+                    `\n重复闸: ${DED.enabled ? "✅ 开" : "❌ 关"} (仅心流主动插话 / 同群 ${Math.round(DED.windowSec / 3600)}h / 相似 ≥${DED.simThreshold} / 短句豁免 <${DED.minChars} 字)` +
+                        `\n  近24h拦下: ${suppressed["repeat"] ?? 0} 条 (异常增多=误杀, 可 heartflow.dedupe.simThreshold 调高)` +
+                        `\n占比外环: ${SG.enabled ? "✅ 开" : "❌ 关"} (目标 ≤${(SG.targetShare * 100).toFixed(0)}% / 样本 ≥${SG.minMsgs} 条·≥${SG.minBotSends} bot 条)` +
+                        (hits.length
+                            ? `\n  今日已收紧 ${hits.length} 群: ` + hits.slice(0, HF_STATUS_MAX_GROUPS)
+                                .map((h) => `${h.groupId} ${(h.share * 100).toFixed(1)}%`)
+                                .join(" / ")
+                            : "\n  今日未收紧 (无群超目标占比)");
+            }
+            catch (e) {
+                v19Line = "\n重复闸/占比外环: (读取失败)";
+            }
+            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}${ledgerLine}${sigLine}${budgetLine}${layerLine}${v19Line}`;
         }
         await send(`${label} (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}${extra}\n用法: /${feature} on|off|status`);
         return true;
@@ -410,6 +460,95 @@ async function handleFeatureCommand(feature, args, send, accountId) {
         }
         return true;
     }
+    // heartflow 特有: layers [群ID] (v1.8.0: 看每群各时段的分层统计 + 影子建议 + 每段样本进度)
+    if (feature === "heartflow" && arg === "layers") {
+        const gid = (args[1] ?? "").trim();
+        try {
+            const hfCfg = runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig();
+            const LAY = resolveHfLayeredCfg(hfCfg);
+            const nowSec = Math.floor(Date.now() / 1000);
+            const curKey = hfLayerKeyFor(hfLocalHour(nowSec), LAY.buckets);
+            const rows = await listHfLayerStats(accountId);
+            const all = [...new Set(rows.map((r) => r.group_id))].sort();
+            const groups = gid ? all.filter((g) => g === gid) : all;
+            if (groups.length === 0) {
+                await send(gid
+                    ? `该群暂无分层统计 (account=${accountId}):\n${gid}\n(统计由 sweep 每 5 分钟重算一次; 需先有心流已收敛样本)`
+                    : `暂无分层统计 (account=${accountId})\n(统计由 sweep 每 5 分钟重算一次; 需先有心流已收敛样本)`);
+                return true;
+            }
+            const shown = groups.slice(0, HF_STATUS_MAX_GROUPS);
+            const lines = [
+                `分层统计 (群×时段; account=${accountId})`,
+                `模式: ${!LAY.enabled ? "❌ 关闭" : LAY.apply ? "✅ 生效" : "影子 (apply=false, 只记录不生效)"}` +
+                    ` / 每段门槛 n≥${LAY.minSamples} / 窗口 ${LAY.windowDays} 天 / ${LAY.allowLoosen ? "允许放宽" : "只许收紧"}`,
+                `段: ${LAY.buckets.map(([s, e]) => `${s}-${e}时`).join(" / ")} · 当前时段 ${curKey ?? "(未被任何段覆盖)"}`,
+            ];
+            for (const g of shown) {
+                const anchor = hfLayerAnchorFor(accountId, g, hfCfg);
+                lines.push(`群 ${g}: 群级锚点 ${anchor.toFixed(2)}`);
+                for (const [s, e] of LAY.buckets) {
+                    const key = `${s}-${e}`;
+                    const r = rows.find((x) => x.group_id === g && x.layer_key === key && x.layer_kind === "daypart");
+                    const n = r?.n ?? 0;
+                    const engaged = r?.engaged ?? 0;
+                    const step = hfLayerStep(anchor, { n, engaged }, hfCfg);
+                    lines.push(`  ${key}时: n=${n}/${LAY.minSamples}${n >= LAY.minSamples ? "" : " (样本不足)"}` +
+                        ` rate=${n > 0 ? (engaged / n).toFixed(3) : "-"}` +
+                        (r?.ambient_p != null ? ` 本底=${Number(r.ambient_p).toFixed(3)}` : "") +
+                        (step.changed
+                            ? ` ⇒ 建议 ${step.threshold.toFixed(2)}${LAY.apply ? " (生效)" : " (未生效)"}`
+                            : " ⇒ 无建议 (死区/样本不足)") +
+                        (key === curKey ? " ← 当前时段" : ""));
+                }
+            }
+            if (groups.length > shown.length)
+                lines.push(`…其余 ${groups.length - shown.length} 群`);
+            await send(lines.join("\n"));
+        }
+        catch (e) {
+            await send(`读取分层统计失败: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return true;
+    }
+    // heartflow 特有: veto [群ID] (v1.8.0: 一键"这条不该回" = 人工强负样本)
+    if (feature === "heartflow" && arg === "veto") {
+        const nowSec = Math.floor(Date.now() / 1000);
+        try {
+            let gid = (args[1] ?? "").trim();
+            if (!gid) {
+                // 多群歧义保护: 最近 15 分钟有几个群发过? 0 → 明确回执; 1 → 就用它; ≥2 → 拒绝并要求显式群 ID
+                //   (写错群不可撤销: 错误样本会在 60 天分层窗口里持续污染)
+                const recent = await listHfSentCountsRecent(accountId, nowSec - 900, nowSec - 900);
+                const active = recent.map((r) => r.group_id);
+                if (active.length === 0) {
+                    await send(`最近 15 分钟没有心流发言可否决 (account=${accountId})\n用法: /heartflow veto [群ID]`);
+                    return true;
+                }
+                if (active.length >= 2) {
+                    await send(`最近 15 分钟有 ${active.length} 个群发过言, 无法判断是哪一条 ⇒ 请显式指定群 ID:\n` +
+                        active.map((g) => `- ${g}`).join("\n") +
+                        `\n用法: /heartflow veto <群ID>`);
+                    return true;
+                }
+                gid = active[0];
+            }
+            const r = await markHfLedgerVeto(accountId, gid, nowSec);
+            if (!r) {
+                await send(`没找到可否决的发言 (account=${accountId}):\n${gid}\n(只对"已发出/已收敛"的心流发言生效; 已收敛的更早发言不在"最近一条")`);
+                return true;
+            }
+            // ⚠️ 必须删内存开窗: 否则随后有人引用那条 bot 消息会把 veto 覆盖成 engaged=1 (比不点更糟)
+            forgetHfOpenWindow(accountId, gid);
+            await send(`已标记「这条不该回」(account=${accountId}):\n群: ${gid}\n那条: ${(r.content_head ?? "(无内容记录)").slice(0, 40)}\n` +
+                `发出: ${r.sent_at ? new Date(r.sent_at * 1000).toLocaleString("zh-CN") : "?"}\n` +
+                `已作为强负样本参与分层与调阈 (signal=veto, 不受本底过滤)。`);
+        }
+        catch (e) {
+            await send(`否决失败: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return true;
+    }
     // heartflow 特有: why <群ID> (v1.7.0: 解释上一条为什么回/不回)
     if (feature === "heartflow" && arg === "why") {
         const gid = (args[1] ?? "").trim();
@@ -423,8 +562,26 @@ async function handleFeatureCommand(feature, args, send, accountId) {
             const hfCfg = runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig();
             const learned = getLearnedThreshold(accountId, gid);
             const floor = getHfProfileBandFloor(accountId, gid);
-            const base = learned ?? hfCfg.replyThreshold ?? 0.6;
+            // v1.8.0: 阈值决策改用统一入口 (与 handler 判定同源) —— 归因行才不会与实际判定脱节
+            const d = resolveHfThresholdDecision(accountId, gid, hfCfg);
+            const anchor = hfLayerAnchorFor(accountId, gid, hfCfg);
+            const base = d.applied ?? hfCfg.replyThreshold ?? 0.6;
             const eff = floor == null ? base : Math.max(base, floor);
+            const srcName = d.source === "layer"
+                ? `分层[${d.layerKey}]`
+                : d.source === "group"
+                    ? `群级 learned ${learned?.toFixed(2) ?? "-"}`
+                    : "账号级";
+            const attrLine = `当前有效阈值 ${eff.toFixed(2)} = ${srcName} ${base.toFixed(2)}` +
+                (d.layerKey ? ` [段 ${d.layerKey} n=${d.layerN} ${d.layerRate == null ? "无样本" : `rate=${d.layerRate.toFixed(3)}`}${d.apply ? " 生效" : " 未生效(影子)"}]` : "") +
+                ` ← 群级 ${learned?.toFixed(2) ?? `- (锚点 ${anchor.toFixed(2)})`} / 账号 ${hfCfg.replyThreshold ?? "-"}${floor != null ? ` / 画像下限 ${floor}` : ""}`;
+            const shadowLine = d.shadow
+                ? `影子建议: 分层[${d.shadow.layerKey}] n=${d.shadow.n} rate=${d.shadow.rate.toFixed(3)} ⇒ ${d.shadow.threshold.toFixed(2)} (layered.apply=false, 未生效)`
+                : d.layerKey && d.layerN > 0 && !d.apply
+                    ? `影子分层: 段 ${d.layerKey} n=${d.layerN} rate=${d.layerRate?.toFixed(3) ?? "-"} ⇒ 死区内/不可动, 无建议`
+                    : d.layerKey
+                        ? `影子分层: 段 ${d.layerKey} n=0 ⇒ 样本不足 (门槛 ${resolveHfLayeredCfg(hfCfg).minSamples})`
+                        : "";
             const b = getHfBudgetState(accountId, gid, Math.floor(Date.now() / 1000));
             const budgetStr = `预算(本群): 本小时 ${b.hourCount} 条 / 今日 ${b.dayCount} 条` +
                 (b.lastReplyAtSec ? ` / 上次发言 ${Math.round((Date.now() / 1000 - b.lastReplyAtSec) / 60)} 分钟前` : "");
@@ -445,7 +602,8 @@ async function handleFeatureCommand(feature, args, send, accountId) {
                 `为什么 (account=${accountId}):`,
                 `群: ${gid}`,
                 ...head,
-                `当前有效阈值 ${eff.toFixed(2)} = max(learned ${learned ?? "-"}, 账号 ${hfCfg.replyThreshold ?? "-"}${floor != null ? `, 画像下限 ${floor}` : ""})`,
+                attrLine,
+                shadowLine,
                 budgetStr,
                 prof ? `画像摘要:\n${prof}` : "画像: 无 (未生成 / 未预热)",
             ]
@@ -457,8 +615,89 @@ async function handleFeatureCommand(feature, args, send, accountId) {
         }
         return true;
     }
+    // heartflow 特有: report [天数] (v1.9.0 观测复盘: 占比/接话率/被制止率/重复率/分层/预算/外环)
+    if (feature === "heartflow" && arg === "report") {
+        const raw = Number(args[1] ?? 7);
+        const days = Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 1), 30) : 7;
+        const nowSec = Math.floor(Date.now() / 1000);
+        const since = nowSec - days * 86400;
+        try {
+            const hfCfg = runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig();
+            const LRN = resolveHfLearning(hfCfg);
+            const LAY = resolveHfLayeredCfg(hfCfg);
+            const DED = resolveHfDedupeCfg(hfCfg);
+            const baseBudget = resolveHfBudget(hfCfg);
+            // ① 发言占比 (wpp_messages: 按群 × 方向计数; adapter 已 COALESCE 归群)
+            const shareRows = await listHfBotMsgShare(accountId, since);
+            const agg = new Map();
+            for (const r of shareRows) {
+                if (!r.group_id)
+                    continue;
+                const cur = agg.get(r.group_id) ?? { inbound: 0, outbound: 0 };
+                if (r.direction === "outbound")
+                    cur.outbound += r.n;
+                else
+                    cur.inbound += r.n;
+                agg.set(r.group_id, cur);
+            }
+            const shares = [...agg.entries()]
+                .map(([groupId, v]) => ({ groupId, inbound: v.inbound, outbound: v.outbound, share: hfBotShare(v.inbound, v.outbound) }))
+                .sort((a, b) => b.share - a.share);
+            // ② 接话率 (台账已收敛样本; 逐样本用它自己那一小时的本底 ⇒ 与 sweep 的调阈 pass 同源)
+            const ambient = ambientPFromHourCounts(await loadHfGroupHourCounts(accountId, nowSec), LRN.labelWindowSec);
+            const closed = await listHfClosedSince(accountId, since, HF_LAYER_DB_ROW_CAP);
+            const engagement = hfEngagementSummary(closed, ambient, LRN.ambientMax);
+            // ③ 被制止率 (judged_at 口径; legacy 旧标签行不计入分母)
+            const sig = await countHfEngageSignals(accountId, since);
+            const stoppedTotal = Object.entries(sig).reduce((s, [k, v]) => (k === "legacy" ? s : s + v), 0);
+            // ④ 重复率 (闸同源)
+            const outbound = await listHfOutboundTexts(accountId, since, 2000);
+            const repeat = hfRepeatRate(outbound.map((r) => ({ groupId: r.group_id, text: r.content, atSec: r.at_sec })), DED);
+            // ⑤ 分层 (只看**当前时段**; 与 /heartflow layers 同一个 hfLayerStep, 不写第二套判定参数)
+            const curKey = hfLayerKeyFor(hfLocalHour(nowSec), LAY.buckets);
+            const layerRows = await listHfLayerStats(accountId);
+            const layers = [];
+            if (curKey) {
+                for (const g of [...new Set(layerRows.map((r) => r.group_id))]) {
+                    const r = layerRows.find((x) => x.group_id === g && x.layer_key === curKey && x.layer_kind === "daypart");
+                    const n = r?.n ?? 0;
+                    const engaged = r?.engaged ?? 0;
+                    const step = hfLayerStep(hfLayerAnchorFor(accountId, g, hfCfg), { n, engaged }, hfCfg);
+                    layers.push({
+                        groupId: g,
+                        layerKey: curKey,
+                        n,
+                        engaged,
+                        rate: n > 0 ? engaged / n : null,
+                        suggestion: step.changed ? step.threshold : null,
+                        applied: LAY.apply && LAY.enabled && n >= LAY.minSamples && step.changed,
+                    });
+                }
+                layers.sort((a, b) => b.n - a.n);
+            }
+            const text = buildHfDigest({
+                nowSec,
+                days,
+                shares,
+                engagement,
+                stopped: { negative: sig["negative"] ?? 0, veto: sig["veto"] ?? 0, total: stoppedTotal },
+                repeat,
+                repeatSampleTotal: outbound.length,
+                layers,
+                budget: hfBudgetBlockedSnapshot(),
+                shareGuard: hfShareGuardSnapshot(accountId, baseBudget, hfCfg, nowSec),
+            });
+            await send(text);
+        }
+        catch (e) {
+            await send(`生成复盘失败: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return true;
+    }
     // 未知 action: 提示用法
-    const extra = feature === "heartflow" ? "\n  或 /heartflow threshold <0-1>\n  或 /heartflow group add|del|list <群ID>\n  或 /heartflow profile <群ID>\n  或 /heartflow why <群ID>" : "";
+    const extra = feature === "heartflow"
+        ? "\n  或 /heartflow threshold <0-1>\n  或 /heartflow group add|del|list <群ID>\n  或 /heartflow profile <群ID>\n  或 /heartflow why <群ID>\n  或 /heartflow layers [群ID] (v1.8.0 分层统计)\n  或 /heartflow veto [群ID] (v1.8.0 这条不该回)\n  或 /heartflow report [天数] (v1.9.0 复盘: 占比/接话率/重复率/外环)"
+        : "";
     await send(`用法: /${feature} on|off|status${extra}\n状态: ${current ? "✅ 开启" : "❌ 关闭"}`);
     return true;
 }
@@ -675,6 +914,11 @@ _agentId = "main") {
     void loadHfBudgetSeed(accountId).then((n) => {
         if (n > 0)
             log.info(`[WPP HF] budget seed loaded: account=${accountId} groups=${n}`);
+    });
+    // v1.8.0 分层统计: 预热内存缓存 (judge 热路径零 DB 读的前提; 首个 sweep 在 300s 后才会重算)
+    void loadHfLayerStats(accountId).then((n) => {
+        if (n > 0)
+            log.info(`[WPP HF] layer stats loaded: account=${accountId} rows=${n}`);
     });
     startHeartflowSweep(state, accountId, () => runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig());
     // 幂等 early-return: 任一 ws/webhook 已 attach 即视为已启动 (防并发 start 双重连接/端口占用)

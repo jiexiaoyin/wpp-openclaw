@@ -15,10 +15,18 @@
 // ⚠️ 负信号词**只用于给 bot 自己的发言打分**, 绝不参与"要不要回复"的触发判定
 //   (老板 2026-09-26 明确: 触发必须由心流五维判断, 不许用固定关键词. 这里是**评估已发出消息的效果**,
 //    是反馈闭环的输入, 不是触发器.)
-/** 强信号 (与群是否本来就热闹无关, 永远算有效学习样本) */
-export const HF_STRONG_SIGNALS = ["quote", "mention", "negative"];
-/** 全部信号 (落库值域; 供 asHfEngageSignal 校验用) */
-const HF_ALL_SIGNALS = ["quote", "mention", "negative", "short-window", "silence"];
+/**
+ * 强信号 (与群是否本来就热闹无关, 永远算有效学习样本)。
+ * v1.8.0 起含 `veto` (人工一键否决 `/heartflow veto`): 它是**人工标注的负样本**, 比任何自动判据都可信 ——
+ * 必须进本表, 否则会被 ambientP 本底过滤掉 (冷清群里 veto 恰好最需要被记住)。
+ */
+export const HF_STRONG_SIGNALS = ["quote", "mention", "negative", "veto"];
+/**
+ * 全部信号 (落库值域; 供 asHfEngageSignal 校验用)。
+ * ⚠️ 加新信号必须**同时**改这里 + HfEngageSignal 联合类型 + DDL 的 engage_signal 列宽 ——
+ * 漏这里的后果是**静默**的: asHfEngageSignal 返回 null ⇒ 该行被当 legacy 丢弃, 信号完全无效且无报错。
+ */
+const HF_ALL_SIGNALS = ["quote", "mention", "negative", "veto", "short-window", "silence"];
 /**
  * DB 读回来的 engage_signal (string|null) → 收窄成 HfEngageSignal.
  * NULL / 未知值 → null (不采信): v1.6.8 之前落的行没有信号列, 那些正是**旧错误标签**,

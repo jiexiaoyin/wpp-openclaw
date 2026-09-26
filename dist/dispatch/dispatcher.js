@@ -30,6 +30,7 @@ import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
 import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
 import { recordRawMessage, resolveHfLearning, HF_LEARNING_DEFAULTS } from "../inbound/heartflow.js";
 import { persistHfSendOutcome } from "../inbound/heartflow-learn.js";
+import { checkHfRepeat, logHfRepeatSkip, resolveHfDedupeCfg } from "../inbound/heartflow-dedupe.js";
 import { getGroupMood, buildMoodSystemPrompt } from "../inbound/affection.js";
 // re-export (兼容旧测试/外部引用) — classifyGroupIntent/GroupIntent 定义在 intent-llm.ts
 export { classifyGroupIntent } from "./intent-llm.js";
@@ -815,6 +816,26 @@ async function dispatchOne(msg, ctx = {}) {
                         info(`deliver called: textLen=${text.length} hasOssImg=${!!ossImgUrl} msgType=${msg.msgType} shouldQuote=${shouldQuote} replyTo=${msg.msgId}/${msg.newMsgId ?? ""}`);
                         if (!text && !ossImgUrl)
                             return { ok: true, msgId: "" };
+                        // v1.9.0 重复内容闸 (老板拍板: 同群 6h 内高度相似就不发): 只对**心流主动插话**生效。
+                        //   钩子点在这里而不是 sendAiReply 里: 那是账号级公共出口 (filehelper/私聊/日报都走它),
+                        //   且它自己已有一套 sha1 精确去重语义; 两套语义混在一起会互相盖。
+                        //   拦下时返回既有占位符通道 (msgId="repeat-suppressed") ⇒ classifyHfSend 判 suppressed
+                        //   ⇒ 不占预算、不开观察窗、不进重复历史 (见 heartflow-learn.ts 的占位符清单)。
+                        if (msg.trigger === "heartflow" && text) {
+                            const rHfCfg = getDefaultAccountRegistry().get(msg.accountId)?.config.heartflow;
+                            const rCfg = resolveHfDedupeCfg(rHfCfg);
+                            const gid = msg.chatroomId ?? msg.peerId;
+                            const nowSec = Math.floor(Date.now() / 1000);
+                            const rv = checkHfRepeat(msg.accountId, gid, text, rCfg, nowSec, {
+                                // proactive = 心流主动插话; 被 @ / 引用 / 关键词叫到的回复 (trigger 非 heartflow) 根本不进这里,
+                                //   故这里恒为 true —— 留参数是为了语义显式 (proactiveOnly=false 时就地放开)。
+                                proactive: true,
+                            });
+                            if (rv) {
+                                logHfRepeatSkip(gid, rv, nowSec);
+                                return { ok: true, msgId: "repeat-suppressed" };
+                            }
+                        }
                         // 把被引用消息的元数据传透给 quoteReply (构建完整 refermsg)
                         const result = await sendAiReply(msg.accountId, msg.peerId, text, {
                             msgId: shouldQuote ? msg.msgId : "",
@@ -837,6 +858,9 @@ async function dispatchOne(msg, ctx = {}) {
                                 groupId: msg.chatroomId ?? msg.peerId,
                                 observeSec,
                                 labelWindowSec,
+                                // v1.9.0: 真发出的文本进重复闸历史 (与开窗/预算同一条件同一时刻)
+                                text,
+                                dedupeCfg: resolveHfDedupeCfg(hfCfg),
                             });
                         }
                         info(`[WPP DEBUG-DELIVER] sendAiReply done: ok=${result.ok} error=${result.error ?? "none"} msgId=${result.msgId ?? ""}`);

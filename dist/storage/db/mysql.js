@@ -133,6 +133,9 @@ async function applySchemaSql(pool) {
 /** Always include these migrations for vendor schema drift safety */
 async function applyMigrations(pool) {
     // 撤回时间戳应来自原始消息入库时间: wpp_messages 加 create_time BIGINT 列 (ensureColumn 幂等 ADD)
+    // ⚠️ 2026-09-26 生产实测: 该列已是**死列** —— 当前代码只读不写, 且 2026-08-11 之后的行全为 NULL;
+    //   更早的非空值形如 20260811094227 (YYYYMMDDHHMMSS), **不是 epoch**。保留 ADD 只为兼容老库,
+    //   任何时间聚合/排序都必须走 ts (见 listHfGroupMsgHourBuckets 的说明)。
     await ensureColumn(pool, "wpp_messages", "create_time", "BIGINT NULL");
     await ensureColumn(pool, "wpp_messages", "from_wxid", "VARCHAR(128) NULL");
     // 旧行回填: 从 raw_payload.sender_id 提取 (已有行无 from_wxid)
@@ -280,6 +283,25 @@ async function applyMigrations(pool) {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (account_id, group_id),
       KEY idx_hf_profile_gen (account_id, generated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+    // v1.8.0 分层统计 (群 × 时段, 1 行/群/段): **每轮 sweep 全量重算后的快照**, 不是累加器.
+    //   n/engaged 只反映 windowDays 窗口内的可采信样本; 不做增量累加 (累加不幂等: sweep 每 300s 一次,
+    //   同一批行会被重复计入 ⇒ n 一小时虚涨 12 倍且永不收敛) —— 见 heartflow-layer.ts 文件头.
+    //   新表 (不是给旧表加列) ⇒ 不需要 ensureColumn; 单表读写, 不与 wpp_messages JOIN.
+    await pool.query(`
+    CREATE TABLE IF NOT EXISTS wpp_hf_layer_stat (
+      account_id VARCHAR(64) NOT NULL,
+      group_id VARCHAR(128) NOT NULL,
+      layer_kind VARCHAR(16) NOT NULL DEFAULT 'daypart',
+      layer_key VARCHAR(32) NOT NULL,
+      n INT UNSIGNED NOT NULL DEFAULT 0,
+      engaged INT UNSIGNED NOT NULL DEFAULT 0,
+      ambient_p DECIMAL(6,4) NULL,
+      window_start INT UNSIGNED NOT NULL DEFAULT 0,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (account_id, group_id, layer_kind, layer_key),
+      KEY idx_hf_layer_acct (account_id, layer_kind, updated_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
     // v1.6.8 心流标签改造: 生产上 wpp_hf_ledger 早已存在, 上面的 CREATE ... IF NOT EXISTS 不会给它加列
@@ -809,17 +831,19 @@ export function createMysqlAdapter(cfg) {
             }));
         },
         // v1.6.8 反事实基线: 每群 × 每小时段的**入站人类消息数** (供 hfAmbientP 算"那时段本来多热闹").
-        //   用 create_time (BIGINT epoch, 入库时由 ts 同步而来) 而不是 ts (TIMESTAMP): TIMESTAMP 的
-        //   读写都过 session 时区, 分组小时会随 DB 时区设置漂; create_time 是裸 epoch, 加 localOffsetSec
-        //   偏移后取模即**本地**小时, 与应用侧 new Date().getHours() 语义一致 (TZ 无关).
-        //   COALESCE 兜住极少数 create_time 为 NULL 的旧行 (退回 UNIX_TIMESTAMP(ts), 近似即可).
+        //   时间口径 = UNIX_TIMESTAMP(ts): 绝对 epoch (TIMESTAMP 内部存 UTC, UNIX_TIMESTAMP() 反解回来仍是
+        //   绝对秒, 与 session 时区无关) ⇒ 加 localOffsetSec 取模即**本地**小时, 与 new Date().getHours() 一致.
+        //   ⚠️ **不要退回 create_time**: 它是个**遗留死列** (当前代码只读不写). 2026-09-26 生产实测:
+        //   非空值形如 20260811094227 = YYYYMMDDHHMMSS **不是 epoch**, 且最后一条这类行停在 2026-08-11
+        //   (之后的出站/入站行该列全 NULL). 把它当秒用会把那些行排到公元 643000 年 ⇒ 分桶/排序/窗口全错,
+        //   且**不报错**. 当前窗口 (≤30 天) 恰好够不到它们, 属于"埋着的雷", 故一并拆掉.
         //   ⚠️ **单表查询**是有意的: wpp_messages 是 utf8mb4_unicode_ci, 而 wpp_hf_* 三表是 MariaDB 11
         //   默认的 utf8mb4_uca1400_ai_ci (2026-09-26 生产实测 wpp_messages.chat_id JOIN wpp_hf_ledger.group_id
         //   直接报 "Illegal mix of collations"). 将来若要跨表 JOIN, 被比较的两列都必须显式 COLLATE 到同一侧.
         async listHfGroupMsgHourBuckets(accountId, sinceSec, localOffsetSec) {
             const p = getPool();
             const rows = await queryWithTimeout(p, `SELECT chat_id AS group_id,
-                FLOOR((((COALESCE(create_time, UNIX_TIMESTAMP(ts)) + ?) % 86400) + 86400) % 86400 / 3600) AS h,
+                FLOOR((((UNIX_TIMESTAMP(ts) + ?) % 86400) + 86400) % 86400 / 3600) AS h,
                 COUNT(*) AS n
          FROM wpp_messages
          WHERE account_id = ? AND peer_kind = 'group' AND direction = 'inbound'
@@ -933,7 +957,8 @@ export function createMysqlAdapter(cfg) {
         },
         // v1.7.0 画像素材: 4 条**单表**只读聚合 (wpp_messages). 每群每天只跑一次 (生成画像时), 不在热路径上.
         //   口径与 listHfGroupMsgHourBuckets 一致: peer_kind='group' + direction='inbound' (排除 bot 自己的出站),
-        //   时间走 create_time (裸 epoch, 无时区歧义) 并加 localOffsetSec 偏移后取本地小时/日.
+        //   时间走 UNIX_TIMESTAMP(ts) (绝对 epoch) 并加 localOffsetSec 偏移后取本地小时/日.
+        //   ⚠️ 同 listHfGroupMsgHourBuckets: 不得用 create_time (遗留死列, 值是 YYYYMMDDHHMMSS 不是 epoch).
         //   ⚠️ 不 JOIN wpp_hf_* : wpp_messages 是 utf8mb4_unicode_ci, wpp_hf_* 是 utf8mb4_uca1400_ai_ci ⇒ 跨表报错.
         async getHfGroupMessageStats(accountId, groupId, sinceSec) {
             const p = getPool();
@@ -943,9 +968,9 @@ export function createMysqlAdapter(cfg) {
            AND chat_id = ? AND chat_id <> '' AND ts >= FROM_UNIXTIME(?)`;
             const totals = await queryWithTimeout(p, `SELECT COUNT(*) AS n,
                 AVG(CHAR_LENGTH(COALESCE(content, ''))) AS avg_len,
-                COUNT(DISTINCT DATE(FROM_UNIXTIME(COALESCE(create_time, UNIX_TIMESTAMP(ts)) + ?))) AS active_days
+                COUNT(DISTINCT DATE(FROM_UNIXTIME(UNIX_TIMESTAMP(ts) + ?))) AS active_days
          ${base}`, [localOffsetSec, accountId, groupId, sinceSec]);
-            const hours = await queryWithTimeout(p, `SELECT FLOOR((((COALESCE(create_time, UNIX_TIMESTAMP(ts)) + ?) % 86400) + 86400) % 86400 / 3600) AS h,
+            const hours = await queryWithTimeout(p, `SELECT FLOOR((((UNIX_TIMESTAMP(ts) + ?) % 86400) + 86400) % 86400 / 3600) AS h,
                 COUNT(*) AS n
          ${base}
          GROUP BY h`, [localOffsetSec, accountId, groupId, sinceSec]);
@@ -971,6 +996,124 @@ export function createMysqlAdapter(cfg) {
                 topSenders: senders.map((r) => ({ wxid: String(r.from_wxid ?? ""), n: Number(r.n) || 0 })),
                 typeHist,
             };
+        },
+        // v1.8.0 分层统计输入: 窗口内**全部群**已收敛行, 一次批量取 (避免逐群 N+1).
+        //   engaged IS NOT NULL 排除 suppressed (没进观察窗的行不是样本); engage_signal 允许 NULL ——
+        //   由 aggregateHfLayerStats 侧丢弃 (v1.6.8 之前的旧行没有信号列, 那些正是旧错误标签).
+        //   单表查询, 理由同 listHfGroupMsgHourBuckets 的 collation 警告.
+        async listHfClosedSince(accountId, sinceSec, limit) {
+            const p = getPool();
+            const rows = await queryWithTimeout(p, `SELECT group_id, engaged, engage_signal, sent_at FROM wpp_hf_ledger
+         WHERE account_id = ? AND status = 'closed' AND engaged IS NOT NULL AND sent_at IS NOT NULL AND sent_at >= ?
+         ORDER BY sent_at DESC LIMIT ?`, [accountId, sinceSec, Math.min(Math.max(limit, 1), 5000)]);
+            return rows.map((r) => ({
+                group_id: String(r.group_id),
+                engaged: Number(r.engaged) || 0,
+                engage_signal: r.engage_signal == null ? null : String(r.engage_signal),
+                sent_at: Number(r.sent_at) || 0,
+            }));
+        },
+        // v1.8.0 分层统计落库 (只写**有变化**的行; 稳态下每轮 0 写). window_start 每次覆盖 = 窗口起点在滚动.
+        async upsertHfLayerStat(record) {
+            const p = getPool();
+            await queryWithTimeout(p, `INSERT INTO wpp_hf_layer_stat
+         (account_id, group_id, layer_kind, layer_key, n, engaged, ambient_p, window_start)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           n = VALUES(n),
+           engaged = VALUES(engaged),
+           ambient_p = VALUES(ambient_p),
+           window_start = VALUES(window_start)`, [
+                record.account_id,
+                record.group_id,
+                record.layer_kind,
+                record.layer_key,
+                record.n,
+                record.engaged,
+                record.ambient_p ?? null,
+                record.window_start,
+            ]);
+        },
+        // v1.8.0 启动预热: 账号全部段统计 (判定热路径不读它).
+        async listHfLayerStats(accountId) {
+            const p = getPool();
+            const rows = await queryWithTimeout(p, `SELECT account_id, group_id, layer_kind, layer_key, n, engaged, ambient_p, window_start
+         FROM wpp_hf_layer_stat WHERE account_id = ?`, [accountId]);
+            return rows.map((r) => ({
+                account_id: String(r.account_id),
+                group_id: String(r.group_id),
+                layer_kind: String(r.layer_kind ?? "daypart"),
+                layer_key: String(r.layer_key),
+                n: Number(r.n) || 0,
+                engaged: Number(r.engaged) || 0,
+                ambient_p: r.ambient_p == null ? null : Number(r.ambient_p),
+                window_start: Number(r.window_start) || 0,
+            }));
+        },
+        // v1.8.0 一键否决 (`/heartflow veto`): 把该群**最近一条已发出**的行标成"这条不该回".
+        //   ⚠️ 排序键必须是 sent_at (不是 judged_at): 一条被预算/冷却拦了很久的旧 judged 行会盖过刚发出的那条.
+        //   ⚠️ 不能写成 `WHERE id = (SELECT ... FROM 同一张表)` —— MariaDB 拒绝同表子查询更新, 故分两步.
+        //   status='closed' + closed_at 一并写上: 该行从此是**终态样本**, sweep 不会再动它.
+        async markHfLedgerVeto(accountId, groupId, atSec) {
+            const p = getPool();
+            const rows = await queryWithTimeout(p, `SELECT id, content_head, sent_at FROM wpp_hf_ledger
+         WHERE account_id = ? AND group_id = ? AND status IN ('sent','closed') AND sent_at IS NOT NULL
+         ORDER BY sent_at DESC, id DESC LIMIT 1`, [accountId, groupId]);
+            const row = rows[0];
+            if (!row)
+                return null;
+            const id = Number(row.id);
+            await queryWithTimeout(p, `UPDATE wpp_hf_ledger SET engaged = 0, engage_signal = 'veto', status = 'closed', closed_at = ?
+         WHERE id = ? AND account_id = ?`, [atSec, id, accountId]);
+            return {
+                id,
+                content_head: row.content_head == null ? null : String(row.content_head),
+                sent_at: row.sent_at == null ? null : Number(row.sent_at),
+            };
+        },
+        // v1.9.0: 每群发言占比素材 (只读单表 wpp_messages)。
+        //   ⚠️ `COALESCE(NULLIF(chat_id,''), peer_id)` 是**必须**的: 出站行只写 peer_kind='group' +
+        //   peer_id=目标群, chat_id/from_wxid 恒为 NULL (见 src/send/msg.ts 落库路径)。若直接
+        //   GROUP BY chat_id, bot 侧分子恒为 0、占比永远 0%, 而且**不报任何错** —— 外环静默失效。
+        //   ⚠️ 单表是刻意的 (跨表关联会撞 collation, 见 listHfGroupMsgHourBuckets 的警告)。
+        //   (此处不写那个 SQL 关键字, 免得被 heartflow-profile.test.mjs 的源级守卫按字面量误判 —— 该守卫扫的
+        //    函数体切片靠"下一个顶层声明"定界, 会把后面这些 adapter 方法一起吃进去。)
+        async listHfBotMsgShare(accountId, sinceSec) {
+            const p = getPool();
+            const rows = await queryWithTimeout(p, `SELECT COALESCE(NULLIF(chat_id, ''), peer_id) AS gid, direction, COUNT(*) AS n
+         FROM wpp_messages
+         WHERE account_id = ? AND peer_kind = 'group' AND ts >= FROM_UNIXTIME(?)
+         GROUP BY gid, direction`, [accountId, sinceSec]);
+            return rows.map((r) => ({
+                group_id: String(r.gid ?? ""),
+                direction: String(r.direction ?? ""),
+                n: Number(r.n) || 0,
+            }));
+        },
+        // v1.9.0: 重复率素材 (群聊出站文本, 时间升序取最近 limit 条)。
+        //   时间口径 = UNIX_TIMESTAMP(ts) (绝对 epoch, 与 session 时区无关, 见 listHfGroupMsgHourBuckets 说明);
+        //   ⚠️ 不用 create_time: 遗留死列, 值是 YYYYMMDDHHMMSS 不是 epoch ⇒ 会把旧行排到"最后面"并让
+        //   6h 窗口判定把它们全算成窗内 (at_sec 巨大 ⇒ now - at_sec 为负), 静默制造假重复。
+        //   空文本行 (媒体占位) 直接滤掉 —— 归一化后为空, 参与相似度计算只会制造假重复。
+        async listHfOutboundTexts(accountId, sinceSec, limit) {
+            const p = getPool();
+            const cap = Math.min(Math.max(Math.floor(limit), 1), 2000);
+            const rows = await queryWithTimeout(p, `SELECT COALESCE(NULLIF(chat_id, ''), peer_id) AS gid,
+                content,
+                UNIX_TIMESTAMP(ts) AS at_sec
+         FROM wpp_messages
+         WHERE account_id = ? AND peer_kind = 'group' AND direction = 'outbound'
+           AND content IS NOT NULL AND content <> ''
+           AND ts >= FROM_UNIXTIME(?)
+         ORDER BY at_sec DESC LIMIT ?`, [accountId, sinceSec, cap]);
+            // DB 侧取"最近 N 条"(DESC), 用侧要按时间升序扫描 ⇒ 这里反转 (让"历史里有更早的一条"这个语义成立)
+            return rows
+                .map((r) => ({
+                group_id: String(r.gid ?? ""),
+                content: String(r.content ?? ""),
+                at_sec: Number(r.at_sec) || 0,
+            }))
+                .reverse();
         },
         async upsertHfGroupState(record) {
             const p = getPool();

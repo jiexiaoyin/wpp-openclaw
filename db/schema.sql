@@ -218,3 +218,21 @@ CREATE TABLE IF NOT EXISTS wpp_hf_group_profile (
   PRIMARY KEY (account_id, group_id),
   KEY idx_hf_profile_gen (account_id, generated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 心流分层统计 (v1.8.0 2026-09-26 新增: 每群 × 每时段一份**快照**, 不是累加器)
+-- 数据源: heartflow-layer.ts 每轮 sweep **全量重算**后只 upsert 有变化的行 (累加会在 300s 周期里重复计入, 不可自愈)
+-- 消费: judge 读侧阈值决策 (段内样本够 且 layered.apply 才生效, 默认影子) + 命令 /heartflow layers
+-- 生产建表唯一途径 = applyMigrations (deploy 不拷 db/, 本文件只在 dev 生效)
+CREATE TABLE IF NOT EXISTS wpp_hf_layer_stat (
+  account_id VARCHAR(64) NOT NULL,
+  group_id VARCHAR(128) NOT NULL,
+  layer_kind VARCHAR(16) NOT NULL DEFAULT 'daypart',  -- daypart=日时段 (topic 槽位预留未启用)
+  layer_key VARCHAR(32) NOT NULL,                     -- "18-24" 起-止, 自定义段也自解释
+  n INT UNSIGNED NOT NULL DEFAULT 0,                  -- 窗口内可采信样本数 (重算覆盖, 非累加)
+  engaged INT UNSIGNED NOT NULL DEFAULT 0,
+  ambient_p DECIMAL(6,4) NULL,                        -- 段内本底 (展示用, 不参与判定)
+  window_start INT UNSIGNED NOT NULL DEFAULT 0,       -- 本次重算的窗口起点 (滚动)
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (account_id, group_id, layer_kind, layer_key),
+  KEY idx_hf_layer_acct (account_id, layer_kind, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
