@@ -7,41 +7,17 @@
 //       OpenClaw 传的 cfg 参数不使用 (wpp 不依赖 OpenClaw config schema)
 import { isConfigured as _isConfigured, isValidAccountId, } from "./config.js";
 import { DEFAULT_ACCOUNT_ID } from "./core/constants.js";
-import { _resetPluginRootCache, findPluginRoot } from "./core/paths.js";
+import { findPluginRootSync } from "./core/paths.js";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 /**
- * v1.1.10 P0-2 helper: sync version of findPluginRoot.
- * Sync resolveAccount 不依赖 async findPluginRoot, 自己 inline 8-level walk.
- * 一旦解析到, 缓存到 _cachedPluginRoot 让 async 版也能复用.
+ * v1.6.7 (2026-09-26): 不再自己 inline walk —— 改用 core/paths.ts 的共享 findPluginRootSync。
+ *
+ * 原因: 旧实现是**第二份**独立 walk, 与 core/paths.ts 的 findPluginRoot 逻辑漂移风险高。
+ *       2026.9.6 的 plugin source capture 让「walk 停在临时副本」这个坑同时命中两份实现,
+ *       集中到 core/paths.ts 才能一次修好 (capture → 稳定根映射只在那一处)。
+ * 保留 sync 语义 (OpenClaw 有些调用点不 await, 见下方 P0 记录), cache 与 async 版共享。
  */
-function findPluginRootSync() {
-    let dir;
-    if (typeof __dirname === "string") {
-        dir = __dirname;
-    }
-    else {
-        try {
-            dir = dirname(fileURLToPath(import.meta.url));
-        }
-        catch {
-            return null;
-        }
-    }
-    for (let i = 0; i < 8; i++) {
-        const pluginFile = resolve(dir, "openclaw.plugin.json");
-        const pkgFile = resolve(dir, "package.json");
-        if (existsSync(pluginFile) && existsSync(pkgFile)) {
-            return dir;
-        }
-        const parent = dirname(dir);
-        if (parent === dir)
-            return null;
-        dir = parent;
-    }
-    return null;
-}
 /**
  * v1.3.26 P0 (2026-08-10 修复): listAccountIds 必须 SYNC, 不能是 async
  *
@@ -98,9 +74,7 @@ export function resolveAccount(_cfg, accountId) {
     const pluginRoot = findPluginRootSync();
     if (!pluginRoot)
         return null;
-    // 顺便 cache 到 async 版, 让后续 findPluginRoot() 命中缓存
-    _resetPluginRootCache(); // 先清掉, 让 async 版能拿到同样结果
-    void findPluginRoot().catch(() => { });
+    // v1.6.7: sync/async 共用一个 cache (core/paths.ts), 不再需要 "清 cache + 踢一次 async" 的握手
     const filePath = join(pluginRoot, "accounts", `${id}.json`);
     if (!existsSync(filePath))
         return null;
