@@ -29,6 +29,7 @@
 import { warn } from "../core/logger.js";
 import { callJudge, resolveJudgeCreds } from "../llm-judge.js";
 import type { HfBudgetConfig } from "./heartflow-budget.js";
+import type { HfProfileConfig } from "./heartflow-profile.js";
 import { peekHfBudget, resolveHfBudget } from "./heartflow-budget.js";
 
 // ===== 配置接口 =====
@@ -80,6 +81,12 @@ export interface HeartflowConfig {
    * (老板 2026-09-26 选"中等"档), 可在 accounts/default.json 覆盖 —— **不进 UI schema**。
    */
   budget?: HfBudgetConfig;
+  /**
+   * v1.7.0 群画像 (老板 2026-09-26 要的"按群自动理解身份与特征, 应景回复"): 每群每日一份 LLM 归纳的画像,
+   * 注入 judge prompt 供参考; 其建议的阈值/预算只能让约束**更紧**(更克制)。缺省走 HF_PROFILE_DEFAULTS。
+   * ⚠️ 用 `import type` 只为类型 (heartflow-profile.ts 反向 import 本文件, 值导入会成环)。
+   */
+  profile?: HfProfileConfig;
 }
 
 /**
@@ -462,6 +469,13 @@ export interface HeartflowJudgeInput {
   secondsSinceLastReply: number;
   /** 精力水平 */
   energy: number;
+  /**
+   * v1.7.0 群画像文本 (由 heartflow-profile 生成并**已截断**到上限, 缺省不注入)。
+   * 只读参考: 让 judge "应景" —— 这是老板要的"自动理解群身份与特征"的落点。
+   * ⚠️ 必须是**已截断**的成品 (上层 renderHfProfileForPrompt 产出): llm-judge 的输出预算只有 300 token,
+   *   未截断的长画像会挤掉 judge 自己的输出空间 (2026-09-13 静默瘫的同类事故)。
+   */
+  groupProfile?: string;
 }
 
 export interface HeartflowJudgeOptions {
@@ -480,6 +494,11 @@ export function buildHeartflowPrompt(input: HeartflowJudgeInput, cfg: HeartflowC
     : "";
   const lastReplyStr = input.lastBotReply || "暂无上次回复记录";
   const sinceMin = input.secondsSinceLastReply > 0 ? Math.round(input.secondsSinceLastReply / 60) : "从未回复";
+  // v1.7.0 群画像 (可选): 只提供"这个群是什么群、我在这该怎么说话"的背景, 不改变打分口径;
+  //   文本已在上游截断 (heartflow-profile.renderHfProfileForPrompt), 这里不做二次裁剪.
+  const profilePart = input.groupProfile
+    ? `\n\n## 本群画像 (系统按历史消息自动归纳, 供你应景参考)\n${input.groupProfile}`
+    : "";
 
   return `你是群聊机器人的决策系统，需要判断是否应该主动回复以下消息。
 
@@ -492,7 +511,7 @@ ${input.botNickname ? `我是 ${input.botNickname}，一个群聊机器人助手
 - 上次发言: ${sinceMin}${typeof sinceMin === "number" ? "分钟前" : ""}
 
 ## 群聊基本信息
-${input.chatContext}
+${input.chatContext}${profilePart}
 
 ## 最近${cfg.contextMessagesCount ?? 5}条对话历史
 ${input.recentMessages}
@@ -691,6 +710,12 @@ export function checkHeartflowGate(
   nowMs: number,
   accountId?: string,
   candidateAtSec?: number,
+  /**
+   * v1.7.0: 画像收紧后的有效预算 (调用方用 tightenHfBudget 与账号配置取交集)。
+   * 缺省 = 只用账号配置。**用参数而不是在函数内 import 画像模块**: heartflow.ts 被 heartflow-profile.ts
+   * 反向 import (拿 isHfGroupAllowed / HF_LEARNING_DEFAULTS), 从这边再 import 回去就成环。
+   */
+  budgetOverride?: Required<HfBudgetConfig>,
 ): HeartflowGateResult {
   if (!cfg.enabled) return { allowed: false, reason: "disabled" };
   if (cfg.whitelistGroups && cfg.whitelistGroups.length > 0) {
@@ -717,7 +742,7 @@ export function checkHeartflowGate(
   const verdict = peekHfBudget(
     accountId,
     chatId,
-    resolveHfBudget(cfg),
+    budgetOverride ?? resolveHfBudget(cfg),
     nowSec,
     candidateAtSec ?? nowSec,
   );

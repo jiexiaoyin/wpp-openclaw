@@ -4,6 +4,93 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.7.0] 心流群画像: 按群自动理解身份与特征 (P1) (2026-09-26)
+
+> 承接 v1.6.8 (换标签) + v1.6.9 (预算)。老板 2026-09-26 的原话:
+> "**希望能根据每个群聊环境, 能自动理解群身份与特征, 建立画像, 应景回复**" +
+> "**我不愿意设定固定的触发的关键词**" + "使其更贴合一个真人身份角色"。
+> 本版就是那句"自动理解"的落地: **画像不是关键词表** —— 它是每天由群里真实消息归纳出的背景,
+> 注入给 judge 当"该不该开口、该用什么口气"的依据; 触发与否仍然只看五维打分 + 结构预算。
+
+### Added (群画像)
+- **新表 `wpp_hf_group_profile`** (`(account_id, group_id)` 主键, `profile_json` / `stats_json` / `sample_msgs` /
+  `model` / `version` / `generated_at` / `updated_at`)。走既有 9 步落地 (applyMigrations → `db/schema.sql` →
+  types → mysql adapter 显式列清单 → `storage/db/*.ts` 薄封装 → barrel); 薄封装仍**不 import mysql2**。
+- **新增 `src/inbound/heartflow-profile.ts`**: 每日每群一次 LLM 归纳, 产出结构化画像
+  (`nature` 群性质 / `style` 语言风格 / `bot_role` 我在群里的角色 / `engage` 宜接话题 / `avoid` 忌接话题 /
+  `active_hours` 活跃时段 / `quiet_hours` 建议静默段 / `band` 建议阈值 / `budget` 建议预算 / `summary` 一句话基调)。
+- `/heartflow profile <群ID>`: 显示当前画像 + 统计素材 (消息数/活跃天数/发言 TOP/类型分布/平均长度),
+  并把**模型说的活跃时段**与**统计实测的活跃时段**并排展示 —— 二者不符时以实测为准, 便于老板判断画像可信度。
+- `/heartflow why <群ID>`: 追溯**最近一条台账行** —— 五维分、当时有效阈值、命中信号、开窗/静默原因,
+  再叠上**此刻**的有效阈值 (learned/账号级/画像下限三者取 max) 与预算计数 (本小时/本日已用 + 最近发言时刻)。
+  为此新增一条真实单行读 `getHfLedgerLast` (不拿已收敛样本拼近似值)。
+- `/heartflow status` 用法提示同步补上新命令。
+
+### Changed (画像怎么被用上 —— 三处)
+- **judge prompt 注入**: `buildHeartflowPrompt` 增可选 `groupProfile`, 挂在"群聊基本信息"之后、带小标题
+  (**让 judge 知道这是背景而非待判内容**)。注入前**截断 ≤400 字符**, 且截断按**整行丢弃**而不是硬切 ——
+  半句话比没有更误导; `summary` 排在最后, 紧张时最先被丢 (它是上面几项的重述)。
+- **阈值下限**: handler 里 `effThreshold = max(learned ?? 账号级, 画像下限)`。
+- **发言预算**: 触发侧 `tightenHfBudget(resolveHfBudget(cfg), getHfProfileBudget(...))` 后作为
+  `checkHeartflowGate` 第 7 参传入。**画像只能收紧, 永远不能放开** (见下)。
+- sweep 里画像生成排在 `if (!L.enabled) return;` **之前** ⇒ 关掉调阈学习, 画像照常生成 (两者本就独立)。
+- 画像生成失败 (超时/坏 JSON/字段全空) **保留上一版**, 单群失败只 warn 不拖垮整轮; 一轮最多生成 `maxPerRun` (3) 个。
+
+### 安全边界 (本版最重要的部分)
+- **画像只能让 bot 更收敛, 不能更激进**:
+  阈值 `band` 过**代码侧硬区间**钳制 (`HF_LEARNING_DEFAULTS.bandMin` 0.5 下限 / `bandMax` 上限, 越界值被**抬回区间**
+  而不是丢弃 —— 免得模型给个 0.2 就被当成"无建议"而绕开地板);
+  预算三项与配置取 `min` (间隔取 `max`); 画像给 `enabled: false` **无权**关掉结构约束。
+- **静默段默认不自动生效** (`HF_PROFILE_DEFAULTS.applyQuietHours = false`): 画像算出的静默段会**入库并展示**
+  (标明"已生效 / 未生效, 仅建议"), 但除非账号配置显式打开, 不参与判定。
+  理由: 它是**总静默开关**, 一次幻觉就能让 bot 整天不吭声 —— 这个风险不该由一个每天自动生成的字段承担。
+  即便打开也有硬上限: 单段 ≤6h、全天合计 ≤8h, **超限的整段丢弃**(不是截断), 短的优先保留。
+- **绝不写空画像**: 解析出一无所有 (`nature`/`style`/`bot_role`/`summary` 全空且无宜忌且无 band) 一律当失败,
+  保留上一版 —— 否则模型偶尔摆烂会让 bot 当场失忆。
+- **画像素材不出机器**: 统计只读本地 `wpp_messages` (**单表**, 见下), 生成 prompt 里**不含群 ID**
+  (样本 `wxid` 已截断脱敏为前 6 字符 + `**`); 画像/统计/群 ID 一律留在本地 DB 与 `accounts/*`, **绝不进公开仓**。
+
+### 与计划的偏差与取舍 (如实记录)
+- 计划 P1-3 让画像"单独传 `maxTokens`" —— 落地为 `maxTokens 1200` / `timeoutMs 20000` (judge 那处硬编码的 300
+  一个字没动)。**不复用 judge 的 300** 是刻意的: 2026-09-13 那次心流静默瘫 3 天, 根因正是 reasoning 与正文抢
+  `max_tokens=300`; 画像输出更长 (含数组与多字段), 复用必现同样故障。思考仍走 `callJudge` 默认的关闭。
+- 计划 P1-2 写"现有 `getMessages` 不支持聚合, 必须新加方法" —— 二者都保留了: 统计聚合新增
+  `getHfGroupMessageStats` (`COUNT`/`GROUP BY`/小时直方图); 样本消息仍走既有 `getMessages` 复用
+  (它已带分页与类型解析, 重造一份反而多一处要维护的 SQL)。样本只取 `direction === 'inbound'`。
+- **collation 地雷照旧绕开**: `wpp_messages` 是 `utf8mb4_unicode_ci` 而 `wpp_hf_*` 是 `utf8mb4_uca1400_ai_ci`
+  (MariaDB 11 对裸 `CHARSET=utf8mb4` 的默认), 跨表 JOIN 直接报 `Illegal mix of collations`。
+  故本版所有统计聚合都是**对 `wpp_messages` 的单表查询**, 与 `wpp_hf_*` 的关联全在应用层内存里做。
+- **刻意不 import 造成的两处"重复"**: (a) `heartflow-profile.ts` 里重写了 2 行 band 钳制而没 import
+  `heartflow-learn.ts` 的 `clampHfThresholdToBand` —— 否则 `heartflow-learn → heartflow-profile → heartflow-learn` 成环;
+  (b) `checkHeartflowGate` 用**可选第 7 参** `budgetOverride` 接收收紧后的预算, 而不是让 `heartflow.ts` 去 import 画像模块
+  (`heartflow.ts` 只 `import type` 画像的配置类型, 值导入会成环)。两处都写了注释说明原因。
+- `summary` 字段是**补回来的**: prompt 里要求模型给一句话基调, 初版解析时把它丢了 (问了又不用)。
+  现补进画像结构并渲染在最后一行; 只含 `summary` 的画像算"有内容"(不判空)。
+- **judge 热路径零 DB 读**这条约定照旧: 画像缓存由 sweep **每轮一次** `listHfGroupProfiles` 预热
+  (已消失的群会从缓存里删掉, 不然吃的是过期画像), judge/handler 只读内存
+  (`getHfProfilePromptText` / `getHfProfileBandFloor` / `getHfProfileBudget`)。
+- `/heartflow profile` 的静默段那一行**必须标明是否生效** —— 老板看到的每个数字都要有出处, 否则会以为已经静音了。
+- 计划 P1-5 提到"回复风格/长度提示沿用现有 prompt 结构" ⇒ 未新增提示词层级, 画像只是一段背景文本。
+
+### 测试状态
+- **264 tests / 260 pass / 2 fail / 2 skip**。
+- 新增 `tests/unit/heartflow-profile.test.mjs` (**24 条全绿**): 参数缺省与覆盖 / 生成 prompt 含统计与样本且**不含群 ID** /
+  容忍围栏与前后废话、坏 JSON、全空对象 (含"只有 summary 不算空") / band 越界被**抬回区间**而非丢弃 /
+  数组与小时与静默段的限长去重过滤 / **预算只收紧不放开** (含 `enabled: false` 无权关约束) /
+  渲染 ≤上限且**不切半行**、`summary` 排最后先被丢 / 活跃时段确定性推导 / 新旧判定边界 /
+  缓存预热与重置与账号隔离与坏行跳过与**旧群清理** / 静默段默认不并入且单段 6h 全天 8h 硬上限 /
+  **7 条源级接线守卫** (sweep 顺序与 catch、无循环依赖、prompt 注入、触发侧第 7 参、两个子命令、失败保留上一版、
+  统计单表无 JOIN 只数入站)。
+- **2 条 fail 仍是刻意钉下的「待部署」绊索, 不是回归**: `deploy-integrity.test.mjs` 的
+  "部署端 `db/schema.sql` 与源码仓逐字节一致" 与 `p2-cleanup.test.mjs` P2-4.2 "部署端 manifest 版本 = 源码仓"
+  (部署端仍是 1.6.7, 源码仓 1.7.0)。`deploy-swap.sh` 跑过后两条自动转绿, 基线恢复 0 fail。
+
+### 部署与生产
+- **尚未部署**。P0+P0.5+P1 按老板拍板"三批一起做、一次部署" ⇒ 本版继续留在 dev。
+- 需要: 一次 `deploy-swap.sh --force` + `systemctl --user restart openclaw-gateway` (**外部动作, 等老板明确授权**)。
+- 部署后观察口径: `/heartflow profile <群ID>` 的画像是否贴合群身份 (模型说的活跃时段 vs 实测)、
+  `/heartflow why <群ID>` 里画像下限有没有把阈值顶起来、以及阈值是否不再贴地板。
+
 ## [v1.6.9] 心流发言预算: 频率约束上移到结构层 (P0.5) (2026-09-26)
 
 > 承接 v1.6.8。老板 2026-09-26: "**群里回复消息的频率太高了**" + "如果我不设定下限, 就会一直降低"。

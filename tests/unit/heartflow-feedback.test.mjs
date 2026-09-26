@@ -1,8 +1,8 @@
 // tests/unit/heartflow-feedback.test.mjs - v1.6.x HEARTFLOW-FEEDBACK 闭环完整性测试
 //
 // 文本断言 (照 independent-trigger.test.mjs 范式) 验证 反馈闭环 8 个触点真实存在:
-//   DB: 3 表 DDL 唯一途径在 applyMigrations (mysql.ts), dev schema.sql 也补 (仅 dev)
-//        adapter 12 方法 + 4 行类型 (types.ts) + 薄封装 (storage/db/heartflow.ts) + barrel (index.ts)
+//   DB: 4 表 DDL 唯一途径在 applyMigrations (mysql.ts), dev schema.sql 也补 (仅 dev)
+//        adapter 19 方法 + 9 行类型 (types.ts) + 薄封装 (storage/db/heartflow.ts) + barrel (index.ts)
 //   config: HeartflowConfig.learning + HF_LEARNING_DEFAULTS + isHfGroupAllowed (heartflow.ts)
 //   judge 埋点: handler.ts effCfg override + persistHfJudged + markHfGroupEngaged
 //   send 埋点: dispatcher.ts persistHfSendOutcome (msg.trigger === "heartflow")
@@ -20,30 +20,33 @@ const DEPLOY = '/root/.openclaw/extensions/wechatpadpro';
 const read = (p) => fs.readFileSync(p, 'utf-8');
 const src = (rel) => read(`${ROOT}/${rel}`);
 
+/** v1.7.0: 新增 wpp_hf_group_profile —— 三处 DDL 断言共用一份清单 (加表只改这里) */
+const HF_TABLES = ['wpp_hf_ledger', 'wpp_hf_group_state', 'wpp_hf_threshold_audit', 'wpp_hf_group_profile'];
+
 // ===== 1. DB 层 =====
-test('1. mysql.ts: 3 张 HF 表 DDL 唯一途径在 applyMigrations (生产建表不靠 schema.sql)', () => {
+test('1. mysql.ts: 4 张 HF 表 DDL 唯一途径在 applyMigrations (生产建表不靠 schema.sql)', () => {
   const m = src('src/storage/db/mysql.ts');
   assert.match(m, /async function applyMigrations\(/, 'applyMigrations 必须存在 (生产建表唯一途径)');
-  for (const t of ['wpp_hf_ledger', 'wpp_hf_group_state', 'wpp_hf_threshold_audit']) {
+  for (const t of HF_TABLES) {
     assert.match(m, new RegExp(`CREATE TABLE IF NOT EXISTS ${t}\\s*\\(`), `mysql.ts 必须含 ${t} DDL`);
   }
-  // 三个 CREATE 都在 applyMigrations 函数体内 (起点之后)
+  // 四个 CREATE 都在 applyMigrations 函数体内 (起点之后)
   const fnStart = m.indexOf('async function applyMigrations');
   const fnEnd = m.indexOf('\n}\n', fnStart);
   const body = m.slice(fnStart, fnEnd);
-  for (const t of ['wpp_hf_ledger', 'wpp_hf_group_state', 'wpp_hf_threshold_audit']) {
+  for (const t of HF_TABLES) {
     assert.ok(body.includes(t), `${t} DDL 必须在 applyMigrations 函数体内`);
   }
 });
 
-test('2. schema.sql (dev): 文末补 3 段 DDL (仅 dev 一致性, 生产由 applyMigrations 建)', () => {
+test('2. schema.sql (dev): 文末补 4 段 DDL (仅 dev 一致性, 生产由 applyMigrations 建)', () => {
   const s = read(`${ROOT}/db/schema.sql`);
-  for (const t of ['wpp_hf_ledger', 'wpp_hf_group_state', 'wpp_hf_threshold_audit']) {
+  for (const t of HF_TABLES) {
     assert.match(s, new RegExp(`CREATE TABLE IF NOT EXISTS ${t}`), `db/schema.sql 必须含 ${t}`);
   }
 });
 
-test('3. types.ts: 14 adapter 方法签名 + 5 HF 行类型', () => {
+test('3. types.ts: 19 adapter 方法签名 + 9 HF 行类型', () => {
   const t = src('src/storage/db/types.ts');
   const methods = [
     'recordHfJudged', 'setHfLedgerSent', 'setHfLedgerSuppressed', 'markHfEngaged',
@@ -52,11 +55,16 @@ test('3. types.ts: 14 adapter 方法签名 + 5 HF 行类型', () => {
     'getHfLedgerDistinctClosedGroups',
     // v1.6.8 换标签: 信号分布统计 (可观测) + 同小时段素材 (反事实基线)
     'countHfEngageSignals', 'listHfGroupMsgHourBuckets',
+    // v1.6.9 发言预算回填
+    'listHfSentCountsRecent',
+    // v1.7.0 群画像 (4) + 台账单行追溯 (1)
+    'getHfLedgerLast', 'upsertHfGroupProfile', 'getHfGroupProfile', 'listHfGroupProfiles',
+    'getHfGroupMessageStats',
   ];
   for (const mth of methods) {
     assert.match(t, new RegExp(`${mth}\\(`), `DbAdapter 必须声明 ${mth}`);
   }
-  for (const ty of ['HfLedgerRecord', 'HfGroupStateRecord', 'HfThresholdAuditRecord', 'HfClosedSample', 'HfGroupHourBucket']) {
+  for (const ty of ['HfLedgerRecord', 'HfGroupStateRecord', 'HfThresholdAuditRecord', 'HfClosedSample', 'HfGroupHourBucket', 'HfSentCountRow', 'HfLedgerTrace', 'HfGroupProfileRecord', 'HfGroupMsgStats']) {
     assert.match(t, new RegExp(`export interface ${ty}`), `types.ts 必须 export ${ty}`);
   }
 });
@@ -98,7 +106,15 @@ test('7. heartflow.ts: 默认 heartbeat 不含 learning (默认关, 旧行为等
 test('8. handler.ts: effCfg override 注入 + persistHfJudged + markHfGroupEngaged', () => {
   const h = src('src/inbound/handler.ts');
   assert.match(h, /resolveThresholdOverride\(m\.accountId, chatId, hfCfg\)/, 'judge 前必须 resolveThresholdOverride');
-  assert.match(h, /const effCfg = override === undefined \? hfCfg :/, 'override 无则沿用 hfCfg (零 clone)');
+  // v1.7.0: 有效阈值 = max(learned override ?? 账号阈值, 画像下限) —— 画像只能抬高, 不能下压
+  assert.match(h, /const profileFloor = getHfProfileBandFloor\(m\.accountId, chatId\)/, 'v1.7.0 必须取画像阈值下限');
+  assert.match(
+    h,
+    /const effThreshold =[\s\S]{0,120}?Math\.max\(baseThreshold, profileFloor\)/,
+    '画像下限只能取 max (画像不许把阈值往下压)',
+  );
+  // 零 clone 不变: 有效阈值与账号阈值相同 ⇒ 沿用 hfCfg 本体 (不每次 judge 都造新对象)
+  assert.match(h, /const effCfg =\s*\n?\s*effThreshold === hfCfg\.replyThreshold \? hfCfg :/, '无变化则沿用 hfCfg (零 clone)');
   // v1.6.1: ledger 行字段上提为 hfRecord ({judgeResult ? {...} : null}), 两分支共用 → 断言改形不移牙
   assert.match(h, /await persistHfJudged\(hfRecord\)/, 'shouldReply 分支必须 await persistHfJudged(hfRecord)');
   assert.match(h, /const hfRecord = judgeResult[\s\S]{0,40}\? \{/, 'ledger 行必须仅在 judgeResult 非空时构造 (judge 崩了不落台账)');

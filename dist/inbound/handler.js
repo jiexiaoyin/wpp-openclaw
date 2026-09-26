@@ -21,6 +21,7 @@ import { getDefaultAccountRegistry } from "../account-state.js";
 import { judgeHeartflow, recordRawMessage, getChatState, buildChatContextSummary, getRawBuffer, formatRawMessages, lastBotReply, secondsSinceLastReply, recordActiveReply, recordPassiveMessage, markHeartflowJudged, } from "./heartflow.js";
 import { resolveThresholdOverride, persistHfJudged, persistHfJudgedBelowThreshold, markHfGroupEngaged, getOpenHfWindow, } from "./heartflow-learn.js";
 import { noteHfHumanMessage } from "./heartflow-budget.js";
+import { getHfProfileBandFloor, getHfProfilePromptText } from "./heartflow-profile.js";
 import { updateJargonFromMessage, recordJargonMessage, shouldTriggerMine, mineJargonForGroup, getGroupMessageCount, } from "./jargon.js";
 import { processAffectionMessage, } from "./affection.js";
 // 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
@@ -647,7 +648,12 @@ export function createWppInboundHandler(opts) {
                             const nowMs = Date.now();
                             // v1.6.x HEARTFLOW-FEEDBACK: 该群若有 learned 阈值且 ≠ 账号级 → shallow clone override (judge prompt 与判定同用 effCfg)
                             const override = resolveThresholdOverride(m.accountId, chatId, hfCfg);
-                            const effCfg = override === undefined ? hfCfg : { ...hfCfg, replyThreshold: override };
+                            // v1.7.0 画像阈值下限: 画像说"这个群我该谨慎"时, 只把阈值**抬高**(取 max),
+                            //   绝不下压 —— 激进的后果是刷屏, 正是老板要治的病 (见 heartflow-profile.ts 文件头)
+                            const profileFloor = getHfProfileBandFloor(m.accountId, chatId);
+                            const baseThreshold = override ?? hfCfg.replyThreshold ?? 0.6;
+                            const effThreshold = profileFloor == null ? baseThreshold : Math.max(baseThreshold, profileFloor);
+                            const effCfg = effThreshold === hfCfg.replyThreshold ? hfCfg : { ...hfCfg, replyThreshold: effThreshold };
                             const st = getChatState(chatId, hfCfg, nowMs);
                             const judgeResult = await judgeHeartflow({
                                 chatId,
@@ -659,6 +665,8 @@ export function createWppInboundHandler(opts) {
                                 lastBotReply: lastBotReply(chatId) ?? "",
                                 secondsSinceLastReply: secondsSinceLastReply(chatId, nowMs),
                                 energy: st.energy,
+                                // v1.7.0 群画像 (已截断; 无画像则不注入) —— 从内存缓存取, 不查 DB
+                                groupProfile: getHfProfilePromptText(m.accountId, chatId) ?? undefined,
                             }, effCfg, {
                                 ...resolveJudgeCreds(),
                             });

@@ -202,6 +202,33 @@ export interface DbAdapter {
   logHfThresholdChange(record: HfThresholdAuditRecord): Promise<void>;
   /** sweep: 有已收敛样本的群清单 (since 之后) */
   getHfLedgerDistinctClosedGroups(accountId: string, sinceSec: number): Promise<string[]>;
+
+  /**
+   * v1.7.0 可观测: 该群**最近一条**台账行 (任意 status) —— `/heartflow why <群ID>` 的依据.
+   * 只读单行 (ORDER BY judged_at DESC LIMIT 1), 不参与任何判定.
+   */
+  getHfLedgerLast(accountId: string, groupId: string): Promise<HfLedgerTrace | null>;
+
+  // ====== v1.7.0 HEARTFLOW-PROFILE (群画像) ======
+  /** 覆盖写单群画像 (PK = account_id+group_id; 生成失败时调用方**不写**, 保留上一版) */
+  upsertHfGroupProfile(record: HfGroupProfileRecord): Promise<void>;
+  /** 读单群画像 (无则 null) */
+  getHfGroupProfile(accountId: string, groupId: string): Promise<HfGroupProfileRecord | null>;
+  /**
+   * 列账号全部画像 (sweep 每轮预热内存缓存 ⇒ judge 热路径零 DB 读, 遵守 perf-heat-path D6).
+   * 一次查询覆盖所有群, 不按群逐个查。
+   */
+  listHfGroupProfiles(accountId: string): Promise<HfGroupProfileRecord[]>;
+  /**
+   * v1.7.0 画像素材: 该群近 sinceSec 秒的**入站人类消息**统计
+   * (总数/活跃天数/小时直方图/发言 TOP 成员/类型分布/平均字数)。
+   * **单表只读** (wpp_messages) —— 不 JOIN wpp_hf_* (collation 不同, 见 mysql.ts 注释)。
+   */
+  getHfGroupMessageStats(
+    accountId: string,
+    groupId: string,
+    sinceSec: number,
+  ): Promise<HfGroupMsgStats>;
 }
 
 /** v1.6.x: 心流 ledger 行类型 (wpp_hf_ledger, 落行字段; 列见 DDL) */
@@ -271,6 +298,58 @@ export interface HfSentCountRow {
   day_count: number;
   /** 最近一次发出的时刻 (unix 秒; 无则 null) */
   last_sent_at: number | null;
+}
+
+/**
+ * v1.7.0: 台账单行追溯 (`/heartflow why`). 在 HfLedgerRecord (写入字段) 基础上补**决策结果**字段.
+ */
+export interface HfLedgerTrace extends HfLedgerRecord {
+  /** judged | sent | suppressed | closed */
+  status: string;
+  suppressed_reason?: string | null;
+  /** NULL=不在样本内 (suppressed); 1=被接话; 0=没人理 */
+  engaged?: number | null;
+  /** v1.6.8 命中信号 (quote/mention/negative/short-window/silence) */
+  engage_signal?: string | null;
+  sent_at?: number | null;
+  bot_msg_id?: string | null;
+}
+
+/** v1.7.0: 群画像行 (wpp_hf_group_profile) */
+export interface HfGroupProfileRecord {
+  account_id: string;
+  group_id: string;
+  /** 结构化画像 JSON 串 (解析失败即视为无画像, 上层降级为不注入) */
+  profile_json: string;
+  /** 生成时的统计快照 JSON (审计用; 可为 null) */
+  stats_json?: string | null;
+  /** 参与生成的样本消息数 */
+  sample_msgs?: number;
+  /** 产出该画像的模型名 */
+  model?: string | null;
+  /** 版本号 (每次重生成 +1) */
+  version?: number;
+  /** 生成时刻 (unix 秒) */
+  generated_at?: number | null;
+}
+
+/**
+ * v1.7.0: 群消息统计 (由 getHfGroupMessageStats 一次聚合产出; 只读本地 DB, 不出机器).
+ * 注意: 统计本身**不进公开仓** —— 这是运行期数据, 不是代码.
+ */
+export interface HfGroupMsgStats {
+  /** 窗口内入站人类消息总数 */
+  total: number;
+  /** 有消息的天数 (按本地日) */
+  activeDays: number;
+  /** 本地小时直方图 (长度 24; 索引 = 小时) */
+  hourHist: number[];
+  /** 发言 TOP 成员 (按条数降序, 最多 5) */
+  topSenders: Array<{ wxid: string; n: number }>;
+  /** msg_type → 条数 */
+  typeHist: Record<string, number>;
+  /** 平均字数 (content 字符数) */
+  avgLen: number;
 }
 
 /** v1.3.76: 群黑话词条 row (wpp_jargon_terms) */

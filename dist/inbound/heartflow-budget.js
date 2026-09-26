@@ -148,6 +148,68 @@ export function checkHfBudget(state, cfg, nowSec, candidateAtSec = nowSec) {
     }
     return { allowed: true };
 }
+/**
+ * 把画像建议的预算与配置预算取**交集** —— 画像只能让约束更紧, 不许放宽 (v1.7.0)。
+ *
+ * 取"更严的那一侧": 间隔取 max, 每小时/每天上限取 min。`enabled:false` 的画像建议整条忽略
+ * (画像无权关掉结构约束)。
+ *
+ * 静默段默认**不并入** (老板 2026-09-26: "静默段默认关"; 且它与其他参数不同 —— 它是"彻底不吭声"的开关,
+ *   一次幻觉就能让某个群整天无响应)。要启用须显式传 `applyQuietHours: true`, 且并入时过硬上限:
+ *   单段 ≤ `HF_QUIET_MAX_RANGE_H` 小时、全天合计 ≤ `HF_QUIET_MAX_TOTAL_H` 小时 —— 超限整段丢弃
+ *   (不是截断: 半段静默的语义说不清楚)。
+ *
+ * 为什么不在 `resolveHfBudget` 里做: 那是"配置→参数"的一步, 这里是"配置 ∩ 画像"。分开才能让 gate
+ *   在不 import 画像模块的前提下拿到结果 (避免 heartflow.ts ←→ heartflow-profile.ts 成环)。
+ */
+export function tightenHfBudget(base, tighter, opts) {
+    if (!tighter || tighter.enabled === false)
+        return base;
+    const pos = (v, fallback) => v != null && Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
+    const quiet = opts?.applyQuietHours
+        ? mergeHfQuietHours(base.quietHours, tighter.quietHours ?? [])
+        : base.quietHours;
+    return {
+        enabled: base.enabled,
+        minGapSec: Math.max(base.minGapSec, pos(tighter.minGapSec, base.minGapSec)),
+        maxPerHour: base.maxPerHour > 0
+            ? Math.min(base.maxPerHour, pos(tighter.maxPerHour, base.maxPerHour))
+            : pos(tighter.maxPerHour, base.maxPerHour),
+        maxPerDay: base.maxPerDay > 0
+            ? Math.min(base.maxPerDay, pos(tighter.maxPerDay, base.maxPerDay))
+            : pos(tighter.maxPerDay, base.maxPerDay),
+        noConsecutiveWithoutHuman: base.noConsecutiveWithoutHuman,
+        quietHours: quiet,
+    };
+}
+/** 静默段硬上限: 单段 ≤ 6 小时, 全天合计 ≤ 8 小时 (防一次幻觉把群整天静音) */
+export const HF_QUIET_MAX_RANGE_H = 6;
+export const HF_QUIET_MAX_TOTAL_H = 8;
+/** 静默段时长 (小时; 跨零点按 24-h 折算) */
+export function hfQuietRangeHours(range) {
+    const [s, e] = range;
+    return s === e ? 0 : e > s ? e - s : 24 - s + e;
+}
+/**
+ * 合并静默段 (配置 ∪ 画像建议), 逐段过硬上限; 超限的**整段丢弃**。
+ * 合计超上限时按"短段优先"保留 (长的先丢 —— 一段 6h 静音比三段 2h 更危险)。
+ */
+export function mergeHfQuietHours(base, extra) {
+    const out = [...base];
+    let total = out.reduce((s, r) => s + hfQuietRangeHours(r), 0);
+    const candidates = [...extra].filter((r) => hfQuietRangeHours(r) <= HF_QUIET_MAX_RANGE_H);
+    candidates.sort((a, b) => hfQuietRangeHours(a) - hfQuietRangeHours(b));
+    for (const r of candidates) {
+        const h = hfQuietRangeHours(r);
+        if (h <= 0 || total + h > HF_QUIET_MAX_TOTAL_H)
+            continue;
+        out.push(r);
+        total += h;
+        if (out.length >= 6)
+            break;
+    }
+    return out;
+}
 /** 记一次已发出的发言 (纯函数: 返回新 state) */
 export function recordHfBudgetReply(state, nowSec) {
     const rolled = rollHfBudgetState(state, nowSec);

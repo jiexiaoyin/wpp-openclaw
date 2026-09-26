@@ -5,6 +5,8 @@ import type { WppInboundMessage } from "../types.js";
 import { isBotMentionedByText } from "./parser/mention.js";
 import type { HeartflowConfig } from "./heartflow.js";
 import { checkHeartflowGate } from "./heartflow.js";
+import { resolveHfBudget, tightenHfBudget } from "./heartflow-budget.js";
+import { getHfProfileBudget } from "./heartflow-profile.js";
 
 export type GroupPolicyValue = "open" | "disabled" | "allowlist" | "closed";
 
@@ -156,14 +158,23 @@ export function shouldTrigger(
   //   门禁通过 → via:"heartflow" (pending), handler 用 judgeHeartflow 判断是否真触发
   //   门禁不过 (disabled/白名单外/空/冷却/预算) → via:null (不触发)
   if (msg.peerKind === "group" && cfg.heartflow?.enabled) {
+    const chatId = msg.chatroomId ?? msg.peerId;
+    // v1.7.0 画像收紧预算: 画像建议只能让约束更紧 (间隔更长/上限更小), 不许放宽.
+    //   画像文本本身走 handler 注入 prompt; 这里只用它的预算字段 (内存缓存查, 零 DB IO).
+    const effBudget = tightenHfBudget(
+      resolveHfBudget(cfg.heartflow),
+      getHfProfileBudget(msg.accountId, chatId),
+      { applyQuietHours: cfg.heartflow.profile?.applyQuietHours === true },
+    );
     const gate = checkHeartflowGate(
-      msg.chatroomId ?? msg.peerId,
+      chatId,
       msg.content ?? "",
       cfg.heartflow,
       Date.now(),
       // v1.6.9: 预算计数按账号分桶 + 用**消息自己的时刻**判陈旧触发 (msg.ts 是 unix 秒, 见 parser.ts)
       msg.accountId,
       msg.ts,
+      effBudget,
     );
     if (gate.allowed) {
       return { triggered: true, via: "heartflow" };

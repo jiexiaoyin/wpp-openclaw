@@ -19,6 +19,9 @@ import type {
   DbAdapter,
   HfClosedSample,
   HfGroupHourBucket,
+  HfGroupMsgStats,
+  HfGroupProfileRecord,
+  HfLedgerTrace,
   HfSentCountRow,
   HfGroupStateRecord,
   HfLedgerRecord,
@@ -250,7 +253,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
 
   // ====== v1.6.x HEARTFLOW-FEEDBACK (心流反馈闭环) ======
   // 生产建表唯一途径 = applyMigrations (deploy-swap.sh 不拷 db/, schema.sql 只在 dev 生效)
-  // 纯增量 CREATE IF NOT EXISTS, 幂等, 每 boot 3 条空执行. 表无 FK, 不 ALTER 旧表.
+  // 纯增量 CREATE IF NOT EXISTS, 幂等, 每 boot 4 条空执行 (v1.7.0 起含群画像表). 表无 FK, 不 ALTER 旧表.
   // 心流「应触发发送」决策 + 发送结果 + 接话观察窗 (per-群自适应调阈样本库)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS wpp_hf_ledger (
@@ -314,6 +317,25 @@ async function applyMigrations(pool: Pool): Promise<void> {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
       KEY idx_hf_audit (account_id, group_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  // v1.7.0 群画像 (1 行/群): 每日一次 LLM 生成的结构化画像 + 生成时的统计快照.
+  //   用途 = 给 judge prompt 注入"这个群是什么群、bot 在这里该怎么说话"(老板 2026-09-26 要的"应景").
+  //   画像只**收紧**约束 (更克制的阈值/更小的预算), 不许放开 —— 见 heartflow-profile.ts 的钳制函数.
+  //   单表读写 (不 JOIN wpp_messages —— 两者 collation 不同, 见 listHfGroupMsgHourBuckets 的警告).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wpp_hf_group_profile (
+      account_id VARCHAR(64) NOT NULL,
+      group_id VARCHAR(128) NOT NULL,
+      profile_json TEXT NULL,
+      stats_json TEXT NULL,
+      sample_msgs INT UNSIGNED NOT NULL DEFAULT 0,
+      model VARCHAR(64) NULL,
+      version INT UNSIGNED NOT NULL DEFAULT 1,
+      generated_at INT UNSIGNED NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (account_id, group_id),
+      KEY idx_hf_profile_gen (account_id, generated_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
@@ -1066,6 +1088,155 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
         last_sent_at: r.last_sent_at == null ? null : Number(r.last_sent_at),
       }));
     },
+    // v1.7.0 /heartflow why: 该群最近一条台账行 (只读; 判不出原因时运维就只能靠猜 —— 老板要的"为什么"落这里)
+    async getHfLedgerLast(accountId, groupId): Promise<HfLedgerTrace | null> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT account_id, inbound_msg_id, new_msg_id, bot_msg_id, group_id, from_wxid, msg_type,
+                content_head, judge_overall, dim_r, dim_w, dim_s, dim_t, dim_c,
+                effective_threshold, energy, status, suppressed_reason, engaged, engage_signal,
+                judged_at, sent_at
+         FROM wpp_hf_ledger
+         WHERE account_id = ? AND group_id = ?
+         ORDER BY judged_at DESC, id DESC LIMIT 1`,
+        [accountId, groupId],
+      );
+      const first = rows[0];
+      if (!first) return null;
+      const num = (v: unknown): number | null => (v == null ? null : Number(v));
+      return {
+        account_id: String(first.account_id),
+        inbound_msg_id: String(first.inbound_msg_id),
+        new_msg_id: first.new_msg_id == null ? null : String(first.new_msg_id),
+        bot_msg_id: first.bot_msg_id == null ? null : String(first.bot_msg_id),
+        group_id: String(first.group_id),
+        from_wxid: first.from_wxid == null ? null : String(first.from_wxid),
+        msg_type: first.msg_type == null ? null : String(first.msg_type),
+        content_head: first.content_head == null ? null : String(first.content_head),
+        judge_overall: num(first.judge_overall),
+        dim_r: num(first.dim_r),
+        dim_w: num(first.dim_w),
+        dim_s: num(first.dim_s),
+        dim_t: num(first.dim_t),
+        dim_c: num(first.dim_c),
+        effective_threshold: num(first.effective_threshold),
+        energy: num(first.energy),
+        status: String(first.status),
+        suppressed_reason: first.suppressed_reason == null ? null : String(first.suppressed_reason),
+        engaged: num(first.engaged),
+        engage_signal: first.engage_signal == null ? null : String(first.engage_signal),
+        judged_at: Number(first.judged_at) || 0,
+        sent_at: num(first.sent_at),
+      };
+    },
+    // v1.7.0 群画像: 覆盖写 (PK = account_id+group_id). 调用方**只在解析成功时**才调它 ⇒ 不会写空画像.
+    //   version 由调用方给 (旧 version+1), 这里不做自增 —— 自增在 ON DUPLICATE 里看似优雅, 但生成失败/重放时
+    //   版本号会虚长, 反而失去"第几版"的可读性.
+    async upsertHfGroupProfile(record: HfGroupProfileRecord): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `INSERT INTO wpp_hf_group_profile
+           (account_id, group_id, profile_json, stats_json, sample_msgs, model, version, generated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           profile_json = VALUES(profile_json),
+           stats_json = VALUES(stats_json),
+           sample_msgs = VALUES(sample_msgs),
+           model = VALUES(model),
+           version = VALUES(version),
+           generated_at = VALUES(generated_at)`,
+        [
+          record.account_id,
+          record.group_id,
+          record.profile_json,
+          record.stats_json ?? null,
+          record.sample_msgs ?? 0,
+          record.model ?? null,
+          record.version ?? 1,
+          record.generated_at ?? null,
+        ],
+      );
+    },
+    // 显式列清单 (不用 SELECT *) —— 加列时不至于悄悄改掉行形状
+    async getHfGroupProfile(accountId, groupId): Promise<HfGroupProfileRecord | null> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT account_id, group_id, profile_json, stats_json, sample_msgs, model, version, generated_at
+         FROM wpp_hf_group_profile WHERE account_id = ? AND group_id = ? LIMIT 1`,
+        [accountId, groupId],
+      );
+      const first = rows[0];
+      return first ? rowToHfGroupProfile(first) : null;
+    },
+    async listHfGroupProfiles(accountId): Promise<HfGroupProfileRecord[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT account_id, group_id, profile_json, stats_json, sample_msgs, model, version, generated_at
+         FROM wpp_hf_group_profile WHERE account_id = ?`,
+        [accountId],
+      );
+      return rows.map(rowToHfGroupProfile);
+    },
+    // v1.7.0 画像素材: 4 条**单表**只读聚合 (wpp_messages). 每群每天只跑一次 (生成画像时), 不在热路径上.
+    //   口径与 listHfGroupMsgHourBuckets 一致: peer_kind='group' + direction='inbound' (排除 bot 自己的出站),
+    //   时间走 create_time (裸 epoch, 无时区歧义) 并加 localOffsetSec 偏移后取本地小时/日.
+    //   ⚠️ 不 JOIN wpp_hf_* : wpp_messages 是 utf8mb4_unicode_ci, wpp_hf_* 是 utf8mb4_uca1400_ai_ci ⇒ 跨表报错.
+    async getHfGroupMessageStats(accountId, groupId, sinceSec): Promise<HfGroupMsgStats> {
+      const p = getPool();
+      const localOffsetSec = -new Date(sinceSec * 1000).getTimezoneOffset() * 60;
+      const base = `FROM wpp_messages
+         WHERE account_id = ? AND peer_kind = 'group' AND direction = 'inbound'
+           AND chat_id = ? AND chat_id <> '' AND ts >= FROM_UNIXTIME(?)`;
+      const totals = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT COUNT(*) AS n,
+                AVG(CHAR_LENGTH(COALESCE(content, ''))) AS avg_len,
+                COUNT(DISTINCT DATE(FROM_UNIXTIME(COALESCE(create_time, UNIX_TIMESTAMP(ts)) + ?))) AS active_days
+         ${base}`,
+        [localOffsetSec, accountId, groupId, sinceSec],
+      );
+      const hours = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT FLOOR((((COALESCE(create_time, UNIX_TIMESTAMP(ts)) + ?) % 86400) + 86400) % 86400 / 3600) AS h,
+                COUNT(*) AS n
+         ${base}
+         GROUP BY h`,
+        [localOffsetSec, accountId, groupId, sinceSec],
+      );
+      const senders = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT from_wxid, COUNT(*) AS n ${base}
+         GROUP BY from_wxid ORDER BY n DESC LIMIT 5`,
+        [accountId, groupId, sinceSec],
+      );
+      const types = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT msg_type, COUNT(*) AS n ${base} GROUP BY msg_type`,
+        [accountId, groupId, sinceSec],
+      );
+      const hourHist = new Array<number>(24).fill(0);
+      for (const r of hours) {
+        const h = Number(r.h) || 0;
+        if (h >= 0 && h < 24) hourHist[h] = Number(r.n) || 0;
+      }
+      const typeHist: Record<string, number> = {};
+      for (const r of types) {
+        const k = r.msg_type == null ? "unknown" : String(r.msg_type);
+        typeHist[k] = (typeHist[k] ?? 0) + (Number(r.n) || 0);
+      }
+      return {
+        total: Number(totals[0]?.n) || 0,
+        activeDays: Number(totals[0]?.active_days) || 0,
+        avgLen: Math.round(Number(totals[0]?.avg_len) || 0),
+        hourHist,
+        topSenders: senders.map((r) => ({ wxid: String(r.from_wxid ?? ""), n: Number(r.n) || 0 })),
+        typeHist,
+      };
+    },
     async upsertHfGroupState(record: HfGroupStateRecord): Promise<void> {
       const p = getPool();
       await queryWithTimeout(
@@ -1152,6 +1323,20 @@ function rowToHfGroupState(r: RowDataPacket): HfGroupStateRecord {
     last_change_old: r.last_change_old == null ? null : Number(r.last_change_old),
     last_change_new: r.last_change_new == null ? null : Number(r.last_change_new),
     last_change_reason: r.last_change_reason == null ? null : String(r.last_change_reason),
+  };
+}
+
+function rowToHfGroupProfile(r: RowDataPacket): HfGroupProfileRecord {
+  return {
+    account_id: String(r.account_id),
+    group_id: String(r.group_id),
+    // profile_json 为 NULL 的存量/异常行 → 空串 (上层解析失败即视为无画像, 不注入)
+    profile_json: r.profile_json == null ? "" : String(r.profile_json),
+    stats_json: r.stats_json == null ? null : String(r.stats_json),
+    sample_msgs: Number(r.sample_msgs) || 0,
+    model: r.model == null ? null : String(r.model),
+    version: Number(r.version) || 1,
+    generated_at: r.generated_at == null ? null : Number(r.generated_at),
   };
 }
 

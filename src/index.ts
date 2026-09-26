@@ -17,7 +17,17 @@ import {
   describeAccount,
 } from "./config-helpers.js";
 import { getDefaultAccountRegistry } from "./account-state.js";
-import { closeDb, initDbPool, getSynckey, saveSynckey, listHfGroupStates, countHfLedgerByStatus, countHfEngageSignals } from "./db.js";
+import {
+  closeDb,
+  initDbPool,
+  getSynckey,
+  saveSynckey,
+  listHfGroupStates,
+  countHfLedgerByStatus,
+  countHfEngageSignals,
+  getHfLedgerLast,
+  getHfGroupProfile,
+} from "./db.js";
 import { WechatpadproWsClient } from "./ws-client.js";
 import { WechatpadproWebhookServer } from "./webhook-receiver.js";
 import { createWppInboundHandler } from "./inbound/handler.js";
@@ -40,8 +50,14 @@ import type { WppTriggerConfig, WppAccountTriggerCtx } from "./inbound/triggers.
 import type { WppInboundMessage } from "./types.js";
 import { resolveAiConfig } from "./config-ai.js";
 import { defaultHeartflowConfig } from "./inbound/heartflow.js";
-import { loadLearnedThresholds, loadHfBudgetSeed, startHeartflowSweep } from "./inbound/heartflow-learn.js";
-import { hfBudgetBlockedSnapshot, resolveHfBudget } from "./inbound/heartflow-budget.js";
+import { getLearnedThreshold, loadLearnedThresholds, loadHfBudgetSeed, startHeartflowSweep } from "./inbound/heartflow-learn.js";
+import { getHfBudgetState, hfBudgetBlockedSnapshot, resolveHfBudget } from "./inbound/heartflow-budget.js";
+import {
+  getHfProfileBandFloor,
+  getHfProfilePromptText,
+  parseHfGroupProfileRow,
+  resolveHfProfileCfg,
+} from "./inbound/heartflow-profile.js";
 import { defaultJargonConfig } from "./inbound/jargon.js";
 import { defaultAffectionConfig } from "./inbound/affection.js";
 import type { WppSendMessageParams, WppSendType } from "./dispatch/send-message.js";
@@ -434,8 +450,102 @@ async function handleFeatureCommand(
     return true;
   }
 
+  // heartflow 特有: profile <群ID> (v1.7.0: 看该群画像 + 实测统计)
+  if (feature === "heartflow" && arg === "profile") {
+    const gid = (args[1] ?? "").trim();
+    if (!gid) {
+      await send("用法: /heartflow profile <群ID>\n(画像由 sweep 每日自动生成; 样本不足的群暂无画像)");
+      return true;
+    }
+    try {
+      const row = await getHfGroupProfile(accountId, gid);
+      if (!row) {
+        await send(`该群暂无画像 (account=${accountId}):\n${gid}\n画像在 sweep 里每日生成; 需近 14 天有足够群消息。`);
+        return true;
+      }
+      const p = parseHfGroupProfileRow(row);
+      const profileApplyQuiet = resolveHfProfileCfg(runtimeHeartflow.get(accountId)).applyQuietHours;
+      const st = row.stats_json ? (JSON.parse(row.stats_json) as Record<string, unknown>) : {};
+      const hist = Array.isArray(st.hourHist) ? (st.hourHist as number[]) : [];
+      const derived = Array.isArray(st.derivedActiveHours) ? (st.derivedActiveHours as number[]) : [];
+      const genAt = row.generated_at ? new Date(row.generated_at * 1000).toLocaleString("zh-CN") : "?";
+      const lines = [
+        `群画像 (account=${accountId}, v${row.version ?? 1}, ${genAt}, ${row.model ?? "?"})`,
+        `群: ${gid}`,
+        p ? `群性质: ${p.nature || "-"}` : "⚠️ 画像解析失败 (只展示统计)",
+        p ? `语言风格: ${p.style || "-"}` : "",
+        p ? `我在该群的角色: ${p.botRole || "-"}` : "",
+        p && p.engage.length ? `宜接话题: ${p.engage.join("、")}` : "",
+        p && p.avoid.length ? `忌接话题: ${p.avoid.join("、")}` : "",
+        p && p.activeHours.length ? `画像说活跃时段: ${p.activeHours.map((h) => `${h}时`).join(",")}` : "",
+        derived.length ? `实测活跃时段: ${derived.map((h) => `${h}时`).join(",")}` : "",
+        p && p.quietHours.length
+          ? `建议静默段: ${p.quietHours.map(([s, e]) => `${s}-${e}时`).join(",")} (${profileApplyQuiet ? "已生效" : "未生效, 仅建议"})`
+          : "",
+        p && p.band != null ? `建议阈值下限: ${p.band} (只会抬高阈值, 不会下压)` : "",
+        p && p.budget ? `建议预算收紧: ${JSON.stringify(p.budget)}` : "",
+        `样本: ${row.sample_msgs ?? 0} 条 / 窗口内共 ${st.total ?? "?"} 条 / 活跃 ${st.activeDays ?? "?"} 天 / 均长 ${st.avgLen ?? "?"} 字`,
+        hist.length ? `每小时消息量: ${hist.map((n, h) => (n > 0 ? `${h}时${n}` : null)).filter(Boolean).join(" ")}` : "",
+      ].filter(Boolean);
+      await send(lines.join("\n"));
+    } catch (e) {
+      await send(`读取画像失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return true;
+  }
+
+  // heartflow 特有: why <群ID> (v1.7.0: 解释上一条为什么回/不回)
+  if (feature === "heartflow" && arg === "why") {
+    const gid = (args[1] ?? "").trim();
+    if (!gid) {
+      await send("用法: /heartflow why <群ID>\n(显示该群最近一次 judge 的五维打分/有效阈值/命中信号 + 当前预算与画像)");
+      return true;
+    }
+    try {
+      const last = await getHfLedgerLast(accountId, gid);
+      // 缺省用 defaultHeartflowConfig() (enabled 默认 false): 这里只读字段做展示, 不改变行为
+      const hfCfg = runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig();
+      const learned = getLearnedThreshold(accountId, gid);
+      const floor = getHfProfileBandFloor(accountId, gid);
+      const base = learned ?? hfCfg.replyThreshold ?? 0.6;
+      const eff = floor == null ? base : Math.max(base, floor);
+      const b = getHfBudgetState(accountId, gid, Math.floor(Date.now() / 1000));
+      const budgetStr =
+        `预算(本群): 本小时 ${b.hourCount} 条 / 今日 ${b.dayCount} 条` +
+        (b.lastReplyAtSec ? ` / 上次发言 ${Math.round((Date.now() / 1000 - b.lastReplyAtSec) / 60)} 分钟前` : "");
+      const prof = getHfProfilePromptText(accountId, gid);
+      const head = last
+        ? [
+            `最近一次 judge: ${new Date(last.judged_at * 1000).toLocaleString("zh-CN")} 状态=${last.status}`,
+            last.judge_overall != null
+              ? `综合分 ${last.judge_overall} vs 当时阈值 ${last.effective_threshold ?? "?"} ⇒ ${last.judge_overall >= (last.effective_threshold ?? 0.6) ? "过阈" : "未过阈(沉默)"}`
+              : "无打分 (judge 未产出结果)",
+            `五维: 相关 ${last.dim_r ?? "-"} / 意愿 ${last.dim_w ?? "-"} / 社交 ${last.dim_s ?? "-"} / 时机 ${last.dim_t ?? "-"} / 连贯 ${last.dim_c ?? "-"}`,
+            `精力 ${last.energy ?? "-"} / 被接话 ${last.engaged == null ? "(不含在样本内)" : last.engaged ? "是" : "否"} / 信号 ${last.engage_signal ?? "(旧行/无)"}`,
+            last.suppressed_reason ? `沉默原因: ${last.suppressed_reason}` : "",
+            `消息: ${(last.content_head ?? "").slice(0, 40)}`,
+          ]
+        : ["最近无 judge 记录 (该群近 7 天没攒到台账行)"];
+      await send(
+        [
+          `为什么 (account=${accountId}):`,
+          `群: ${gid}`,
+          ...head,
+          `当前有效阈值 ${eff.toFixed(2)} = max(learned ${learned ?? "-"}, 账号 ${hfCfg.replyThreshold ?? "-"}${floor != null ? `, 画像下限 ${floor}` : ""})`,
+          budgetStr,
+          prof ? `画像摘要:\n${prof}` : "画像: 无 (未生成 / 未预热)",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    } catch (e) {
+      await send(`读取台账失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return true;
+  }
+
   // 未知 action: 提示用法
-  const extra = feature === "heartflow" ? "\n  或 /heartflow threshold <0-1>\n  或 /heartflow group add|del|list <群ID>" : "";
+  const extra = feature === "heartflow" ? "\n  或 /heartflow threshold <0-1>\n  或 /heartflow group add|del|list <群ID>\n  或 /heartflow profile <群ID>\n  或 /heartflow why <群ID>" : "";
   await send(`用法: /${feature} on|off|status${extra}\n状态: ${current ? "✅ 开启" : "❌ 关闭"}`);
   return true;
 }

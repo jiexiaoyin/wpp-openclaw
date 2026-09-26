@@ -16,6 +16,7 @@ import { recordHfJudged as dbRecordHfJudged, setHfLedgerSent, setHfLedgerSuppres
 import { resolveHfLearning, isHfGroupAllowed, } from "./heartflow.js";
 import { asHfEngageSignal, classifyHfEngagement, hfAmbientP, isHfSampleInformative, } from "./heartflow-label.js";
 import { noteHfReplySent, seedHfBudgetStates, hfHourStartSec, hfDayStartSec, } from "./heartflow-budget.js";
+import { maybeGenerateHfGroupProfiles } from "./heartflow-profile.js";
 /**
  * 双向自适应判定 (纯函数).
  * 方向: 接话率 ≤ lowEngageRate → 上调 (少说精选); ≥ highEngageRate → 下调 (多说);
@@ -282,7 +283,18 @@ export async function runHeartflowSweep(accountId, cfg, nowSec) {
         warn(`[WPP HF] sweep close/expire failed: ${formatErr(e)}`);
         return;
     }
-    if (!cfg.enabled || !L.enabled)
+    if (!cfg.enabled)
+        return;
+    // v1.7.0 群画像: 每群每日一次 (内部按 generated_at 判新旧 + 单轮配额).
+    //   放在 learning.enabled 判定**之前**: 画像不依赖调阈开关 —— 老板可能关掉自动调阈但仍要画像.
+    //   内部全 catch (单个群失败不影响其它群, 更不影响 sweep); 这里再包一层只为防御性兜底.
+    try {
+        await maybeGenerateHfGroupProfiles(accountId, cfg, nowSec);
+    }
+    catch (e) {
+        warn(`[WPP HF] profile pass failed (不影响调阈): ${formatErr(e)}`);
+    }
+    if (!L.enabled)
         return;
     try {
         // v1.6.8 反事实基线: 该群**当前小时段**本来有多热闹 (近 14 天同小时段的入站人类消息数).

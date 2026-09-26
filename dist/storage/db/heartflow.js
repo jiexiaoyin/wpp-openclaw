@@ -66,4 +66,25 @@ export async function logHfThresholdChange(record) {
 export async function getHfLedgerDistinctClosedGroups(accountId, sinceSec) {
     return getAdapter().getHfLedgerDistinctClosedGroups(accountId, sinceSec);
 }
+/** v1.7.0 /heartflow why: 该群最近一条台账行 (只读追溯) */
+export async function getHfLedgerLast(accountId, groupId) {
+    return getAdapter().getHfLedgerLast(accountId, groupId);
+}
+// ===== v1.7.0 群画像 (wpp_hf_group_profile) =====
+/** 覆盖写单群画像 (调用方只在解析成功时调 ⇒ 不会写空画像) */
+export async function upsertHfGroupProfile(record) {
+    return getAdapter().upsertHfGroupProfile(record);
+}
+/** 读单群画像 (无则 null) */
+export async function getHfGroupProfile(accountId, groupId) {
+    return getAdapter().getHfGroupProfile(accountId, groupId);
+}
+/** 列账号全部画像 (sweep 预热内存缓存用; judge 路径不查它) */
+export async function listHfGroupProfiles(accountId) {
+    return getAdapter().listHfGroupProfiles(accountId);
+}
+/** 画像素材统计 (单表只读聚合; 只在生成画像时调, 每群每天一次) */
+export async function getHfGroupMessageStats(accountId, groupId, sinceSec) {
+    return getAdapter().getHfGroupMessageStats(accountId, groupId, sinceSec);
+}
 //# sourceMappingURL=heartflow.js.map

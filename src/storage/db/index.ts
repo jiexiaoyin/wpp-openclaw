@@ -42,6 +42,11 @@ export {
   listHfGroupStates,
   logHfThresholdChange,
   getHfLedgerDistinctClosedGroups,
+  getHfLedgerLast,
+  upsertHfGroupProfile,
+  getHfGroupProfile,
+  listHfGroupProfiles,
+  getHfGroupMessageStats,
 } from "./heartflow.js";
 export { upsertAccount, getAccounts, getAccount } from "./accounts.js";
 export {
