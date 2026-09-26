@@ -6,11 +6,11 @@
 //     a. 它只 log 决策, **从不发送、从不落台账** ⇒ 对心流行为零影响 (ledger 31 行全部由
 //        handler.ts 的 via="heartflow" 路径写出);
 //     b. 判定走**账号级**阈值 (不经 resolveThresholdOverride) ⇒ 与真实决策的 per-群 learned
-//        阈值不一致 (华为群 learned=0.30 vs 账号级 0.6);
+//        阈值不一致 (XX群 learned=0.30 vs 账号级 0.6);
 //     c. 它先调 markHeartflowJudged() 消耗 judge 冷却, 真路径共用该冷却 ⇒ minJudgeIntervalSec>0
 //        时会把真路径整个闸死;
 //     d. ⚠️ **每条群消息被 judge 两次**: enrichBatch 先 map(enrichAndSaveMessage) (内部已 fire 一次),
-//        末尾又 for 循环 fire 一次。**实测证据**: 2026-09-13 10:06:10 华为群一条 via=msgType 的
+//        末尾又 for 循环 fire 一次。**实测证据**: 2026-09-13 10:06:10 XX群一条 via=msgType 的
 //        接龙消息, 在同一次 handler 调用内 (relay detected 只出现 1 次) 产生 **2 条**
 //        `judge failed after 2 attempts` (10:06:17)。该消息的 handler 心流分支并未执行
 //        (via=msgType), 故 2 条只能来自 enrich 侧的双 fire。

@@ -107,7 +107,7 @@ export async function persistOutboundMsg(
     //   否则 file/link 等 vendor 返 Code=0+ret=-2 时写入幽灵 outbound 记录 (污染上下文/引用)
     if (resp.Code !== 0 && resp.Code !== 200) return; // 发送失败不入库
     const data = resp.Data as { BaseResponse?: { ret?: number }; List?: Array<{ Ret?: number }> } | undefined;
-    // v1.5.6 SEND-LIST-RET (2026-09-09 华为晨报 30362 ret=-2 复盘): vendor 逐条结果在 Data.List[].Ret
+    // v1.5.6 SEND-LIST-RET (2026-09-09 XX晨报 30362 ret=-2 复盘): vendor 逐条结果在 Data.List[].Ret
     //   (Code=0 + BaseResponse.ret=0 但 List[0].Ret=-2 → 消息实际拒收). 任一条 Ret!=0 → 不入库防幽灵记录
     if (Array.isArray(data?.List) && data.List.length > 0) {
       for (const item of data.List) {

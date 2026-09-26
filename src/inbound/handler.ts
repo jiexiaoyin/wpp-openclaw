@@ -690,7 +690,7 @@ export function createWppInboundHandler(
         // v1.3.39 FILEHELPER: filehelper 命令不 dispatch (只走命令回调, 不进 AI)
         if (m.peerId === "filehelper" && /^\s*\//.test(m.content)) continue;
         // v1.3.54 RELAY-TRIGGER (老板 8-12 拍板): 接龙消息强制触发 AI (即使没人 @)
-        //   老板诉求"对华为群接龙进行鼓励" — 群内接龙活动要让 AI 介入给鼓励, 不能静默
+        //   老板诉求"对XX群接龙进行鼓励" — 群内接龙活动要让 AI 介入给鼓励, 不能静默
         //   节流: 同群同接龙 5 分钟内只触发一次 (vendor 每次有人接龙都推完整接龙, 全回会刷屏)
         //   v1.3.57 P0-2 + P2-1 (2026-08-13 交付审阅): 强制触发前检查 via!=="blocked" (防黑名单群/
         //   自回环绕过); 节流 key 并入 accountId (防多账号同群互相节流)
