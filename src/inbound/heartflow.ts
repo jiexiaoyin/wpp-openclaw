@@ -101,7 +101,7 @@ export interface HeartflowConfig {
   layered?: HfLayeredConfig;
   /**
    * v1.9.0 重复内容闸 (老板 2026-09-26 拍板): 同群 6 小时内高度相似 (≥0.85) 的心流**主动插话**不发。
-   * 生产实测主群 bot 发言重复率 28% —— 这是"不像真人"最刺眼的症状。缺省走 HF_DEDUPE_DEFAULTS。
+   * 只读回放真实账本显示 bot 一部分发言是"换个日期的同一段话" —— 这是"不像真人"最刺眼的症状。
    * ⚠️ 只在 dispatcher 的心流 deliver 路径生效 (@/引用/关键词等"被叫到"的回复不拦)。
    * ⚠️ 用 `import type` 只为类型 (heartflow-dedupe.ts 反向 import 本文件, 值导入会成环)。
    */

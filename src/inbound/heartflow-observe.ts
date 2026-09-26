@@ -33,9 +33,8 @@ import { hfRepeatVerdict, normHfText } from "./heartflow-dedupe.js";
  * 发言占比 (纯函数): bot 条数 / 群消息总数。
  *
  * 用**有界**分母 (人类+bot) 而不是 bot/人类: 后者在"群里没人说话但 bot 说了 3 条"时趋于无穷,
- *   会让外环对着一个无意义的数做决策。2026-09-26 探索期记的 15.4% 是 **bot/人类** (54/350) 口径,
- *   换成有界口径是 13.4% (54/404) —— 两者都远超 5% 目标, 结论不变; 报告里一律**同时显示原始条数**
- *   (`13.4% (54/404)`), 避免口径本身成为误读来源。
+ *   会让外环对着一个无意义的数做决策。两种口径的差别在分母: 同一个分子在 bot/人类 口径下**必然更大**
+ *   (分母少了 bot 自己)。报告里一律**同时显示原始条数** (`12.5% (30/240)`), 避免口径本身成为误读来源。
  */
 export function hfBotShare(inbound: number, outbound: number): number {
   const total = inbound + outbound;
@@ -43,7 +42,7 @@ export function hfBotShare(inbound: number, outbound: number): number {
   return outbound / total;
 }
 
-/** 占比的可读格式 (报告与日志共用): `13.4% (54/404)` */
+/** 占比的可读格式 (报告与日志共用): `12.5% (30/240)` */
 export function fmtHfShare(inbound: number, outbound: number): string {
   return `${(hfBotShare(inbound, outbound) * 100).toFixed(1)}% (${outbound}/${inbound + outbound})`;
 }

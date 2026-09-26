@@ -5,7 +5,7 @@
 //   故这里把三道误杀防护 (前缀优先 / minChars 豁免 / 数字差异) 逐个钉死。
 //
 // 还有一条**结构性**断言: 闸与"重复率"观测必须共用 hfRepeatVerdict —— 若各写一套,
-//   日报说"重复 28%"而闸只拦 0 条, 观测驱动收口就是假的。
+//   日报说重复率很高而闸一条都没拦, "观测驱动收口"就是假的。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

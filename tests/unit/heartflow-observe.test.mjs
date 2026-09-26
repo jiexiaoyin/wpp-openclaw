@@ -41,11 +41,11 @@ const BASE = { enabled: true, minGapSec: 180, maxPerHour: 8, maxPerDay: 60, noCo
 
 test('1. hfBotShare: 分母 = 群消息总数 (人类+bot); 空群 0 而不是 NaN/∞', (t) => {
   skipNoDist(t);
-  assert.equal(o.hfBotShare(350, 54), 54 / 404);
+  assert.equal(o.hfBotShare(210, 30), 30 / 240);
   assert.equal(o.hfBotShare(0, 0), 0);
   assert.equal(o.hfBotShare(0, 3), 1, '群里只有 bot 说话 = 100% 占比 (外环该管这种)');
   assert.equal(o.hfBotShare(10, 0), 0);
-  assert.equal(o.fmtHfShare(350, 54), '13.4% (54/404)', '格式必须带原始条数, 口径不能藏起来');
+  assert.equal(o.fmtHfShare(210, 30), '12.5% (30/240)', '格式必须带原始条数, 口径不能藏起来');
 });
 
 test('2. 占比分子能数到 bot: SQL 必须 COALESCE 归群 (chat_id 为 NULL 的出站行)', (t) => {
@@ -131,8 +131,8 @@ test('6. hfShareTighten: 边界 —— 恰好目标值不收紧 / 样本不足�
   assert.equal(o.hfShareTighten(BASE, 0.051, { total: 39, botSends: 20 }, SG), null, '消息数不够不收紧');
   assert.equal(o.hfShareTighten(BASE, 0.051, { total: 100, botSends: 4 }, SG), null, 'bot 条数不够不收紧');
   assert.equal(o.hfShareTighten(BASE, 0.051, { total: 100, botSends: 20 }, { ...SG, enabled: false }), null, '开关关掉不收紧');
-  const r = o.hfShareTighten(BASE, 0.154, { total: 404, botSends: 54 }, SG);
-  assert.ok(r, '主群实测档 (13–15%) 必须收紧');
+  const r = o.hfShareTighten(BASE, 0.15, { total: 240, botSends: 36 }, SG);
+  assert.ok(r, '远超目标 (15%) 必须收紧');
   assert.equal(r.minGapSec, 360, '间隔 180 → 360');
   assert.equal(r.maxPerHour, 4, '8 → 4');
   assert.equal(r.maxPerDay, 30, '60 → 30');
@@ -297,6 +297,6 @@ test('15. 时间口径: 一切按群聚合都走 ts, 不用遗留死列 create_t
     assert.match(body, /UNIX_TIMESTAMP\(ts\)/, `${fn} 必须用 UNIX_TIMESTAMP(ts) 取绝对 epoch`);
     assert.doesNotMatch(body, /create_time/, `${fn} 不得再引用 create_time`);
   }
-  // 出站行归群必须 COALESCE(NULLIF(chat_id,''), peer_id): 生产实测近 7 天出站 50 条 chat_id/from_wxid 全空
+  // 出站行归群必须 COALESCE(NULLIF(chat_id,''), peer_id): 生产实测出站行的这两列**全部为空**
   assert.match(m, /COALESCE\(NULLIF\(chat_id, ''\), peer_id\) AS gid/, '出站归群必须 COALESCE 兜底 (否则分子恒 0)');
 });
