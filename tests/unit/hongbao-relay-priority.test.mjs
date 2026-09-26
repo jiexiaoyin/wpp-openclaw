@@ -1,4 +1,4 @@
-// tests/unit/hongbao-relay-priority.test.mjs - v1.9.1 接龙 vs 红包 判定优先级 (回归门)
+// tests/unit/hongbao-relay-priority.test.mjs - v1.9.1/v1.9.2 接龙 vs 红包 判定优先级 + 关键词收窄 (回归门)
 //
 // 为什么这批测试重要: 这是一次**静默失效** —— 接龙被误判成红包后, handler 两处红包拦截
 //   (静默入库 / 不触发 AI) 会把整条接龙丢掉, **不报错、不写日志标签**, 唯一痕迹是一行
@@ -46,8 +46,10 @@ test('1. 核心回归: 文案自带"红包"的接龙**不得**被判为红包 (�
 
 test('2. 真红包照旧被识别 (修 bug 不能把红包静默一起放开)', (t) => {
   skipNoDist(t);
-  // heuristic 1: content 关键词
-  assert.equal(hb.isRedPacketMessage({ msgType: 1, content: '恭喜发财，红包拿来', raw: {} }), true);
+  // heuristic 1: content 关键词 (**卡片形态**, 见 test 8: 纯文本不再采信关键词)
+  assert.equal(hb.isRedPacketMessage({ msgType: 49, content: '恭喜发财，红包拿来', raw: {} }), true);
+  // 厂商把原生红包卡片译成的精确文案 ⇒ 卡片 + 关键词, 必判红包 (生产上真红包就是这个形态)
+  assert.equal(hb.isRedPacketMessage({ msgType: 49, content: '微信红包', raw: {} }), true);
   // heuristic 2: 微信原生 red packet appMsg.type=2002 (内容里没有"红包"二字也要认)
   assert.equal(hb.isRedPacketMessage({ msgType: 49, content: '', raw: { appMsg: { type: 2002 } } }), true);
   // heuristic 3: vendor 私有 type 串
@@ -83,27 +85,48 @@ test('4. 旧 chat-history (msgType=53) 走接龙兼容路径 ⇒ 同样不被当
 
 test('5. 结构优先于关键词: 只有真接龙 (type=49 + "#接龙") 才豁免', (t) => {
   skipNoDist(t);
-  // 类型不是 49 ⇒ 不算接龙 ⇒ 仍走红包静默 (这是**既有**启发式, 本次没有放宽; 见 CHANGELOG 已知残留)
-  assert.equal(
-    hb.isRedPacketMessage({ msgType: 1, content: '接龙报名 1. 张三 红包100元', raw: {} }),
-    true,
-    '普通文本提到"红包"仍静默 (已知残留, 非本次范围)',
-  );
-  // 类型是 49 但正文不是接龙 → 不豁免
+  // 卡片 (49) 但正文不是接龙 → 不豁免, 关键词照常命中
   assert.equal(hb.isRedPacketMessage({ msgType: 49, content: '红包雨来了', raw: {} }), true);
+  // 纯文本不是接龙也不算红包 (v1.9.2) —— 接龙豁免**不是**这里生效, 而是关键词根本不采信纯文本
+  assert.equal(hb.isRedPacketMessage({ msgType: 1, content: '接龙报名 1. 张三 红包100元', raw: {} }), false);
 });
 
 test('6. 源级门: 豁免必须写在 hongbao.ts 内、且在关键词启发式**之前**', (t) => {
   const src = read(`${ROOT}/src/inbound/hongbao.ts`);
   // 锚在**代码行**上: 注释里也会出现 "heuristic 1" 等字样, 用文字锚会被自己的注释打败 (写这批测试时真踩过)
   const GUARD = 'if (isRelayMessage(msg)) return false;';
-  const HEURISTIC1 = 'if (typeof msg.content === "string" && /红包|red.?packet/i.test(msg.content))';
+  const HEURISTIC1 =
+    'if (typeof msg.content === "string" && /红包|red.?packet/i.test(msg.content) && isCardMessage(msg))';
   const iGuard = src.indexOf(GUARD);
   const iHeuristic = src.indexOf(HEURISTIC1);
   assert.ok(iGuard > 0, 'hongbao.ts 必须有豁免代码行 (单一真源: handler 两处调用点自动都受保护)');
   assert.ok(iHeuristic > 0, 'heuristic 1 (内容关键词) 必须还在 (不能靠删掉关键词判定来"修" bug)');
   assert.ok(iGuard < iHeuristic, '接龙豁免必须在 heuristic 1 之前生效');
   assert.match(src, /import \{ isRelayMessage \} from "\.\/relay\.js"/, '必须 import 结构识别 (不得在 hongbao.ts 内联第二套接龙判定)');
+});
+
+test('8. v1.9.2 收窄: 纯文本提到"红包"不再被静默 (卡片照旧)', (t) => {
+  skipNoDist(t);
+  // 这三条都是生产账本里真实出现过的**人类聊天**形态 (打码): 拿关键词静默它们 = 把群友的话吞了
+  for (const content of ['@某某 群收红包', '50红包店群发放@某某', '抓紧领大红包啦，坐等你们晒单']) {
+    assert.equal(hb.isRedPacketMessage({ msgType: 1, content, raw: {} }), false, `纯文本不该静默: ${content}`);
+  }
+  // 图片/表情/语音同理 (只有卡片才采信关键词)
+  assert.equal(hb.isRedPacketMessage({ msgType: 3, content: '红包截图', raw: {} }), false);
+  assert.equal(hb.isRedPacketMessage({ msgType: 47, content: '红包', raw: {} }), false);
+  // 反向: 卡片形态 (真红包的形态) 一律照旧静默
+  assert.equal(hb.isRedPacketMessage({ msgType: 49, content: '微信红包', raw: {} }), true);
+});
+
+test('9. 源级门: 关键词启发式必须与"卡片"条件绑定 (不得退回裸关键词)', (t) => {
+  const src = read(`${ROOT}/src/inbound/hongbao.ts`);
+  assert.match(src, /isCardMessage\(msg\)/, 'hongbao.ts 必须有 isCardMessage');
+  assert.match(
+    src,
+    /isCardMessage\(msg\)\)\s*\{\s*return true;/,
+    '关键词判定必须 `&& isCardMessage(msg)` 之后才 return true (否则纯文本又被吞)',
+  );
+  assert.match(src, /function isCardMessage\(msg: WppInboundMessage\): boolean \{\s*return msg\.msgType === 49;/, '卡片定义 = msgType 49');
 });
 
 test('7. 源级门: handler 两处红包拦截都走同一个判定函数 (不得内联关键词)', (t) => {
