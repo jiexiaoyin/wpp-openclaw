@@ -19,12 +19,69 @@ import { SeenTracker, buildDedupeKey } from "../webhook-receiver.js";
 import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1Cdn, enrichFileMessage, enrichFileMessageFromV1Binary, enrichVideoMessage, enrichVideoMessageFromV1, isV1SchemaVideo, enrichVoiceMessage, enrichVoiceMessageFromV1, isV1SchemaVoice, enrichFileMessageViaMcp, isV1SchemaImage, isV1SchemaFile } from "./media-enrich.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
 import { judgeHeartflow, recordRawMessage, getChatState, buildChatContextSummary, getRawBuffer, formatRawMessages, lastBotReply, secondsSinceLastReply, recordActiveReply, recordPassiveMessage, markHeartflowJudged, } from "./heartflow.js";
-import { resolveThresholdOverride, persistHfJudged, persistHfJudgedBelowThreshold, markHfGroupEngaged, } from "./heartflow-learn.js";
+import { resolveThresholdOverride, persistHfJudged, persistHfJudgedBelowThreshold, markHfGroupEngaged, getOpenHfWindow, } from "./heartflow-learn.js";
 import { updateJargonFromMessage, recordJargonMessage, shouldTriggerMine, mineJargonForGroup, getGroupMessageCount, } from "./jargon.js";
 import { processAffectionMessage, } from "./affection.js";
 // 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
 // 解法: enrich 时 trackEnrich 记录 promise, 触发 dispatch 前 waitForPendingEnrich 等待同 sender 的 enrich 完成。
 const pendingEnrichs = new Map();
+/**
+ * v1.6.8: 取这条消息引用的目标消息 id (纯解析, 无 IO).
+ * 三套 vendor 形态依次兜底 (与下方"引用消息注入媒体"路径同一套 parser):
+ *   app 形态 raw_payload.app_reference → content 里的 <refermsg> XML → 旧 reply_context.
+ * 解析失败一律返回 "" (当作"没引用"), 绝不抛。
+ */
+function extractQuotedMsgId(m) {
+    try {
+        const appRef = extractReferencedFromApp(m.raw);
+        if (appRef)
+            return appRef.newMsgId ?? appRef.svrId ?? "";
+        if ((m.content ?? "").includes("<refermsg")) {
+            return parseQuoteXml(m.content)?.msgId ?? "";
+        }
+        // 旧 reply_context (msg_id 常对不上, 保留兜底)
+        const rc = extractReferencedFromReplyContext(m.raw);
+        if (rc?.svrId || rc?.newMsgId)
+            return rc.svrId ?? rc.newMsgId ?? "";
+    }
+    catch {
+        /* 解析失败 = 没引用 */
+    }
+    return "";
+}
+/**
+ * v1.6.8 心流标签强信号: 这条人类消息引用的**是不是 bot 刚发的那条**.
+ *
+ * 判据 (需要一次 DB 回查被引用消息, 只在"该群有开窗"时才会被调用 ⇒ 群聊热路径上极少发生):
+ *   ① 已知 bot 那条的 msgId → 被引用消息的 msg_id / new_msg_id 命中它 ⇒ 是
+ *   ② bot 那条的 msgId 未知 (vendor 没回 id) → 被引用消息是**同群 outbound 且落在观察窗内** ⇒ 是
+ *   查不到被引用消息 ⇒ 不是 (不猜: 猜错的代价是给 bot 记一次假好评/假差评)
+ */
+async function isQuotingBotReply(m, groupId, win) {
+    try {
+        const quotedMsgId = extractQuotedMsgId(m);
+        if (!quotedMsgId)
+            return false;
+        const quoted = (await getMessageByMsgIdOrNewId(quotedMsgId, undefined, m.accountId, { direction: "any" })) ??
+            (await getMessageById(quotedMsgId, m.accountId));
+        if (!quoted)
+            return false;
+        if (quoted.direction !== "outbound")
+            return false; // bot 自己发的才可能是"我那条"
+        const qChat = quoted.chat_id ?? quoted.peer_id;
+        if (qChat !== groupId)
+            return false;
+        if (win.botMsgId) {
+            return quoted.msg_id === win.botMsgId || quoted.new_msg_id === win.botMsgId;
+        }
+        const ts = quoted.ts ?? 0; // MessageRecord.ts = unix 秒 (见 rowToMessage)
+        return ts >= win.sentAtSec && ts <= win.sentAtSec + win.observeWindowSec;
+    }
+    catch (e) {
+        debug(`[WPP HF] quote attribution failed (non-fatal): ${formatErr(e)}`);
+        return false;
+    }
+}
 // v1.3.54 RELAY-TRIGGER 节流: 同群同接龙标题, RELAY_THROTTLE_MS 内只触发一次 AI 鼓励。
 // 背景: vendor 每次有人接龙都推送完整接龙 (type=49 app), 若不节流 AI 每条都回 → 刷屏。
 // key = `${peerId}:${content 首行前 30 字}` (同一接龙 title 指纹); 被 @ 的消息 content 不同 → 不受节流影响。
@@ -342,23 +399,8 @@ export function createWppInboundHandler(opts) {
                 }
                 // 引用消息: 查 DB 被引用消息, 把原媒体 OSS URL 注入 content → AI 看到原图/原资源
                 if (m.msgType === MsgType.APP) {
-                    let quotedMsgId = "";
                     try {
-                        const appRef = extractReferencedFromApp(m.raw);
-                        if (appRef) {
-                            quotedMsgId = appRef.newMsgId ?? appRef.svrId ?? "";
-                        }
-                        else if (m.content.includes("<refermsg")) {
-                            const parsed = parseQuoteXml(m.content);
-                            quotedMsgId = parsed?.msgId ?? "";
-                        }
-                        else {
-                            // 旧 reply_context (msg_id 常对不上, 保留兜底)
-                            const rc = extractReferencedFromReplyContext(m.raw);
-                            if (rc?.svrId || rc?.newMsgId) {
-                                quotedMsgId = rc.svrId ?? rc.newMsgId ?? "";
-                            }
-                        }
+                        const quotedMsgId = extractQuotedMsgId(m); // v1.6.8: 抽成共用 helper (心流标签也用同一套解析)
                         if (quotedMsgId) {
                             // v1.3.57 P2-4 (2026-08-13 交付审阅): 引用解析查全方向 — bot 回复也入库 (outbound),
                             //   用户引用 bot 的图/文件时默认 direction=inbound 查不到, 加 any (与 dispatcher.ts:216 对齐)
@@ -502,12 +544,17 @@ export function createWppInboundHandler(opts) {
                     void processAffectionMessage(m.chatroomId ?? m.peerId, m.fromWxid ?? "", content, m.fromNickname ?? "", opts.affection, { ...resolveJudgeCreds() }, Date.now()).catch(() => { });
                 }
             }
-            // v1.6.x HEARTFLOW-FEEDBACK: 接话观察窗回填 (engaged) —
-            //   对每批内「人类群消息」(非 blocked/非系统/非 bot 自己) 按群去重, fire-and-forget markHfEngaged:
-            //   把该群仍开窗未定的心流回复 ledger 立即收敛为 engaged (UPDATE 走 idx_hf_open, 通常 0-1 行)
-            //   失败静默降级 (窗口留待 sweep 到期按 ignored 关, 语义仍正确). 只在 heartflow enabled 时跑.
+            // v1.6.8 HEARTFLOW 标签改造: 按**信号**判定该群开窗行是否被接话 (取代旧的"任意人类消息即 engaged").
+            //
+            // 旧行为 (v1.6.x–v1.6.7): 群里出现任意人类消息 ⇒ 该群所有开窗行 engaged=1+关窗 ⇒ 活跃群恒饱和
+            //   ⇒ 接话率恒高 ⇒ 自适应调阈单调下调到地板 ("不设下限就会一直降低"). 详见 heartflow-label.ts.
+            // 现行为: 收集本批该群的人类消息作为**候选**, 由 classifyHfEngagement 统一判优先级
+            //   (引用 bot > @bot > 针对 bot 的负词 > 窄窗内有人说话 > 无结论), 弱信号不关窗留待升级.
+            //
+            // 成本控制: 只有"该群刚发过心流回复且窗还开着"才会进入 (hasOpenHfWindow 是内存 Map 查,
+            //   绝大多数群消息在这里直接跳过); 引用归属判定要回查 DB, 也只在开窗时才做.
             if (opts.heartflow?.enabled) {
-                const seenGroups = new Set();
+                const byGroup = new Map();
                 for (const m of batch) {
                     const tr = persistResults.get(m);
                     if (tr?.via === "blocked")
@@ -519,10 +566,21 @@ export function createWppInboundHandler(opts) {
                     if (!!opts.triggerCtx.botWxid && m.fromWxid === opts.triggerCtx.botWxid)
                         continue; // bot 自己不算
                     const groupId = m.chatroomId ?? m.peerId;
-                    if (seenGroups.has(groupId))
-                        continue;
-                    seenGroups.add(groupId);
-                    void markHfGroupEngaged(m.accountId, groupId, Math.floor(Date.now() / 1000));
+                    const win = getOpenHfWindow(m.accountId, groupId);
+                    if (!win)
+                        continue; // 没开窗 = 这些消息与"我上一条说得怎么样"无关
+                    let g = byGroup.get(groupId);
+                    if (!g) {
+                        g = { accountId: m.accountId, groupId, cands: [] };
+                        byGroup.set(groupId, g);
+                    }
+                    const text = m.content ?? "";
+                    const atBot = !!opts.triggerCtx.botWxid && extractAtUserList(text).includes(opts.triggerCtx.botWxid);
+                    const quotesBot = await isQuotingBotReply(m, groupId, win);
+                    g.cands.push({ atSec: Math.floor(Date.now() / 1000), quotesBot, mentionsBot: atBot, text });
+                }
+                for (const g of byGroup.values()) {
+                    void markHfGroupEngaged(g.accountId, g.groupId, Math.floor(Date.now() / 1000), g.cands);
                 }
             }
             const triggerResults = persistResults; // Step 2 已算 (same ctxForTrigger + shouldTrigger)
