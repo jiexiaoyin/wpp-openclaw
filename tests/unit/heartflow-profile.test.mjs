@@ -345,7 +345,8 @@ test('接线: 触发侧把画像预算并进 gate (第 7 参), 且 gate 用 over
 });
 
 test('接线: 两个新子命令 + 用法提示 (子命令此前零测试覆盖)', (t) => {
-  const i = src('src/index.ts');
+  // v1.9.2: handleFeatureCommand 迁到 src/inbound/filehelper-features.ts —— 命令侧断言跟着源码搬家, 意图不变
+  const i = src('src/inbound/filehelper-features.ts');
   assert.match(i, /arg === "profile"/, '必须有 /heartflow profile');
   assert.match(i, /arg === "why"/, '必须有 /heartflow why');
   assert.match(i, /getHfLedgerLast\(accountId, gid\)/, 'why 必须读最近一条台账');

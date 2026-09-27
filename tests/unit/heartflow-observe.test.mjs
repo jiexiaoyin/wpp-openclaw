@@ -233,7 +233,8 @@ test('10. buildHfDigest: 六节齐全 + 逐节口径标注 + 硬 cap 3500', (t) 
 });
 
 test('11. 报告出口: 走 filehelper (不经 sendAiReply), 且被卡在 3500 以内', (t) => {
-  const idx = read(`${ROOT}/src/index.ts`);
+  // v1.9.2: handleFeatureCommand 迁到 src/inbound/filehelper-features.ts —— 命令侧断言跟着源码搬家, 意图不变
+  const idx = read(`${ROOT}/src/inbound/filehelper-features.ts`);
   const i = idx.indexOf('if (feature === "heartflow" && arg === "report")');
   assert.ok(i >= 0, '/heartflow report 必须存在');
   const body = idx.slice(i, idx.indexOf('// 未知 action: 提示用法'));
@@ -277,10 +278,12 @@ test('13. 配置面: shareGuard 只在 HeartflowConfig + 模块默认, 不进默
 
 test('14. 状态面: /heartflow status 能看到重复闸拦下数与外环收紧名单', (t) => {
   const idx = read(`${ROOT}/src/index.ts`);
-  assert.match(idx, /重复闸: \$\{DED\.enabled/, 'status 必须显示重复闸状态');
-  assert.match(idx, /占比外环: \$\{SG\.enabled/, 'status 必须显示外环状态');
-  assert.match(idx, /近24h拦下: \$\{suppressed\["repeat"\] \?\? 0\}/, '必须显示近 24h 被闸拦下的条数 (误杀信号)');
   assert.match(idx, /心流 on\/off\/status\/report/, '命令面板 desc 必须有 report');
+  // v1.9.2: handleFeatureCommand 迁到 src/inbound/filehelper-features.ts —— status 侧断言跟着源码搬家, 意图不变
+  const cmd = read(`${ROOT}/src/inbound/filehelper-features.ts`);
+  assert.match(cmd, /重复闸: \$\{DED\.enabled/, 'status 必须显示重复闸状态');
+  assert.match(cmd, /占比外环: \$\{SG\.enabled/, 'status 必须显示外环状态');
+  assert.match(cmd, /近24h拦下: \$\{suppressed\["repeat"\] \?\? 0\}/, '必须显示近 24h 被闸拦下的条数 (误杀信号)');
 });
 
 test('15. 时间口径: 一切按群聚合都走 ts, 不用遗留死列 create_time', (t) => {
