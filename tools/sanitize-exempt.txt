@@ -33,4 +33,9 @@ src/dispatch/silk-encoder.ts	产品默认 silk encoder 路径 (WPP_SILK_ENCODER_
 # 说明: CHANGELOG.md 的价值正在于记真实案例 ("9/9 某业务晨报 ret=-2 静默拒收" 这类复盘,
 #   改了细节就失去可追溯性)。它是 dev 侧内部记录; 公开发布走 build-release.sh 重建快照,
 #   CHANGELOG 不随发布分发 ⇒ 不构成本仓自身的泄漏面。
-CHANGELOG.md	dev 侧内部工程记录 (真实案例复盘); 发布快照由 build-release.sh 重建, 不随发布分发
+# CHANGELOG.md: dev 侧内部工程记录 (真实案例复盘是其价值)。
+#   ⚠️ 2026-09-27 更正: 本条理由此前写成「不随发布分发」——**不准确**。
+#   实测: 它不进 release/ 快照, 但**会进 master 源码快照** (rsync 从工作区取文件,
+#   不受 git 跟踪状态影响), 公开仓 master 上确有该文件。
+#   因此豁免只对 dev 提交门生效; 发布时由 STRICT 模式强制脱敏 (见 WPP_SANITIZE_STRICT)。
+CHANGELOG.md	dev 提交门豁免 (内部记录); 发布路径由 STRICT 模式强制脱敏, 不可依赖本条豁免

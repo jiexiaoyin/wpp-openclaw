@@ -15,7 +15,6 @@ accounts/default.json  # 真实运行配置 (真 wxid/管理员/群白名单); �
 dist/                  # tsc 编译产物 (含内联真实 URL/ID), 不是源码
 dist-release/          # 同上 (重复声明, 原规则被跟踪状态架空)
 release/               # 同上
-coverage/              # 测试覆盖率报告 (HTML 内联源码文本)
 
 # 2026-09-27 审阅加固: src/ 下的编译产物 (历史残留, 已被跟踪)
 #   本仓 rootDir=./src outDir=./dist ⇒ 产物只应出现在 dist/。
