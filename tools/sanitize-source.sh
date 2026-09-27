@@ -78,10 +78,15 @@ RULES = os.environ['WPP_RULES']; MODE = os.environ['WPP_MODE']; TARGET = os.envi
 SKIP_DIRS = {'.git', 'node_modules'}
 
 # ---- exemption list (2026-09-27): non-secret, ships with repo; see tools/sanitize-exempt.txt ----
+#   STRICT mode (WPP_SANITIZE_STRICT=1) disables ALL exemptions. Release paths (sync-github.sh,
+#   build-release.sh) MUST use strict: a dev-side exemption like CHANGELOG.md is legitimate for the
+#   dev commit gate, but is NOT legitimate for a public release snapshot. Sharing one policy across
+#   both gates was the original design flaw -- the same --check served opposite intents.
 import fnmatch
+STRICT = os.environ.get('WPP_SANITIZE_STRICT', '').strip() not in ('', '0', 'false')
 EXEMPT_FILE = os.environ.get('WPP_SANITIZE_EXEMPT', '').strip()
 exempts = []          # [(glob, reason)]
-if EXEMPT_FILE and os.path.isfile(EXEMPT_FILE):
+if not STRICT and EXEMPT_FILE and os.path.isfile(EXEMPT_FILE):
     with open(EXEMPT_FILE, encoding='utf-8') as fh:
         for raw in fh:
             line = raw.rstrip(chr(10)).rstrip(chr(13))
@@ -149,7 +154,9 @@ with open(RULES, encoding='utf-8') as fh:
 if not pairs:
     sys.exit(f'✗ 规则文件里没有任何替换规则: {RULES}')
 print(f'  规则: {RULES} (替换 {len(pairs)} 条 / 只查 {len(scans)} 条)', file=sys.stderr)
-if exempts:
+if STRICT:
+    print('  豁免: **STRICT 模式 — 豁免清单已禁用 (发布路径)**', file=sys.stderr)
+elif exempts:
     print(f'  豁免: {EXEMPT_FILE} ({len(exempts)} 条)', file=sys.stderr)
 
 def files(root):

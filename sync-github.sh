@@ -116,7 +116,7 @@ git checkout -q "$BRANCH"
 rsync -a --delete --exclude=.git "$DEV_DIR/release/" "$MIRROR_DIR/"
 
 # 上传前最终敏感扫描 (双保险): 规则外置, 无豁免清单 (v1.6.8 起 --check 覆盖全树)
-bash "$SANITIZER" --check "$MIRROR_DIR" || { echo "✗ 敏感残留, 阻止上传"; exit 1; }
+WPP_SANITIZE_STRICT=1 bash "$SANITIZER" --check "$MIRROR_DIR" || { echo "✗ 敏感残留, 阻止上传"; exit 1; }
 
 git add -A
 if git diff --cached --quiet; then
@@ -152,8 +152,8 @@ else
   SNAP_DIR="$(mktemp -d /tmp/wpp-src-snapshot-XXXXXX)"
   trap 'rm -rf "$SNAP_DIR"' EXIT
   rsync -a "${SOURCE_EXCLUDES[@]}" "$DEV_DIR/" "$SNAP_DIR/"
-  bash "$SANITIZER" --apply "$SNAP_DIR"           # 脱敏 (就地改快照, 不动 dev)
-  bash "$SANITIZER" --check "$SNAP_DIR" || { echo "✗ 源码快照敏感残留, 阻止上传"; exit 1; }
+  WPP_SANITIZE_STRICT=1 bash "$SANITIZER" --apply "$SNAP_DIR"   # 脱敏 (就地改快照, 不动 dev; 发布路径 STRICT = 禁用豁免)
+  WPP_SANITIZE_STRICT=1 bash "$SANITIZER" --check "$SNAP_DIR" || { echo "✗ 源码快照敏感残留, 阻止上传"; exit 1; }
 
   cd "$MIRROR_DIR"
   if git show-ref --verify --quiet refs/heads/master; then
