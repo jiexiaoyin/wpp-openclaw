@@ -34,6 +34,7 @@ import {
   listHfBotMsgShare,
   listHfOutboundTexts,
 } from "./db.js";
+import { getHeartflowRuntime } from "./inbound/heartflow-runtime.js";
 import { WechatpadproWsClient } from "./ws-client.js";
 import { WechatpadproWebhookServer } from "./webhook-receiver.js";
 import { createWppInboundHandler } from "./inbound/handler.js";
@@ -104,7 +105,8 @@ const runtimeInboundHandlers = new Map<string, ReturnType<typeof createWppInboun
 
 // v1.3.79 AI-COMMAND: 三个新功能 (heartflow/jargon/affection) 的可变配置容器 —
 //   handler opts 持有引用, 热重载/命令更新容器属性即刻生效 (不用重建 handler)。
-const runtimeHeartflow = new Map<string, import("./inbound/heartflow.js").HeartflowConfig>();
+// v1.9.2: 提取到 heartflow-runtime.js (与新模块共用同一实例, 勿复制)
+const runtimeHeartflow = getHeartflowRuntime();
 const runtimeJargon = new Map<string, import("./inbound/jargon.js").JargonConfig>();
 const runtimeAffection = new Map<string, import("./inbound/affection.js").AffectionConfig>();
 
