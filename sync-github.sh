@@ -130,8 +130,11 @@ else
     git commit -q -m "sync: WPP 插件更新 (build-release.sh 重建, ${TS})"
     require_clean_commit
     # git push 网络不稳 → 重试 3 次
+    # 2026-09-27: main 也加 --force-with-lease (原先只有 master 有, 不一致)。
+    #   release 快照每次 rsync --delete 全量重建 ⇒ 与远端不是快进关系, 需要 lease。
+    #   lease 的语义: 仅当远端仍是我们上次见到的那个 commit 时才推, 防覆盖他人/自己的新提交。
     for i in 1 2 3; do
-      if git push origin "$BRANCH" 2>&1; then
+      if git push --force-with-lease origin "$BRANCH" 2>&1; then
         echo "  ✓ push 成功 ($(git rev-parse --short HEAD))"
         break
       fi
