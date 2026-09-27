@@ -10,6 +10,7 @@ import { loadGlobalConfigAsync, loadAccountConfigAsync, listAccountIds, isConfig
 import { listAccountIds as helperListAccountIds, resolveAccount, defaultAccountId, isConfigured as helperIsConfigured, unconfiguredReason, describeAccount, } from "./config-helpers.js";
 import { getDefaultAccountRegistry } from "./account-state.js";
 import { closeDb, initDbPool, getSynckey, saveSynckey, listHfGroupStates, countHfLedgerByStatus, countHfEngageSignals, getHfLedgerLast, getHfGroupProfile, listHfLayerStats, listHfSentCountsRecent, markHfLedgerVeto, listHfClosedSince, listHfBotMsgShare, listHfOutboundTexts, } from "./db.js";
+import { getHeartflowRuntime } from "./inbound/heartflow-runtime.js";
 import { WechatpadproWsClient } from "./ws-client.js";
 import { WechatpadproWebhookServer } from "./webhook-receiver.js";
 import { createWppInboundHandler } from "./inbound/handler.js";
@@ -41,7 +42,8 @@ const runtimeTriggerCtxs = new Map();
 const runtimeInboundHandlers = new Map();
 // v1.3.79 AI-COMMAND: 三个新功能 (heartflow/jargon/affection) 的可变配置容器 —
 //   handler opts 持有引用, 热重载/命令更新容器属性即刻生效 (不用重建 handler)。
-const runtimeHeartflow = new Map();
+// v1.9.2: 提取到 heartflow-runtime.js (与新模块共用同一实例, 勿复制)
+const runtimeHeartflow = getHeartflowRuntime();
 const runtimeJargon = new Map();
 const runtimeAffection = new Map();
 // P1 (2026-08-23): 每账号 /Msg/Sync 全局锁 — webhook sync_message 与 ws-client triggerSync
@@ -1462,6 +1464,98 @@ export const wppChannelPlugin = {
     //     会把编辑变回整 channel 重启 (=掉线)。
     //   - 不用 accountScopedRestart: extractAccountIdFromPath 对 accountId="default" 返回 null
     //     (特判整 channel 重启), default 账号无法被账号级重启隔离。
+    // 2026-09-27 OPENCLAW-STATUS: 接入 OpenClaw 2026.9.6 的 status 契约
+    //   背景: 审阅发现插件仅实现 ChannelPlugin 必填字段 + 8 个可选项 (共 34 可选),
+    //         status 缺失 -> openclaw status 看不到本 channel 的账号健康度。
+    //   数据源: AccountRegistry (get/listIds) + WppAccountState (vendorAuthed/selfWxid/ws/webhook)。
+    //   字段语义对齐 ChannelAccountSnapshot (见 OpenClaw types.core)。
+    status: {
+        defaultRuntime: {
+            accountId: "default",
+            configured: false,
+            running: false,
+            connected: false,
+        },
+        buildAccountSnapshot: ({ account }) => {
+            const accountId = account?.accountId ?? "";
+            const st = getDefaultAccountRegistry().get(accountId);
+            if (!st) {
+                return {
+                    accountId,
+                    configured: false,
+                    running: false,
+                    connected: false,
+                    statusState: "stopped",
+                };
+            }
+            const wsUp = Boolean(st.wsClient);
+            const webhookUp = Boolean(st.webhookServer);
+            const connected = wsUp && webhookUp;
+            return {
+                accountId,
+                name: st.selfWxid || accountId,
+                enabled: true,
+                configured: true,
+                running: true,
+                connected,
+                statusState: connected ? "connected" : "degraded",
+                lifecycle: connected ? "ready" : "recovering",
+                lastError: !st.vendorAuthed
+                    ? "vendor authcode 未通过"
+                    : connected ? null : "ws/webhook 未就绪",
+            };
+        },
+        buildChannelSummary: () => {
+            const reg = getDefaultAccountRegistry();
+            const ids = reg.listIds();
+            let connected = 0;
+            for (const id of ids) {
+                const st = reg.get(id);
+                if (st && st.wsClient && st.webhookServer)
+                    connected++;
+            }
+            return { accounts: ids.length, connected, degraded: ids.length - connected };
+        },
+    },
+    // 2026-09-27 OPENCLAW-DOCTOR: 接入 OpenClaw 2026.9.6 的 doctor 契约
+    //   背景: 审阅发现插件只实现 ChannelPlugin 必填 4 项 + 9 个可选项 (共 34 可选)。
+    //         doctor 缺失 -> openclaw doctor 无法诊断本 channel 的配置问题,
+    //         运维只能手写 ps/curl/grep 排查 (本会话调试时即如此)。
+    //   本适配器是纯声明式的: 告诉框架「本 channel 的配置长什么样、边界在哪」,
+    //   由框架自己的 doctor 引擎据此检查, 本插件不重复实现校验逻辑。
+    doctor: {
+        // 私聊白名单只认顶层 (channels.wechatpadpro.allowFrom)。
+        //   本插件不读嵌套账号级 allowFrom 做 DM 准入 -> 声明 topOnly 让 doctor 不误报。
+        dmAllowFromMode: "topOnly",
+        // 群模型: 走 route (按 chatroom id 路由到群策略), 非 sender 粒度。
+        groupModel: "route",
+        // 顶层 allowFrom 为空时不回落到群白名单
+        //   (本插件 DM 是 fail-closed: 空 = 拒绝所有, 见 configUiHints.allowFrom 说明)。
+        groupAllowFromFallbackToAllowFrom: false,
+        // 群白名单为空时给出警告 -- allowlist 策略下空名单 = 所有群被拒。
+        warnOnEmptyGroupSenderAllowlist: true,
+        // 历史配置迁移规则: 早期版本用过的旧键 -> 现行键。
+        //   仅声明, 不自动修复 (repairConfig 才改配置); 由 openclaw doctor 提示用户。
+        legacyConfigRules: [
+            {
+                path: ["channels", "wechatpadpro", "tokenKey"],
+                message: "tokenKey 现应放 plugins.entries.wechatpadpro.config.tokenKey (或 WECHATPRO_TOKEN_KEY env); 顶层残留键不会被读取。",
+            },
+            {
+                path: ["channels", "wechatpadpro", "groupPolicy"],
+                message: "groupPolicy 现由 accounts/<id>.json 的 per-account 配置管理; openclaw.json 顶层值仅作 default 账号兜底。",
+            },
+        ],
+        // 空白名单场景的补充警告 (在框架通用警告之外追加)。
+        collectEmptyAllowlistExtraWarnings: (params) => {
+            const out = [];
+            if (params.dmPolicy === "allowlist") {
+                out.push(params.prefix +
+                    " wechatpadpro 私聊为 allowlist 且白名单为空 -> 所有 DM 将被拒绝 (fail-closed)。用 npm run setup 添加 allowFrom。");
+            }
+            return out;
+        },
+    },
     reload: {
         noopPrefixes: ["channels.wechatpadpro"],
     },

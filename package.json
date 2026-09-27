@@ -9,7 +9,8 @@
     "test": "node --test tests/unit/*.test.mjs",
     "test:single": "node --test",
     "build": "tsc && node scripts/build-setup-wizard.mjs",
-    "build:setup-wizard": "node scripts/build-setup-wizard.mjs"
+    "build:setup-wizard": "node scripts/build-setup-wizard.mjs",
+    "test:cov": "node --test --experimental-test-coverage tests/unit/*.test.mjs"
   },
   "openclaw": {
     "extensions": [
