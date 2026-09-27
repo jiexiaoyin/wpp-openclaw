@@ -124,7 +124,7 @@ export class WechatpadproWebhookServer implements WppWebhookServer {
 
           // signature 验证: HMAC-SHA256 (等 vendor 公开算法)
           // v1.5.1 P2-fix (2026-08-25 21:30 老板拍 A): 加固防再犯
-          //   vendor (WPP_VENDOR_HOST.example.com) 当前不发 signature header
+          //   vendor 侧当前不发 signature header
           //   secret 配了 → 强制 verify → vendor 不发 signature → 401 → 0 入库 (P0 bug)
           //   secret 不配 → 跳过 verify → webhook 正常入库 (按 v1.1.10 permissive 设计)
           //   启用 HMAC 条件: vendor 公开签名算法 + env WECHATPRO_WEBHOOK_SECRET=真值

@@ -21,7 +21,7 @@ test('deploy 端 plugin.json 个人邮箱/密码无硬编码', async () => {
   assert.doesNotMatch(src, /sk-[a-zA-Z0-9]{20,}/, 'no hardcoded openai-like key');
 });
 
-test('deploy 端 vendor host 是 WPP_VENDOR_HOST.example.com (env 可覆盖)', async () => {
+test('deploy 端 vendor host 走 WPP_VENDOR_HOST (env 可覆盖, 不硬编码)', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('../../dist/util/safe-fetch.js', import.meta.url), 'utf-8');
   assert.match(src, /WPP_VENDOR_HOST/, 'must use WPP_VENDOR_HOST env var');

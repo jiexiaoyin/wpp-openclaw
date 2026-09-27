@@ -82,7 +82,7 @@ test('1b. coverThumbToken ⇄ parseThumbToken ⇄ buildXCXContent: 全链路透�
   // 真发一遍 (注入式上传器: 令牌路线**必须一次都不调它**)
   const calls = [];
   const xml = await buildXCXContent(
-    'USER_PLACEHOLDER',
+    'wxid_FIXTURE_SENDER',
     {
       title: c.title, desc: c.description, url: '', appId: c.appId,
       thumbUrl: token, pagePath: c.pagePath, username: c.username,

@@ -182,6 +182,18 @@ function resolveLlmTimeoutMs(msg: WppInboundMessage): number {
     return 5000;
   }
 }
+/**
+ * v1.9.3 (2026-09-27 审阅): bot 显示名解析 (intent-llm 提示词用)。
+ *   链: accounts cfg nickname → 中性兜底 "机器人" (缺失不抛错: 名字缺失不影响筛选器职能)。
+ *   与 resolveLlmModel 的区别: 模型错=静默失效必须抛错; 名字缺=退化为泛称即可。
+ */
+function resolveBotName(msg: WppInboundMessage): string {
+  try {
+    return getDefaultAccountRegistry().get(msg.accountId)?.config.nickname?.trim() || "机器人";
+  } catch {
+    return "机器人";
+  }
+}
 function resolveMinimaxApiKey(): string {
   return process.env.DEEPSEEK_API_KEY ?? process.env.MINIMAX_API_KEY ?? "";
 }
@@ -346,7 +358,7 @@ async function buildGroupContextFromDb(msg: WppInboundMessage): Promise<string |
         debug(`[WPP v1.3.2 EMBED-INTENT] command intent → LLM: "${triggerText.slice(0, 20)}"`);
         decision = await decideIntentWithLlm(
           { triggerText, candidates: msgs.map(toIntentCandidate) },
-          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
         );
       } else if (embedEnabled) {
         // 非命令 → embedding 快路径 (ms 级)
@@ -374,20 +386,20 @@ async function buildGroupContextFromDb(msg: WppInboundMessage): Promise<string |
           debug(`[WPP v1.3.2 EMBED-INTENT] embedding 无相关 → LLM 兜底`);
           decision = await decideIntentWithLlm(
             { triggerText, candidates: msgs.map(toIntentCandidate) },
-            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
           );
         }
         if (relevantIds === null) {
           debug(`[WPP v1.3.2 EMBED-INTENT] embedding 失败 → LLM 兜底`);
           decision = await decideIntentWithLlm(
             { triggerText, candidates: msgs.map(toIntentCandidate) },
-            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
           );
         }
       } else {
         decision = await decideIntentWithLlm(
           { triggerText, candidates: msgs.map(toIntentCandidate) },
-          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
         );
       }
 

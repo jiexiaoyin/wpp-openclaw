@@ -13,7 +13,7 @@
 #   见下)。等价于给公开仓换一个匿名信箱 jiexiaoyin@users.noreply.github.com。
 #
 # 追加发现 (同一次校验抓出): main 的**历史**里还有一处**内容**泄漏 —— 2026-08-20 的 commit 33c7a89 的
-#   USAGE.md 文档表格把真实群 ID 当示例写了 (`/addgroup 222222222@chatroom`), 后续提交已改掉
+#   USAGE.md 文档表格把真实群 ID 当示例写了 (`/addgroup <真实群ID>@chatroom`), 后续提交已改掉
 #   ⇒ **tip 是干净的, 所以从发布门看不出来** (门只查 tip)。因此本脚本也带 --replace-text:
 #   master 内容本就干净 (上午已重写) ⇒ 树 SHA 全不变; main 会有 1 个提交的树被改 (其余提交仅因父指针变化换 SHA,
 #   树逐字节不变)。**断言: 两分支 tip 的树 SHA 必须不变** —— 公开的当前发布内容零变化。
@@ -61,7 +61,7 @@ bash "$SANITIZER" --emit-filter-repo "$WORK-rules.txt" || die "规则生成失�
 chmod 600 "$WORK-rules.txt"
 # mailmap 的"旧邮箱"从**规则文件**里取 (它就是那条替换规则的键), 本脚本内不写任何邮箱字面量 ——
 #   否则脚本自己成了"要发布的文件里含敏感串"(本仓库已被这个模式坑过一次)。
-#   注意: 必须匹配"**键本身就是邮箱**"的规则 —— 光看 '含 @' 会先撞上 `@机器人` 这类中文规则。
+#   注意: 必须匹配"**键本身就是邮箱**"的规则 —— 光看 '含 @' 会先撞上 `@<bot昵称>` 这类中文规则。
 old_raw="$(grep -E '^regex:[A-Za-z0-9._%+-]+@[A-Za-z0-9.\\-]+==>' "$WORK-rules.txt" | head -1)" || true
 [ -n "$old_raw" ] || die "规则文件里找不到邮箱替换规则 (mailmap 无从生成)"
 key="${old_raw#regex:}"; key="${key%%==>*}"

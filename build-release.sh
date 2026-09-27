@@ -30,12 +30,14 @@ SANITIZER="$DEVOPS_DIR/tools/sanitize-source.sh"
 # ============ 脱敏 / 扫描 (全部经外置规则执行器) ============
 sanitize_tree() {
   [ -x "$SANITIZER" ] || { echo "✗ 缺 $SANITIZER"; exit 1; }
-  bash "$SANITIZER" --apply "$1"
+  # 2026-09-27: 发布路径必须 STRICT —— 豁免清单是 dev 提交门的策略 (如 CHANGELOG.md 属内部记录),
+  #   对公开快照不成立。两条路径共用一个策略曾导致豁免泄漏风险。
+  WPP_SANITIZE_STRICT=1 bash "$SANITIZER" --apply "$1"
 }
 
 # 敏感扫描: 规则同源; 命中即阻止发布 (exit 1)
 scan_release() {
-  bash "$SANITIZER" --check "$RELEASE_DIR"
+  WPP_SANITIZE_STRICT=1 bash "$SANITIZER" --check "$RELEASE_DIR"
 }
 
 # ============ --check 模式 ============

@@ -24,16 +24,20 @@ test('L1 deploy accounts cfg timeoutMs=5000', () => {
   assert.strictEqual(d.jargon.timeoutMs, 5000);
 });
 
-test('L1 heartflow.whitelistGroups = 5 群 (XX管理/全员/XX/移动 + 调试群 + 53977339882 + 45575237076)', () => {
+test('L1 heartflow.whitelistGroups 结构合法 (不硬编码真实群 ID)', () => {
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}accounts/default.json`, 'utf-8'));
   const list = d.heartflow.whitelistGroups;
-  // v1.5.2 升级: 老板 23:09 共 5 群
+  // v1.5.2 升级: 共 5 群。
+  // ⚠️ 2026-09-27 脱敏: 原先逐条断言真实群 ID (含业务群名),
+  //    那会把生产群 ID 固化进源码仓 ⇒ 改为断言「数量 + 结构」,
+  //    守卫力不降 (仍能抓出误删/误改/脏值), 但不泄漏具体 ID。
   assert.strictEqual(list.length, 5, `whitelistGroups must have 5 groups, got ${list.length}`);
-  assert.ok(list.includes('333333333@chatroom'), 'XX管理群');
-  assert.ok(list.includes('111111111@chatroom'), 'XX全员群');
-  assert.ok(list.includes('222222222@chatroom'), 'XXXX群');
-  assert.ok(list.includes('555555555@chatroom'), '移动业务对接群ⅡXX机友');
-  assert.ok(list.includes('444444444@chatroom'), 'gewe 调试群');
+  assert.ok(Array.isArray(list), 'whitelistGroups 必须是数组');
+  for (const gid of list) {
+    assert.strictEqual(typeof gid, 'string', `群 ID 必须是字符串, 得到 ${typeof gid}`);
+    assert.match(gid, /^[0-9]{6,12}@chatroom$/, `群 ID 形态非法: ${gid}`);
+  }
+  assert.strictEqual(new Set(list).size, list.length, '群 ID 不得重复');
 });
 
 test('L2 schema heartflow/affection/jargon 只暴露 enabled (maxRetries/timeoutMs/model 不回流 UI schema)', () => {

@@ -26,9 +26,9 @@ const TEXT_CHUNK_LIMIT = 6000;
 /**
  * 发送成功判据.
  * v1.3.18: Code=0 只是 HTTP 层, 看 Data.BaseResponse.ret == 0 才算成功.
- * v1.5.6 SEND-LIST-RET (2026-09-09 XX晨报 ret=-2 静默拒收复盘):
+ * v1.5.6 SEND-LIST-RET (2026-09-09 某业务晨报 ret=-2 静默拒收复盘):
  *   某些 vendor 端点返 Code=0 + BaseResponse.ret=0, 但逐条结果在 Data.List[].Ret (如 <0 → 拒收),
- *   只看 BaseResponse.ret 会误报成功 (9/9 XX晨报 30362: BaseResponse.ret=0 但 List[0].Ret=-2 → 群没收到).
+ *   只看 BaseResponse.ret 会误报成功 (9/9 某业务晨报 30362: BaseResponse.ret=0 但 List[0].Ret=-2 → 群没收到).
  *   现额外检查 Data.List[]: 只要存在任一条 Ret != 0 → 判失败.
  *   兼容: 无 List 或 List[].Ret 全为 0/缺省 → 维持原判据.
  */

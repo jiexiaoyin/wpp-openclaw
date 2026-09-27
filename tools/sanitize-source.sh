@@ -22,6 +22,10 @@
 set -uo pipefail
 
 RULES_FILE="${WPP_SANITIZE_RULES:-$HOME/.openclaw/wpp-sanitize.rules}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# 豁免清单 (2026-09-27): 非敏感, 随仓分发; 声明「测试样本/必需输入」不参与脱敏
+EXEMPT_FILE="${WPP_SANITIZE_EXEMPT:-$SCRIPT_DIR/sanitize-exempt.txt}"
+export WPP_SANITIZE_EXEMPT="$EXEMPT_FILE"
 
 usage() { sed -n '2,21p' "$0"; exit 2; }
 
@@ -46,7 +50,7 @@ if [ "$MODE" = "--check-history" ]; then
     n=$((n+1))
     rm -rf "$TMP/tree"; mkdir -p "$TMP/tree"
     git -C "$TARGET" archive "$sha" 2>/dev/null | tar -x -C "$TMP/tree" 2>/dev/null || true
-    if ! out="$(bash "$0" --check "$TMP/tree" 2>&1)"; then
+    if ! out="$(WPP_SANITIZE_EXEMPT="$EXEMPT_FILE" bash "$0" --check "$TMP/tree" 2>&1)"; then
       bad=$((bad+1)); echo "  ✗ $sha:" >&2; echo "$out" | tail -n +2 | head -3 | sed 's/^/      /' >&2
     fi
   done < <(git -C "$TARGET" rev-list "$REF")
@@ -73,6 +77,68 @@ import os, re, sys
 RULES = os.environ['WPP_RULES']; MODE = os.environ['WPP_MODE']; TARGET = os.environ['WPP_TARGET']
 SKIP_DIRS = {'.git', 'node_modules'}
 
+# ---- exemption list (2026-09-27): non-secret, ships with repo; see tools/sanitize-exempt.txt ----
+#   STRICT mode (WPP_SANITIZE_STRICT=1) disables ALL exemptions. Release paths (sync-github.sh,
+#   build-release.sh) MUST use strict: a dev-side exemption like CHANGELOG.md is legitimate for the
+#   dev commit gate, but is NOT legitimate for a public release snapshot. Sharing one policy across
+#   both gates was the original design flaw -- the same --check served opposite intents.
+import fnmatch
+STRICT = os.environ.get('WPP_SANITIZE_STRICT', '').strip() not in ('', '0', 'false')
+EXEMPT_FILE = os.environ.get('WPP_SANITIZE_EXEMPT', '').strip()
+exempts = []          # [(glob, reason)]
+if not STRICT and EXEMPT_FILE and os.path.isfile(EXEMPT_FILE):
+    with open(EXEMPT_FILE, encoding='utf-8') as fh:
+        for raw in fh:
+            line = raw.rstrip(chr(10)).rstrip(chr(13))
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            parts = line.split(chr(9))
+            glob = parts[0].strip()
+            reason = parts[1].strip() if len(parts) > 1 else ''
+            if glob:
+                exempts.append((glob, reason))
+
+# Repo root anchoring: exemptions are written relative to the repo root,
+# but callers may scan the repo, a subdir, or a single file. Anchor on the git
+# toplevel when available so the same glob works in every invocation.
+_REPO_ROOT = None
+def repo_root():
+    global _REPO_ROOT
+    if _REPO_ROOT is None:
+        d = os.getcwd()
+        found = None
+        while True:
+            if os.path.isdir(os.path.join(d, '.git')):
+                found = d
+                break
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+        _REPO_ROOT = found or os.getcwd()
+    return _REPO_ROOT
+
+def rel_for(root, path):
+    """Path for glob matching: repo-relative when possible, else scan-root-relative."""
+    try:
+        rel = os.path.relpath(os.path.abspath(path), repo_root())
+    except ValueError:
+        return path.replace(os.sep, '/')
+    rel = rel.replace(os.sep, '/')
+    if rel.startswith('../'):
+        base = root if os.path.isdir(root) else os.path.dirname(root)
+        try:
+            rel = os.path.relpath(path, base).replace(os.sep, '/')
+        except ValueError:
+            rel = path.replace(os.sep, '/')
+    return rel
+
+def is_exempt(rel):
+    for g, _reason in exempts:
+        if fnmatch.fnmatch(rel, g) or fnmatch.fnmatch(os.path.basename(rel), g):
+            return True
+    return False
+
 pairs, scans = [], []      # pairs: (pat, repl) ; scans: (pat, redaction-or-None)
 with open(RULES, encoding='utf-8') as fh:
     for raw in fh:
@@ -88,15 +154,23 @@ with open(RULES, encoding='utf-8') as fh:
 if not pairs:
     sys.exit(f'✗ 规则文件里没有任何替换规则: {RULES}')
 print(f'  规则: {RULES} (替换 {len(pairs)} 条 / 只查 {len(scans)} 条)', file=sys.stderr)
+if STRICT:
+    print('  豁免: **STRICT 模式 — 豁免清单已禁用 (发布路径)**', file=sys.stderr)
+elif exempts:
+    print(f'  豁免: {EXEMPT_FILE} ({len(exempts)} 条)', file=sys.stderr)
 
 def files(root):
     if os.path.isfile(root):          # 允许直接查单个文件 (如 git log 导出的提交信息)
-        yield root
+        if not is_exempt(rel_for(root, root)):
+            yield root
         return
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for fn in filenames:
-            yield os.path.join(dirpath, fn)
+            p = os.path.join(dirpath, fn)
+            if is_exempt(rel_for(root, p)):
+                continue
+            yield p
 
 def is_binary(path):
     try:

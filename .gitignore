@@ -6,3 +6,21 @@ coverage/               # 测试覆盖率报告
 
 # dev 工具/脚本
 build-release.sh.deploy # dev-only deploy wrapper (如有)
+
+# 2026-09-27 审阅加固: 泄漏源物理阻断 (A 方案)
+#   这些路径此前被 git 跟踪, 导致 .gitignore 规则实际无效 (对已跟踪文件不生效)。
+#   已用 git rm --cached 脱离跟踪; 此处的规则防再次被 git add 带入。
+#   判据: 任何分支直推都不得带出真实 wxid/群 ID/生产配置/含敏编译产物。
+accounts/default.json  # 真实运行配置 (真 wxid/管理员/群白名单); 只发布 .example
+dist/                  # tsc 编译产物 (含内联真实 URL/ID), 不是源码
+dist-release/          # 同上 (重复声明, 原规则被跟踪状态架空)
+release/               # 同上
+coverage/              # 测试覆盖率报告 (HTML 内联源码文本)
+
+# 2026-09-27 审阅加固: src/ 下的编译产物 (历史残留, 已被跟踪)
+#   本仓 rootDir=./src outDir=./dist ⇒ 产物只应出现在 dist/。
+#   现状: 35 个 .js 落在 src/ 且已被提交 (每个都有对应 .ts, dist/ 已完整覆盖, 无一处是手写)。
+#   风险: 改 .ts 忘 build 时, src/*.js 是被误信的过期逻辑; 且绕过 dist/ 的脱敏路径。
+#   已用 git rm --cached 脱离跟踪; 此规则防再次被带入。
+#   ⚠️ 只在 root 层忽略: 用 /src/**/*.js 锚定, 避免误伤未来合法子目录。
+src/**/*.js

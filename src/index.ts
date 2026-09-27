@@ -1774,8 +1774,8 @@ export const plugin = {
   configUiHints: {
     tokenKey: { label: "WeChatPadPro TokenKey", sensitive: true, help: "vendor 后台获取; 也可用 WECHATPRO_TOKEN_KEY env" },
     authcode: { label: "授权码 authcode", sensitive: true, help: "vendor 启动时生成; 也可用 WECHATPRO_AUTHCODE env" },
-    apiBaseUrl: { label: "API Base URL", placeholder: "https://WPP_VENDOR_HOST.example.com", help: "vendor HTTP API 地址" },
-    wsUrl: { label: "WebSocket URL", placeholder: "wss://WPP_VENDOR_HOST.example.com/ws/sync", help: "vendor WS 推送地址" },
+    apiBaseUrl: { label: "API Base URL", placeholder: "https://<vendor-host>", help: "vendor HTTP API 地址 (见 DEPLOY.md)" },
+    wsUrl: { label: "WebSocket URL", placeholder: "wss://<vendor-host>/ws/sync", help: "vendor WS 推送地址 (见 DEPLOY.md)" },
     allowFrom: { label: "私聊白名单 (逗号分隔)", help: "空 = 拒绝所有 DM (fail-closed)" },
     groupPolicy: { label: "群聊策略", help: "open/disabled/allowlist/closed" },
     groupAllowFrom: { label: "群白名单 (逗号分隔, @chatroom)", help: "groupPolicy=allowlist 时用" },
