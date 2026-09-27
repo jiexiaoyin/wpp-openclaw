@@ -1718,6 +1718,53 @@ export const wppChannelPlugin = {
     },
   },
 
+  // 2026-09-27 OPENCLAW-DOCTOR: 接入 OpenClaw 2026.9.6 的 doctor 契约
+  //   背景: 审阅发现插件只实现 ChannelPlugin 必填 4 项 + 9 个可选项 (共 34 可选)。
+  //         doctor 缺失 -> openclaw doctor 无法诊断本 channel 的配置问题,
+  //         运维只能手写 ps/curl/grep 排查 (本会话调试时即如此)。
+  //   本适配器是纯声明式的: 告诉框架「本 channel 的配置长什么样、边界在哪」,
+  //   由框架自己的 doctor 引擎据此检查, 本插件不重复实现校验逻辑。
+  doctor: {
+    // 私聊白名单只认顶层 (channels.wechatpadpro.allowFrom)。
+    //   本插件不读嵌套账号级 allowFrom 做 DM 准入 -> 声明 topOnly 让 doctor 不误报。
+    dmAllowFromMode: "topOnly",
+    // 群模型: 走 route (按 chatroom id 路由到群策略), 非 sender 粒度。
+    groupModel: "route",
+    // 顶层 allowFrom 为空时不回落到群白名单
+    //   (本插件 DM 是 fail-closed: 空 = 拒绝所有, 见 configUiHints.allowFrom 说明)。
+    groupAllowFromFallbackToAllowFrom: false,
+    // 群白名单为空时给出警告 -- allowlist 策略下空名单 = 所有群被拒。
+    warnOnEmptyGroupSenderAllowlist: true,
+    // 历史配置迁移规则: 早期版本用过的旧键 -> 现行键。
+    //   仅声明, 不自动修复 (repairConfig 才改配置); 由 openclaw doctor 提示用户。
+    legacyConfigRules: [
+      {
+        path: ["channels", "wechatpadpro", "tokenKey"],
+        message:
+          "tokenKey 现应放 plugins.entries.wechatpadpro.config.tokenKey (或 WECHATPRO_TOKEN_KEY env); 顶层残留键不会被读取。",
+      },
+      {
+        path: ["channels", "wechatpadpro", "groupPolicy"],
+        message:
+          "groupPolicy 现由 accounts/<id>.json 的 per-account 配置管理; openclaw.json 顶层值仅作 default 账号兜底。",
+      },
+    ],
+    // 空白名单场景的补充警告 (在框架通用警告之外追加)。
+    collectEmptyAllowlistExtraWarnings: (params: {
+      channelName: string;
+      dmPolicy?: string;
+      prefix: string;
+    }) => {
+      const out: string[] = [];
+      if (params.dmPolicy === "allowlist") {
+        out.push(
+          params.prefix +
+            " wechatpadpro 私聊为 allowlist 且白名单为空 -> 所有 DM 将被拒绝 (fail-closed)。用 npm run setup 添加 allowFrom。",
+        );
+      }
+      return out;
+    },
+  },
   reload: {
     noopPrefixes: ["channels.wechatpadpro"],
   },
