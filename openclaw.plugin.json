@@ -2,7 +2,7 @@
   "name": "wechatpadpro",
   "id": "wechatpadpro",
   "version": "1.9.2",
-  "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 323 paths API 覆盖 (新 vendor v09102, 含朋友圈批量导出/自动跟发、好友自动通过、运动排行); v1.3.75 HEARTFLOW 心流主动回复 (未@群消息小模型5维打分自动参与); v1.3.76 JARGON 群黑话挖掘 (自主学习, AI 可查群黑话含义); v1.3.77 AFFECTION 好感度/社交关系系统 (交互分类→好感度+情绪注入回复风格) + AI-UNIFY 统一判断模型配置; v1.3.78 完整审阅加固 (webhook token 强制 / 群白名单 fail-closed / WS v1 解析 / 去重账号隔离 / 心流冷却 / jargon 计数 / affection 去单字误判 / WS 长退避 / synckey 崩溃 / DB 重试 / sync 锁); v1.3.79 三功能 filehelper 命令 (/heartflow /affection /jargon 开关) + 账号专属配置热生效.",
+  "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin v1.9.2. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件/小程序卡片; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 323 paths API 覆盖 (vendor v09102, 含朋友圈批量导出/自动跟发、好友自动通过、运动排行). HEARTFLOW 心流 (未@群消息小模型多维持打分自动参与 + 发言预算/群画像/分层/观测复盘/重复内容闸/占比外环); JARGON 群黑话挖掘 (自主学习, AI 可查群黑话含义); AFFECTION 好感度/社交关系系统 + AI-UNIFY 统一判断模型. v1.9.x 修复: 红包/接龙关键词撞车 (结构性识别优先于关键词启发式) + 纯文本\"红包\"不再误静默 (关键词仅在卡片类 msgType=49 采信). 安全加固: webhook token 强制 / 群白名单 fail-closed / WS 长退避 / 去重账号隔离 / DB 重试 / 时间口径全仓统一走 ts.",
   "kind": "plugin",
   "configUiHints": {
     "tokenKey": {
@@ -17,12 +17,12 @@
     },
     "apiBaseUrl": {
       "label": "API Base URL",
-      "placeholder": "https://WPP_VENDOR_HOST.example.com",
+      "placeholder": "https://<vendor-host>",
       "help": "vendor HTTP API 地址"
     },
     "wsUrl": {
       "label": "WebSocket URL",
-      "placeholder": "wss://WPP_VENDOR_HOST.example.com/ws/sync",
+      "placeholder": "wss://<vendor-host>/ws/sync",
       "help": "vendor WS 推送地址"
     },
     "allowFrom": {
@@ -53,7 +53,7 @@
   "channelConfigs": {
     "wechatpadpro": {
       "label": "WeChatPadPro",
-      "description": "WeChatPadPro 微信 Pad 协议 HTTP API 适配 (vendor: knowhub.cloud adminmaxapi). 部署在 /opt/1panel/docker/compose/WechatPadPro/, 反代 https://WPP_VENDOR_HOST.example.com/api/.",
+      "description": "WeChatPadPro 微信 Pad 协议 HTTP API 适配 (vendor 见 DEPLOY.md; 反代后走自有域名). 部署在 /opt/1panel/docker/compose/WechatPadPro/, 反代见 DEPLOY.md.",
       "schema": {
         "type": "object",
         "additionalProperties": true,
@@ -80,7 +80,7 @@
             "items": {
               "type": "string"
             },
-            "description": "管理员 wxid 列表 (默认 [selfWxid]; 限频/脱敏/优先回复豁免)"
+            "description": "管理员 wxid 列表 (默认 [selfWxid])。已落地用法: 朋友圈发布白名单 (friendCirclePublishAllowFrom 缺省时回退此列表)。限频/脱敏/优先回复豁免尚未接入"
           },
           "allowFrom": {
             "type": "array",
@@ -167,7 +167,7 @@
       "uiHints": {
         "nickname": {
           "label": "Bot 昵称",
-          "placeholder": "XX小助理"
+          "placeholder": "示例昵称"
         },
         "selfWxid": {
           "label": "当前微信 wxid (只读身份)",

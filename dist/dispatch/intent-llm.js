@@ -133,9 +133,14 @@ export async function decideIntentWithLlm(input, opts) {
     //   链: opts.model (从 accounts cfg 注入) → schema default (openclaw.plugin.json llmIntentModel.default)
     //   缺失抛错 (跟 heartflow.ts:475 同样的设计哲学)
     const model = opts.model ?? (() => { throw new Error("[WPP v1.5.0 P2-fix] intent-llm model unresolved. 必须从 accounts cfg (accounts/<id>.json:llmIntentModel) 或 schema default (openclaw.plugin.json channelConfigs.wechatpadpro.schema.properties.llmIntentModel.default) 提供. plugin 不再 hardcode fallback. 参见 https://docs.openclaw.ai"); })();
+    // v1.9.3 (2026-09-27 审阅): bot 显示名同样消除 hardcode
+    //   链: opts.botName (从 accounts cfg nickname 注入) → 中性兜底 "机器人"
+    //   与 model 不同: model 缺失必须抛错 (调错模型=静默失效), 而名字缺失退化为泛称
+    //   不影响筛选器职能 (它只判断「要不要参考上下文」, 不需要知道自己的名字)
+    const botName = opts.botName?.trim() || "机器人";
     const timeoutMs = opts.timeoutMs ?? 5000;
     const maxTokens = opts.maxTokens ?? 200;
-    const systemPrompt = "你是微信机器人的群聊上下文筛选器。用户在某群 @ 你发了一条消息。\n" +
+    const systemPrompt = `你是微信机器人${botName}的群聊上下文筛选器。用户在某群 @ 你发了一条消息。\n` +
         "下面给出: (1) 触发消息原文; (2) 该用户最近的候选消息列表(每条含 msgId/类型/摘要)。\n" +
         "判断要正确回答这条 @ 消息, 是否需要参考候选消息:\n" +
         '- 无需任何候选(问候/闲聊/自足提问/与候选无关) → 只返回 {"action":"no-op"}\n' +
