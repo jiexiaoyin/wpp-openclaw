@@ -26,7 +26,7 @@ set -e
 
 cd "$(dirname "$0")"
 
-GIT_REPO="https://github.com/jiexiaoyin/wpp-openclaw.git"
+GIT_REPO="git@github.com:jiexiaoyin/wpp-openclaw.git"   # 2026-09-27: 改走 SSH (本机 key 已验证可用); HTTPS 无 credential store 会挂住
 MIRROR_DIR="${WPP_GITHUB_MIRROR:-/root/git/wpp-openclaw}"   # 本地镜像 clone
 # v1.4.0 12:53 老板拍板 C: 移除硬编码凭证. jiexiaoyin 身份已在本地镜像 .git/config 里 (按 6-08 23:49 + 8-09 06-21 偏好, 避免 .netrc 等复杂凭证管理, 依赖 git 原生机制)
 TS="$(date +%Y%m%d)"
