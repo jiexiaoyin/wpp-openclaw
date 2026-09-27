@@ -1718,6 +1718,49 @@ export const wppChannelPlugin = {
     },
   },
 
+  // 2026-09-27 OPENCLAW-DIRECTORY: 接入 OpenClaw 2026.9.6 的 directory 契约
+  //   背景: 承接 status/doctor 契约接入。directory 缺失 -> OpenClaw 无法识别
+  //         本 channel 的身份(self)与群目录(listGroups), Agent 寻址/群枚举受限。
+  //   数据源: AccountRegistry (selfWxid 由 setVendorAuth 写入) + 账号群配置 (groupAllowFrom/blacklistGroups)。
+  //   本适配器为**只读** (仅 self / listGroups 两个方法), 不改任何状态。
+  directory: {
+    // 我是谁: 返回本账号的 wxid 身份。Agent 需要知道自己绑的是哪个微信号。
+    self: async ({ accountId }: { accountId?: string | null }) => {
+      const reg = getDefaultAccountRegistry();
+      const id = accountId || reg.listIds()[0];
+      if (!id) return null;
+      const st = reg.get(id);
+      if (!st) return null;
+      const wxid = st.selfWxid || "";
+      if (!wxid) return null; // 未登录/vendor 未鉴权 -> 无身份可报, 返回 null 而非空条目
+      return {
+        kind: "user",
+        id: wxid,
+        name: st.config?.nickname || wxid,
+        handle: wxid,
+      };
+    },
+    // 群目录: 枚举本账号已知的群 (来源: 账号配置的群白名单 + 黑名单)。
+    //   注意: 这是**配置已知**的群, 不是微信侧全量群列表
+    //         (全量需 vendor API 拉取, 属运行期动作, 不放入只读目录适配器)。
+    listGroups: async ({ accountId }: { accountId?: string | null }) => {
+      const reg = getDefaultAccountRegistry();
+      const id = accountId || reg.listIds()[0];
+      if (!id) return [];
+      const st = reg.get(id);
+      if (!st) return [];
+      const cfg = st.config;
+      if (!cfg) return [];
+      const ids = new Set<string>();
+      for (const x of cfg.groupAllowFrom ?? []) if (x) ids.add(x);
+      for (const x of cfg.blacklistGroups ?? []) if (x) ids.add(x);
+      return [...ids].map((gid) => ({
+        kind: "group" as const,
+        id: gid,
+        name: gid, // 微信群名需 API 拉取; 此处用 id 保底, 不编造
+      }));
+    },
+  },
   // 2026-09-27 OPENCLAW-DOCTOR: 接入 OpenClaw 2026.9.6 的 doctor 契约
   //   背景: 审阅发现插件只实现 ChannelPlugin 必填 4 项 + 9 个可选项 (共 34 可选)。
   //         doctor 缺失 -> openclaw doctor 无法诊断本 channel 的配置问题,
