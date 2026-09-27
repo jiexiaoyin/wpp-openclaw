@@ -1665,6 +1665,59 @@ export const wppChannelPlugin = {
   //     会把编辑变回整 channel 重启 (=掉线)。
   //   - 不用 accountScopedRestart: extractAccountIdFromPath 对 accountId="default" 返回 null
   //     (特判整 channel 重启), default 账号无法被账号级重启隔离。
+  // 2026-09-27 OPENCLAW-STATUS: 接入 OpenClaw 2026.9.6 的 status 契约
+  //   背景: 审阅发现插件仅实现 ChannelPlugin 必填字段 + 8 个可选项 (共 34 可选),
+  //         status 缺失 -> openclaw status 看不到本 channel 的账号健康度。
+  //   数据源: AccountRegistry (get/listIds) + WppAccountState (vendorAuthed/selfWxid/ws/webhook)。
+  //   字段语义对齐 ChannelAccountSnapshot (见 OpenClaw types.core)。
+  status: {
+    defaultRuntime: {
+      accountId: "default",
+      configured: false,
+      running: false,
+      connected: false,
+    },
+    buildAccountSnapshot: ({ account }: { account?: { accountId?: string } }) => {
+      const accountId = account?.accountId ?? "";
+      const st = getDefaultAccountRegistry().get(accountId);
+      if (!st) {
+        return {
+          accountId,
+          configured: false,
+          running: false,
+          connected: false,
+          statusState: "stopped",
+        };
+      }
+      const wsUp = Boolean(st.wsClient);
+      const webhookUp = Boolean(st.webhookServer);
+      const connected = wsUp && webhookUp;
+      return {
+        accountId,
+        name: st.selfWxid || accountId,
+        enabled: true,
+        configured: true,
+        running: true,
+        connected,
+        statusState: connected ? "connected" : "degraded",
+        lifecycle: connected ? "ready" : "recovering",
+        lastError: !st.vendorAuthed
+          ? "vendor authcode 未通过"
+          : connected ? null : "ws/webhook 未就绪",
+      };
+    },
+    buildChannelSummary: () => {
+      const reg = getDefaultAccountRegistry();
+      const ids = reg.listIds();
+      let connected = 0;
+      for (const id of ids) {
+        const st = reg.get(id);
+        if (st && st.wsClient && st.webhookServer) connected++;
+      }
+      return { accounts: ids.length, connected, degraded: ids.length - connected };
+    },
+  },
+
   reload: {
     noopPrefixes: ["channels.wechatpadpro"],
   },
