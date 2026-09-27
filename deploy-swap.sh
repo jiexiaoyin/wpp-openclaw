@@ -27,10 +27,13 @@ set -e
 # ============ 参数解析 ============
 DRY_RUN=0
 FORCE=0
+# v1.6.7: --skip-build / SKIP_BUILD=1 复用当前 dist/ (dry-run 验证脚本本身时用, 避免重建源码仓)
+SKIP_BUILD="${SKIP_BUILD:-0}"
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --force) FORCE=1 ;;
+    --skip-build) SKIP_BUILD=1 ;;
     --help|-h)
       sed -n '2,28p' "$0"
       exit 0
@@ -75,22 +78,35 @@ warn() { echo -e "${YELLOW}⚠${NC} $1"; }
 fail() { echo -e "${RED}✗${NC} $1"; exit 1; }
 
 # ============ 步骤 1: 备份原 prod (如果存在) ============
+# v1.6.7 (2026-09-26) 修复: 旧版 DRY_RUN 只被最后那句 echo 使用 (第 182 行), 写操作全都不看它
+#   ⇒ `--dry-run` 实际执行**完整真实部署** (备份/rm -rf/拷贝/重启 gateway), 却打印"没真写任何文件",
+#     且因 gate 条件含 DRY_RUN 而同时绕过 "必须刚跑过 deploy.sh" 的防呆 —— 双重危险 + 谎报。
+#   现在每个写步骤都真正由 DRY_RUN 把关。
 step "[1/7] 备份原 prod (如果存在) → $BACKUP_DIR"
-mkdir -p "$BACKUP_DIR"
-if [ -d "$DEPLOY" ]; then
-  cp -a "$DEPLOY" "$BACKUP_DIR/extensions-wechatpadpro/" && \
-    echo "    备份 $DEPLOY → $BACKUP_DIR/extensions-wechatpadpro/"
+if [ "$DRY_RUN" = "1" ]; then
+  echo "    [dry-run] 跳过 (不写 $BACKUP_DIR)"
 else
-  echo "    原 $DEPLOY 不存在, 跳过 (首次部署)"
+  mkdir -p "$BACKUP_DIR"
+  if [ -d "$DEPLOY" ]; then
+    cp -a "$DEPLOY" "$BACKUP_DIR/extensions-wechatpadpro/" && \
+      echo "    备份 $DEPLOY → $BACKUP_DIR/extensions-wechatpadpro/"
+  else
+    echo "    原 $DEPLOY 不存在, 跳过 (首次部署)"
+  fi
+  # 备份 env 增量 (虽然主 deploy.sh 已备份, 这里再加一层)
+  [ -f "$GATEWAY_ENV" ] && cp "$GATEWAY_ENV" "$BACKUP_DIR/gateway.systemd.env"
 fi
-# 备份 env 增量 (虽然主 deploy.sh 已备份, 这里再加一层)
-[ -f "$GATEWAY_ENV" ] && cp "$GATEWAY_ENV" "$BACKUP_DIR/gateway.systemd.env"
 
 # ============ 步骤 2: tsc build ============
+# (dry-run 也会重建 dev dist/ —— 只写源码仓, 不写 prod, 用于验证编译通过)
 step "[2/7] tsc build"
 cd "$DEVOPS_DIR"
-rm -rf dist
-npx tsc
+if [ "$SKIP_BUILD" = "1" ]; then
+  echo "    跳过 (SKIP_BUILD=1), 复用当前 dist/"
+else
+  rm -rf dist
+  npx tsc
+fi
 JS_COUNT=$(find dist -name "*.js" 2>/dev/null | wc -l)
 [ "$JS_COUNT" -eq 0 ] && fail "tsc 编译产物 0 个, 中止"
 echo "    编译产物: $JS_COUNT .js"
@@ -101,31 +117,46 @@ OPENCLAW_JSON="${OPENCLAW_ROOT}/openclaw.json"
 if [ ! -f "$OPENCLAW_JSON" ]; then
   fail "openclaw.json 不存在: $OPENCLAW_JSON (设置 OPENCLAW_ROOT env 指向你的 OpenClaw 配置)"
 fi
-if ! grep -q "wechatpadpro" "$OPENCLAW_JSON"; then
-  jq --arg id "wechatpadpro" '.plugins.allow += [$id] | .plugins.entries[$id] = { enabled: true }' \
-    "$OPENCLAW_JSON" > /tmp/openclaw.json.new && \
-    mv /tmp/openclaw.json.new "$OPENCLAW_JSON" && \
-    chmod 600 "$OPENCLAW_JSON" && \
-    echo "    plugins.allow + plugins.entries.wechatpadpro 已注入"
+if [ "$DRY_RUN" = "1" ]; then
+  echo "    [dry-run] 跳过 openclaw.json / env 写入 (只读检查)"
+  grep -q "wechatpadpro" "$OPENCLAW_JSON" && echo "    (检查) plugins.allow 已有 wechatpadpro"
 else
-  echo "    plugins.allow 已有 wechatpadpro, 跳过"
-fi
-
-# GATEWAY_ENV 是这套 OpenClaw 的 systemd env 文件; 不存在 (其他部署方式) 则跳过注入
-if [ -f "$GATEWAY_ENV" ]; then
-  if ! grep -q "WECHATPRO_DB_PASSWORD" "$GATEWAY_ENV"; then
-    echo "WECHATPRO_DB_PASSWORD=dryrun-placeholder-CHANGE-ME" >> "$GATEWAY_ENV"
-    chmod 600 "$GATEWAY_ENV"
-    warn "已注入 WECHATPRO_DB_PASSWORD=placeholder, 部署后必须改成真密码!"
+  if ! grep -q "wechatpadpro" "$OPENCLAW_JSON"; then
+    jq --arg id "wechatpadpro" '.plugins.allow += [$id] | .plugins.entries[$id] = { enabled: true }' \
+      "$OPENCLAW_JSON" > /tmp/openclaw.json.new && \
+      mv /tmp/openclaw.json.new "$OPENCLAW_JSON" && \
+      chmod 600 "$OPENCLAW_JSON" && \
+      echo "    plugins.allow + plugins.entries.wechatpadpro 已注入"
   else
-    echo "    WECHATPRO_DB_PASSWORD 已存在, 跳过"
+    echo "    plugins.allow 已有 wechatpadpro, 跳过"
   fi
-else
-  warn "gateway env 文件不存在 ($GATEWAY_ENV) — 跳过注入, 请自行设置 WECHATPRO_DB_PASSWORD 等环境变量"
+
+  # GATEWAY_ENV 是这套 OpenClaw 的 systemd env 文件; 不存在 (其他部署方式) 则跳过注入
+  if [ -f "$GATEWAY_ENV" ]; then
+    if ! grep -q "WECHATPRO_DB_PASSWORD" "$GATEWAY_ENV"; then
+      echo "WECHATPRO_DB_PASSWORD=dryrun-placeholder-CHANGE-ME" >> "$GATEWAY_ENV"
+      chmod 600 "$GATEWAY_ENV"
+      warn "已注入 WECHATPRO_DB_PASSWORD=placeholder, 部署后必须改成真密码!"
+    else
+      echo "    WECHATPRO_DB_PASSWORD 已存在, 跳过"
+    fi
+  else
+    warn "gateway env 文件不存在 ($GATEWAY_ENV) — 跳过注入, 请自行设置 WECHATPRO_DB_PASSWORD 等环境变量"
+  fi
 fi
 
 # ============ 步骤 4: 拷贝 artifacts ============
 step "[4/7] 拷贝 dist/ + manifest + package.json + node_modules + config + accounts + db"
+if [ "$DRY_RUN" = "1" ]; then
+  echo "    [dry-run] 跳过 rm -rf $DEPLOY + 拷贝; 只预检源仓文件"
+  [ -f "$DEVOPS_DIR/db/schema.sql" ] || fail "源仓缺 db/schema.sql — 真实部署会静默丢掉建表/加列"
+  for f in config.json openclaw.plugin.json package.json; do
+    [ -e "$DEVOPS_DIR/$f" ] || fail "源仓缺 $f"
+  done
+  [ -d "$DEVOPS_DIR/dist" ] || fail "源仓缺 dist/ (先跑 tsc build)"
+  [ -d "$DEVOPS_DIR/accounts" ] || fail "源仓缺 accounts/"
+  echo "    源仓预检通过 (dist/manifest/package.json/config.json/accounts/db 齐)"
+else
 rm -rf "$DEPLOY"
 mkdir -p "$DEPLOY"
 cp -a dist "$DEPLOY/"
@@ -145,15 +176,22 @@ if [ ! -f "$DEPLOY/db/schema.sql" ]; then
   fail "拷贝后缺 $DEPLOY/db/schema.sql — 部署会静默丢掉建表/加列 (源码仓 db/schema.sql 在吗?)"
 fi
 echo "    $DEPLOY 总量: $(du -sh "$DEPLOY" | cut -f1)"
+fi
 
 # ============ 步骤 5: jiti 缓存清理 ============
 step "[5/7] jiti 缓存清理"
-rm -rf "$DEPLOY/node_modules/.cache/jiti" 2>/dev/null
-echo "    jiti cache cleared"
+if [ "$DRY_RUN" = "1" ]; then
+  echo "    [dry-run] 跳过"
+else
+  rm -rf "$DEPLOY/node_modules/.cache/jiti" 2>/dev/null
+  echo "    jiti cache cleared"
+fi
 
 # ============ 步骤 6: restart gateway ============
 step "[6/7] restart gateway (服务: $GATEWAY_SERVICE)"
-if systemctl --user list-unit-files 2>/dev/null | grep -q "^${GATEWAY_SERVICE}\."; then
+if [ "$DRY_RUN" = "1" ]; then
+  echo "    [dry-run] 跳过 restart"
+elif systemctl --user list-unit-files 2>/dev/null | grep -q "^${GATEWAY_SERVICE}\."; then
   systemctl --user restart "$GATEWAY_SERVICE"
   sleep 5
   systemctl --user is-active "$GATEWAY_SERVICE" > /dev/null || fail "gateway 重启失败 (服务: $GATEWAY_SERVICE)"
@@ -164,8 +202,10 @@ fi
 
 # ============ 步骤 7: verify (journalctl 仅当 systemd user 服务存在时可用) ============
 step "[7/7] verify (plugin registered + 无 error)"
-sleep 5
-if systemctl --user list-unit-files 2>/dev/null | grep -q "^${GATEWAY_SERVICE}\."; then
+if [ "$DRY_RUN" = "1" ]; then
+  echo "    [dry-run] 跳过 (没有新起的 gateway 可验)"
+elif systemctl --user list-unit-files 2>/dev/null | grep -q "^${GATEWAY_SERVICE}\."; then
+  sleep 5
   PLUGIN_LOG=$(journalctl --user -u "$GATEWAY_SERVICE" -n 50 --no-pager 2>&1 | grep "wppChannelPlugin registered" | tail -1)
   [ -n "$PLUGIN_LOG" ] && echo "    ✓ $PLUGIN_LOG" || warn "    ✗ plugin registered log 未找到"
 
@@ -180,8 +220,8 @@ fi
 
 echo ""
 if [ "$DRY_RUN" = "1" ]; then
-  echo -e "${YELLOW}DRY-RUN: 上面只是 plan, 没真写任何文件${NC}"
-  echo "  真实 deploy: bash deploy-swap.sh --force (绕过 gate)"
+  echo -e "${YELLOW}DRY-RUN: 上面是 plan, 未写任何文件 (备份/openclaw.json/env/拷贝/重启 已全跳过)${NC}"
+  echo "  真实 deploy: bash deploy-swap.sh --force  (gate 只认 --force, 没有 marker 文件)"
 else
   echo -e "${GREEN}✅ deploy-swap done${NC}"
   echo ""

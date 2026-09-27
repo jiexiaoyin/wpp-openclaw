@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# WPP 脱敏门 (2026-09-27) — 提交前强制扫描, 任何分支都过这一关。
+#
+# 为什么要有这道门: 2026-09-26 事故证明「只查发布通道」= 假安全 —— 绕过 sync 脚本手工 push,
+#   或从非发布分支直推, 都会漏。本钩子挂在 git 层, 与「提交到哪个分支」无关。
+#
+# 扫描范围 (2026-09-27 修正): **只看将要提交的内容** (git diff --cached)。
+#   初版扫工作区全量 ⇒ 已 git rm --cached 但本地保留的产物 (coverage/tmp、dist/*.js) 仍被扫到
+#   ⇒ 门永远红 ⇒ 会诱导 --no-verify。判据必须与「本次提交会不会带出去」对齐。
+#
+# 安装: git config core.hooksPath tools/git-hooks   (本目录随仓库分发, 见 DEV.md)
+set -uo pipefail
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$ROOT" || exit 0
+
+CHECKER="$ROOT/tools/sanitize-source.sh"
+[ -f "$CHECKER" ] || { echo "warning: 脱敏执行器缺失, 跳过 (tools/sanitize-source.sh)" >&2; exit 0; }
+
+# 取本次暂存的文件 (含新增/修改/改名; 已删除的不必扫)
+mapfile -t FILES < <(git diff --cached --name-only --diff-filter=ACMR)
+if [ "${#FILES[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+LOG="/tmp/wpp-precommit-sanitize.log"
+: >"$LOG"
+BAD=0
+for f in "${FILES[@]}"; do
+  [ -f "$f" ] || continue
+  if ! out="$(bash "$CHECKER" --check "$f" 2>&1)"; then
+    BAD=$((BAD+1))
+    echo "$out" >>"$LOG"
+  fi
+done
+
+if [ "$BAD" -eq 0 ]; then
+  exit 0
+fi
+
+echo "" >&2
+echo "✗ 提交被拒绝: 本次暂存内容有脱敏命中 ($BAD 个文件)" >&2
+echo "  规则: \$HOME/.openclaw/wpp-sanitize.rules" >&2
+echo "  豁免: tools/sanitize-exempt.txt" >&2
+echo "" >&2
+grep -E '^✗|^  ' "$LOG" 2>/dev/null | grep -vE '^  规则|^  豁免' | head -20 >&2 || true
+echo "" >&2
+echo "  完整日志: $LOG" >&2
+echo "  若确属误报 (如内部记录/测试样本), 加豁免到 tools/sanitize-exempt.txt," >&2
+echo "  而非 --no-verify —— 后者会让这道门对所有人失效。" >&2
+echo "" >&2
+exit 1

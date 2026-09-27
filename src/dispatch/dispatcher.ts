@@ -33,6 +33,7 @@ import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
 import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
 import { recordRawMessage, resolveHfLearning, HF_LEARNING_DEFAULTS, type HeartflowConfig } from "../inbound/heartflow.js";
 import { persistHfSendOutcome } from "../inbound/heartflow-learn.js";
+import { checkHfRepeat, logHfRepeatSkip, resolveHfDedupeCfg } from "../inbound/heartflow-dedupe.js";
 import { getGroupMood, buildMoodSystemPrompt } from "../inbound/affection.js";
 // re-export (兼容旧测试/外部引用) — classifyGroupIntent/GroupIntent 定义在 intent-llm.ts
 export { classifyGroupIntent, type GroupIntent } from "./intent-llm.js";
@@ -179,6 +180,18 @@ function resolveLlmTimeoutMs(msg: WppInboundMessage): number {
     return getDefaultAccountRegistry().get(msg.accountId)?.config.llmIntentTimeoutMs ?? 5000;
   } catch {
     return 5000;
+  }
+}
+/**
+ * v1.9.3 (2026-09-27 审阅): bot 显示名解析 (intent-llm 提示词用)。
+ *   链: accounts cfg nickname → 中性兜底 "机器人" (缺失不抛错: 名字缺失不影响筛选器职能)。
+ *   与 resolveLlmModel 的区别: 模型错=静默失效必须抛错; 名字缺=退化为泛称即可。
+ */
+function resolveBotName(msg: WppInboundMessage): string {
+  try {
+    return getDefaultAccountRegistry().get(msg.accountId)?.config.nickname?.trim() || "机器人";
+  } catch {
+    return "机器人";
   }
 }
 function resolveMinimaxApiKey(): string {
@@ -345,7 +358,7 @@ async function buildGroupContextFromDb(msg: WppInboundMessage): Promise<string |
         debug(`[WPP v1.3.2 EMBED-INTENT] command intent → LLM: "${triggerText.slice(0, 20)}"`);
         decision = await decideIntentWithLlm(
           { triggerText, candidates: msgs.map(toIntentCandidate) },
-          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
         );
       } else if (embedEnabled) {
         // 非命令 → embedding 快路径 (ms 级)
@@ -373,20 +386,20 @@ async function buildGroupContextFromDb(msg: WppInboundMessage): Promise<string |
           debug(`[WPP v1.3.2 EMBED-INTENT] embedding 无相关 → LLM 兜底`);
           decision = await decideIntentWithLlm(
             { triggerText, candidates: msgs.map(toIntentCandidate) },
-            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
           );
         }
         if (relevantIds === null) {
           debug(`[WPP v1.3.2 EMBED-INTENT] embedding 失败 → LLM 兜底`);
           decision = await decideIntentWithLlm(
             { triggerText, candidates: msgs.map(toIntentCandidate) },
-            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
           );
         }
       } else {
         decision = await decideIntentWithLlm(
           { triggerText, candidates: msgs.map(toIntentCandidate) },
-          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg) },
+          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
         );
       }
 
@@ -912,6 +925,26 @@ async function dispatchOne(
           const shouldQuote = true;
           info(`deliver called: textLen=${text.length} hasOssImg=${!!ossImgUrl} msgType=${msg.msgType} shouldQuote=${shouldQuote} replyTo=${msg.msgId}/${msg.newMsgId ?? ""}`);
           if (!text && !ossImgUrl) return { ok: true, msgId: "" };
+          // v1.9.0 重复内容闸 (老板拍板: 同群 6h 内高度相似就不发): 只对**心流主动插话**生效。
+          //   钩子点在这里而不是 sendAiReply 里: 那是账号级公共出口 (filehelper/私聊/日报都走它),
+          //   且它自己已有一套 sha1 精确去重语义; 两套语义混在一起会互相盖。
+          //   拦下时返回既有占位符通道 (msgId="repeat-suppressed") ⇒ classifyHfSend 判 suppressed
+          //   ⇒ 不占预算、不开观察窗、不进重复历史 (见 heartflow-learn.ts 的占位符清单)。
+          if (msg.trigger === "heartflow" && text) {
+            const rHfCfg = getDefaultAccountRegistry().get(msg.accountId)?.config.heartflow;
+            const rCfg = resolveHfDedupeCfg(rHfCfg);
+            const gid = msg.chatroomId ?? msg.peerId;
+            const nowSec = Math.floor(Date.now() / 1000);
+            const rv = checkHfRepeat(msg.accountId, gid, text, rCfg, nowSec, {
+              // proactive = 心流主动插话; 被 @ / 引用 / 关键词叫到的回复 (trigger 非 heartflow) 根本不进这里,
+              //   故这里恒为 true —— 留参数是为了语义显式 (proactiveOnly=false 时就地放开)。
+              proactive: true,
+            });
+            if (rv) {
+              logHfRepeatSkip(gid, rv, nowSec);
+              return { ok: true, msgId: "repeat-suppressed" };
+            }
+          }
           // 把被引用消息的元数据传透给 quoteReply (构建完整 refermsg)
           const result = await sendAiReply(msg.accountId, msg.peerId, text, {
             msgId: shouldQuote ? msg.msgId : "",
@@ -925,10 +958,19 @@ async function dispatchOne(
             innerType: shouldQuote ? msg.msgType : undefined,
           });
           // v1.6.x HEARTFLOW-LEARN: 仅心流主动回复 send 后落账 (fire-and-forget, 不阻断 deliver 返回)
+          // v1.6.8: 一并传 bot 自己那条的 msgId 与弱信号窗长 —— 标签要锚在"我这条"上, 而不是"群里有没有人说话"
           if (msg.trigger === "heartflow") {
             const hfCfg = getDefaultAccountRegistry().get(msg.accountId)?.config.heartflow;
             const observeSec = hfCfg ? resolveHfLearning(hfCfg).observeWindowSec : HF_LEARNING_DEFAULTS.observeWindowSec;
-            void persistHfSendOutcome(msg.accountId, msg.msgId, result, Math.floor(Date.now() / 1000), observeSec);
+            const labelWindowSec = hfCfg ? resolveHfLearning(hfCfg).labelWindowSec : HF_LEARNING_DEFAULTS.labelWindowSec;
+            void persistHfSendOutcome(msg.accountId, msg.msgId, result, Math.floor(Date.now() / 1000), {
+              groupId: msg.chatroomId ?? msg.peerId,
+              observeSec,
+              labelWindowSec,
+              // v1.9.0: 真发出的文本进重复闸历史 (与开窗/预算同一条件同一时刻)
+              text,
+              dedupeCfg: resolveHfDedupeCfg(hfCfg),
+            });
           }
           info(`[WPP DEBUG-DELIVER] sendAiReply done: ok=${result.ok} error=${result.error ?? "none"} msgId=${result.msgId ?? ""}`);
           return result;

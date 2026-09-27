@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS wpp_hf_ledger (
   account_id VARCHAR(64) NOT NULL,
   inbound_msg_id VARCHAR(128) NOT NULL,        -- msg.msgId (parser 保证非空; 跨通道稳定)
   new_msg_id VARCHAR(128) NULL,                -- 审计用 (可为 '')
+  bot_msg_id VARCHAR(128) NULL,                -- v1.6.8: bot 发出那条的 msgId (判"有人引用了我那条"); vendor 不回 id 时 NULL
   group_id VARCHAR(128) NOT NULL,              -- chatId (xxx@chatroom)
   from_wxid VARCHAR(128) NULL,
   msg_type VARCHAR(32) NULL,
@@ -160,6 +161,7 @@ CREATE TABLE IF NOT EXISTS wpp_hf_ledger (
   status ENUM('judged','sent','suppressed','closed') NOT NULL DEFAULT 'judged',
   suppressed_reason VARCHAR(96) NULL,          -- dedup/ack-template/empty/no-deliver-outcome/send-failed
   engaged TINYINT(1) NULL,                     -- NULL=suppressed 排除样本外; 1=engaged; 0=ignored
+  engage_signal VARCHAR(24) NULL,              -- v1.6.8 命中信号: quote/mention/negative/short-window/silence (NULL=旧行, 不采信)
   judged_at INT UNSIGNED NOT NULL,
   sent_at INT UNSIGNED NULL,
   window_expires_at INT UNSIGNED NULL,         -- = sent_at + observeWindowSec
@@ -197,4 +199,40 @@ CREATE TABLE IF NOT EXISTS wpp_hf_threshold_audit (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_hf_audit (account_id, group_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 心流群画像 (v1.7.0 2026-09-26 新增: 每群每日一份 LLM 生成的画像 + 统计快照)
+-- 数据源: heartflow-profile.ts 生成 (调用方只在解析成功时写 ⇒ 不会出现空画像行)
+-- 用途: judge prompt 注入"这是什么样的群 / bot 在这里该怎么说话"; 只能收紧约束, 不许放开
+-- 生产建表唯一途径 = applyMigrations (deploy 不拷 db/, 本文件只在 dev 生效)
+CREATE TABLE IF NOT EXISTS wpp_hf_group_profile (
+  account_id VARCHAR(64) NOT NULL,
+  group_id VARCHAR(128) NOT NULL,
+  profile_json TEXT NULL,                      -- 结构化画像 JSON (解析失败即视为无画像)
+  stats_json TEXT NULL,                        -- 生成时的统计快照 (审计)
+  sample_msgs INT UNSIGNED NOT NULL DEFAULT 0, -- 参与生成的样本消息数
+  model VARCHAR(64) NULL,
+  version INT UNSIGNED NOT NULL DEFAULT 1,     -- 每次重生成 +1
+  generated_at INT UNSIGNED NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (account_id, group_id),
+  KEY idx_hf_profile_gen (account_id, generated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 心流分层统计 (v1.8.0 2026-09-26 新增: 每群 × 每时段一份**快照**, 不是累加器)
+-- 数据源: heartflow-layer.ts 每轮 sweep **全量重算**后只 upsert 有变化的行 (累加会在 300s 周期里重复计入, 不可自愈)
+-- 消费: judge 读侧阈值决策 (段内样本够 且 layered.apply 才生效, 默认影子) + 命令 /heartflow layers
+-- 生产建表唯一途径 = applyMigrations (deploy 不拷 db/, 本文件只在 dev 生效)
+CREATE TABLE IF NOT EXISTS wpp_hf_layer_stat (
+  account_id VARCHAR(64) NOT NULL,
+  group_id VARCHAR(128) NOT NULL,
+  layer_kind VARCHAR(16) NOT NULL DEFAULT 'daypart',  -- daypart=日时段 (topic 槽位预留未启用)
+  layer_key VARCHAR(32) NOT NULL,                     -- "18-24" 起-止, 自定义段也自解释
+  n INT UNSIGNED NOT NULL DEFAULT 0,                  -- 窗口内可采信样本数 (重算覆盖, 非累加)
+  engaged INT UNSIGNED NOT NULL DEFAULT 0,
+  ambient_p DECIMAL(6,4) NULL,                        -- 段内本底 (展示用, 不参与判定)
+  window_start INT UNSIGNED NOT NULL DEFAULT 0,       -- 本次重算的窗口起点 (滚动)
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (account_id, group_id, layer_kind, layer_key),
+  KEY idx_hf_layer_acct (account_id, layer_kind, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

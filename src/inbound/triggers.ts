@@ -5,6 +5,9 @@ import type { WppInboundMessage } from "../types.js";
 import { isBotMentionedByText } from "./parser/mention.js";
 import type { HeartflowConfig } from "./heartflow.js";
 import { checkHeartflowGate } from "./heartflow.js";
+import { resolveHfBudget, tightenHfBudget } from "./heartflow-budget.js";
+import { getHfProfileBudget } from "./heartflow-profile.js";
+import { getHfShareTighten } from "./heartflow-observe.js";
 
 export type GroupPolicyValue = "open" | "disabled" | "allowlist" | "closed";
 
@@ -154,13 +157,36 @@ export function shouldTrigger(
 
   // v1.3.75 HEARTFLOW: 未@群消息 → 心流候选 (同步门禁 + 异步 LLM 打分由 handler 完成)
   //   门禁通过 → via:"heartflow" (pending), handler 用 judgeHeartflow 判断是否真触发
-  //   门禁不过 (disabled/白名单外/空/冷却) → via:null (不触发)
+  //   门禁不过 (disabled/白名单外/空/冷却/预算) → via:null (不触发)
   if (msg.peerKind === "group" && cfg.heartflow?.enabled) {
+    const chatId = msg.chatroomId ?? msg.peerId;
+    // v1.7.0 画像收紧预算: 画像建议只能让约束更紧 (间隔更长/上限更小), 不许放宽.
+    //   画像文本本身走 handler 注入 prompt; 这里只用它的预算字段 (内存缓存查, 零 DB IO).
+    const budgetBase = tightenHfBudget(
+      resolveHfBudget(cfg.heartflow),
+      getHfProfileBudget(msg.accountId, chatId),
+      { applyQuietHours: cfg.heartflow.profile?.applyQuietHours === true },
+    );
+    // v1.9.0 占比外环**再套一层**: 该群今日 bot 发言占比 > 目标 (默认 5%) ⇒ 收紧当日预算.
+    //   两层都走 tightenHfBudget ("只能收紧"), 复合安全 —— 取更严的一侧, 不可能被外环放宽.
+    //   占比状态由 sweep 每轮用一条 DB 聚合刷新, 这里是纯内存查 (judge 热路径零 DB IO).
+    const shareTighten = getHfShareTighten(
+      msg.accountId,
+      chatId,
+      budgetBase,
+      cfg.heartflow,
+      Math.floor(Date.now() / 1000),
+    );
+    const effBudget = shareTighten ? tightenHfBudget(budgetBase, shareTighten) : budgetBase;
     const gate = checkHeartflowGate(
-      msg.chatroomId ?? msg.peerId,
+      chatId,
       msg.content ?? "",
       cfg.heartflow,
       Date.now(),
+      // v1.6.9: 预算计数按账号分桶 + 用**消息自己的时刻**判陈旧触发 (msg.ts 是 unix 秒, 见 parser.ts)
+      msg.accountId,
+      msg.ts,
+      effBudget,
     );
     if (gate.allowed) {
       return { triggered: true, via: "heartflow" };

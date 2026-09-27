@@ -4,6 +4,607 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.9.2] 收窄红包关键词: 纯文本提到"红包"不再被静默 (2026-09-27)
+
+> 接 v1.9.1 同批 (老板拍板"一并收窄"), 与 v1.9.1 一次部署。v1.9.1 修的是**接龙被吞**,
+> 本版修的是**同一根因的另一个面**: 关键词启发式对**纯文本**也生效。
+
+### Fixed
+- **纯文本消息只要正文出现"红包"二字就静默不回复** (如群里有人 `@某某 群收红包`、`50红包群发放@某某`、
+  `抓紧领大红包啦`)。这些是**人在聊天**, 被静默等于把群友的话吞了 —— 与 v1.9.1 的接龙是同一根因
+  (关键词启发式过宽), 只是接龙受害最明显、最容易被发现。
+- 修法: **关键词启发式只在"卡片类" App 消息 (msgType=49) 上采信** (新增 `isCardMessage`)。
+  真红包/转账/小程序这些"被包装过"的消息都由 49 承载, 纯文本 (1) / 图片 (3) / 表情 (47) 不是。
+- 收窄依据 (只读回放生产账本, 结论): **真红包全部是卡片形态 (msgType=49), 纯文本形态一条也没有**
+  ⇒ 收窄对真红包是**零漏判**; 若将来厂商改用纯文本推红包卡片, 代码注释里留了排查入口。
+- 新增 2 条回归门 (共 9 条): 人类聊天形态的纯文本必须**不再**被判红包 (含图片/表情) + 卡片形态照旧静默;
+  源级门钉住关键词判定必须与 `isCardMessage` 绑定, **不得退回裸关键词**。
+
+### 测试状态
+- **326 tests / 323 pass / 1 fail / 2 skip** (唯一红是 P2-4.2「待部署」绊索, 部署后转绿)。
+
+## [v1.9.1] 修复: 接龙被误判成红包 ⇒ 静默丢弃 (2026-09-27)
+
+> 老板报障"接龙也没回复了"。**根因不是本批心流改造, 是红包识别与接龙识别的优先级撞车**。
+
+### Fixed
+- **`isRedPacketMessage` 把接龙误判成红包 ⇒ 接龙整条静默丢弃**。红包识别是**内容关键词**启发式
+  (`content` 含"红包"即判红包, v1.3.72 前的既有实现), 而群接龙文案**自带"红包"字样**
+  (如"提升业绩, 领取红包🧧"/"红包100元") ⇒ 命中; 而 handler 两处红包拦截 (静默入库 / 不触发 AI)
+  都排在**接龙强制触发之前** ⇒ 接龙拿不到 dispatch, **不报错、不写标签**, 只在日志留一行
+  `red packet detected: … url=missing`, 看着像"来了个没 url 的红包", 极易误诊。
+- 修法: **结构性识别优先于关键词启发式** —— `hongbao.ts` 的 `isRedPacketMessage` 开头先问
+  `isRelayMessage(msg)` (msgType=49 + "#接龙"), 是接龙就直接返回 `false`。单一真源, handler 两处调用点
+  自动都受保护 (没有改判定顺序 —— 那会让第三处调用点再次踩同一个坑)。
+- 新增 `tests/unit/hongbao-relay-priority.test.mjs` (7 条): 本次 bug 的复现门 + 真红包五路识别不被削弱
+  + 普通消息不误伤 + 源级门 (豁免必须写在 hongbao.ts 内、且在关键词启发式之前; handler 两处拦截
+  必须都走同一判定函数)。**这块此前零测试覆盖, 正是问题能潜伏的原因。**
+
+### 定位过程 (可复用的诊断范式)
+- 从**消息台账**入手, 而不是先读代码: 拉出近 14 天所有 `#接龙` 消息 (按群), 逐条看其后 5 分钟内该群
+  有无出站 ⇒ 立刻呈现"带'红包'字样的接龙条条零回复 / 不带'红包'的条条有回复"的完美相关。
+- 排他性验证 (排除"是不是刚部署的锅"): 拿**部署前的备份 dump** (`/data/wpp-deploy-swap-*/…/dist/`)
+  对比同一段编译产物 —— 判定顺序与启发式**逐字相同** ⇒ 与本次部署无关, 时间点是**接龙文案改版那天**。
+  ⚠️ 备份放 `/data` 的价值在此: 没有部署前快照就无法做这种排他证明。
+- **决定性证据在日志的两行相邻记录**: 同一条消息先打 `relay detected: title="#接龙 …" msgType=49`,
+  **毫秒级之后**紧接一行 `red packet detected: … url=missing` —— 同一条消息被两个判定先后接管,
+  接龙判定已经认出来了却被后面的红包拦截吃掉。而当天整天只有这一次 `red packet detected`
+  ⇒ 当天**根本没有真红包**, 那行日志纯属误报。
+- 顺带记下**真红包的形态**(与上面互斥, 便于以后一眼区分误报): 要么 `msg_type='red_packet'`、
+  正文是 `[红包] 红包` 占位; 要么 `msg_type=49` 但**正文恰为 `微信红包`** (微信原生卡片的译文)。
+  接龙则是 `msg_type=49` + 正文以 `#接龙` 开头 + 长文本。**关键词启发式认不出这个区别**, 结构判定能。
+
+### 已知残留 (未改, 如实记录)
+- 关键词启发式本身没动: **任何普通消息只要正文出现"红包"二字 (哪怕只是聊天提到), 仍会静默不回复**。
+  收窄它会改变红包策略本身, 属老板决策, 不在本次修复范围。
+
+### 测试状态
+- **324 tests / 321 pass / 1 fail / 2 skip**。唯一的红是**刻意的"待部署"绊索** (`p2-cleanup.test.mjs` P2-4.2:
+  deploy 端 `openclaw.plugin.json` 版本仍是 1.9.0) —— 部署 v1.9.1 后自动转绿, **不是回归**。
+  剩余 2 skip 是既有跳过项。
+
+### 部署
+- 需 `deploy-swap.sh --force` + `systemctl --user restart openclaw-gateway` (**外部动作, 等老板授权**)。
+
+## [v1.9.0] 心流观测复盘 (P3) + 重复内容闸 + 占比外环 (2026-09-26)
+
+> 承接 v1.6.8 (换标签) / v1.6.9 (发言预算) / v1.7.0 (群画像) / v1.8.0 (分层)。
+> 老板的诉求始终是"bot 像个真人" —— 本版补上**两块一直缺的东西**: 一个能回答
+> "**到底说多了没有**"的观测面 (按需可查, 不推送), 和两道**只收紧**的结构约束
+> (重复内容闸 / 占比外环)。P2+P3 一次部署 (老板 2026-09-26 拍板)。
+
+### Added (观测复盘: 按需 `/heartflow report`, 不推送)
+- **新增 `src/inbound/heartflow-observe.ts`** (纯函数 + **单表**聚合; **无新表、无定时器**):
+  - `hfBotShare` / `fmtHfShare`: 占比口径 = **`bot/(人+bot)`** (有界), 报告同时显示原始条数, 便于对账。
+  - `hfEngagementLift`: 本底 `<0.01` ⇒ `null` (**不除零, 也不吹成 100×**);
+    `hfEngagementSummary` 对每个样本用它**自己那一小时**的本底 (跨时段混算会把"夜里冷清"算成"接了话")。
+  - `hfRepeatRate`: **与重复闸共用 `hfRepeatVerdict`**。若各写一套相似度, 会出现"日报说重复很多、闸一条没拦"
+    —— 那"观测驱动收口"就是假的 (有源级测试钉住)。
+  - `buildHfDigest`: 七节 (发言占比 / 接话率+lift / 被制止率 / 重复率 / 影子分层 / 预算拦截 / 占比外环),
+    **硬 cap 3500 字符**, 逐节限流, 超限从尾部整行丢弃并标 `…(已截断)`。
+  - `/heartflow report [天数]`: 默认 7 天, 钳 1..30; 最多 8 群, 其余折叠 `…其余 N 群`。
+- **出口是 filehelper** (`sendToFileHelper`), **不经 `sendAiReply`** ⇒ 不触发 sha1 去重、不进重复闸、
+  **不落心流台账** —— 日报不是"回复", 不能污染统计样本。
+- 两条新只读单表聚合 `listHfBotMsgShare` / `listHfOutboundTexts`; 与既有 4 条时间聚合同一纪律
+  (单表 —— `wpp_messages` 与 `wpp_hf_*` 的 collation 不同, 跨表会直接报错)。
+
+### Added (重复内容闸: 同群 6 小时内高度相似就不发)
+- **新增 `src/inbound/heartflow-dedupe.ts`**: 同群 **6 小时**窗内、归一化相似度 **≥0.85** 即拦下 (老板拍板),
+  **只对心流主动插话生效** (`proactiveOnly`) —— 被人 @ / 引用叫到时该回还得回。
+- 三道误杀防护 (误杀比漏放贵得多: 群里该接的话 bot 装死, 老板看到的是"bot 变笨了"):
+  1. **归一化后前缀精确匹配优先** (更准也更便宜);
+  2. `minChars=12`: "收到/好的/👌" 不进相似判定 (也不进历史, 否则它们会互相判重);
+  3. **数字保留**: `iPhone 15` 与 `iPhone 16` 报价结构相同但**不是复读**。
+- **钩子点在 `deliver` 回调里、`await sendAiReply` 之前**: 拦在发出之前才有意义;
+  不塞进 `sendAiReply` —— 那是账号级公共出口 (filehelper/私聊/非心流回复都走它), 且已有另一套 sha1 精确去重语义。
+- **`classifyHfSend` 第五态 `repeat-suppressed`**: 不加这条会被判成 `sent` ⇒ (i) 消耗发言预算额度、
+  (ii) 开一个 600s 观察窗 ⇒ 后续人类的正常发言被记成"接了我那句" ⇒ **毒化分层与学习样本**。
+  该分支同时**不写重复历史** (没说出口的话不能拦下一句)、**不进预算**、**不开窗**。
+- 内存态 `(account, group) → 最近 N 条真发出文本`, sweep 每轮按窗口/条数双裁 (防长跑内存增长);
+  `enabled` / `simThreshold` / `windowSec` 等全部可热重载 (异常时关闸即恢复, 无需重启)。
+
+### Added (占比外环: 该群 bot 占比 > 5% ⇒ 收紧当日预算)
+- `hfShareTighten` (纯函数): 占比 **严格 > 5%** 且当日样本足够 (`≥40` 条消息且 `≥5` 条 bot 发言, 防噪声)
+  ⇒ 收紧档 `minGapSec ×2 (cap 900)` / `maxPerHour ×0.5 (floor 2)` / `maxPerDay ×0.5 (floor 10)`。
+- DB 聚合在 **sweep 侧** (每轮一次), 判定侧只读内存 ⇒ **judge 热路径仍是零 DB IO**;
+  内存态随**本地日**翻页自然失效。
+- 消费点 = 与既有画像收紧**再套一层** (`tightenHfBudget(tightenHfBudget(...))`) ⇒ 两层都只能收紧, 复合安全。
+- 生效痕迹进 `/heartflow status` 与 `report` (「占比 > 5% ⇒ 今日预算已收紧」)。
+
+### Changed (时间口径全仓收口: 一切按群聚合都走 `ts`)
+- 四处的 `COALESCE(create_time, UNIX_TIMESTAMP(ts))` 统一改为 **`UNIX_TIMESTAMP(ts)`**。
+  原因 (**2026-09-26 生产只读实测**): `wpp_messages.create_time` 已是**遗留死列** —— 当前代码只读不写,
+  该列的非空值形如 `YYYYMMDDHHMMSS` **不是 epoch**, 且较新的行该列全为 NULL。
+  把它当秒用 ⇒ 那些行被算到公元 60 万年 ⇒ **分桶/排序/窗口全错且不报错**。
+  既有窗口 (≤30 天) 恰好够不到这类行, 属"埋着的雷", 本版一并拆除;
+  并加源级门 (见测试状态) 钉住不得写回。`ensureColumn(...create_time...)` 保留 (仅为兼容老库), 注释写明真实语义。
+- **COALESCE 归群维持不变**: 生产实测出站行的 `chat_id` / `from_wxid` **全为 NULL** (只有入站写这两列)
+  ⇒ 所有"按群"聚合必须 `COALESCE(NULLIF(chat_id,''), peer_id)`, 否则 bot 侧分子恒 0 且**不报错**。
+
+### 与计划的偏差与取舍
+- **闸的实测结论是"空转", 不是"拦得太狠"**: 部署前只读回放真实账本发现 —— 近期群出站文本里
+  相似度 ≥0.85 的重复**全部**来自"每日固定时刻的自动化播报", 其间隔**恒为 24 小时** ⇒ 6h 窗**看不到**它们;
+  而该播报走的是 automation announce, **根本不经心流路径** ⇒ 闸无权干预。
+  故 **6h/0.85 按老板拍板原样保留** (误杀风险 ≈ 0, 它防的是"同一天内心流插话复读", 实测未发生过);
+  若日后要让"复读"更少, 该调的是那个定时播报本身, 不是闸的窗口。
+- **分层达到门槛 ≠ 会改行为**: 回放显示当时唯一达标的那一格落在**群级阈值已在地板** (`bandMin`) 的群上,
+  `evalHfThreshold` 给出 `clamped-noop` (想下调被地板挡死) ⇒ 本版分层即便生效也**无动作空间**。
+  这与 `allowLoosen=false` (只许收紧) 的设计一致, 但说明**分层短期是纯观测** —— 别指望它立刻改变行为。
+- **分层样本从 0 起算**: 信号列 (`engage_signal`) 是 v1.6.8 才有的, 部署前的旧行一律按 legacy 丢弃
+  ⇒ 门槛时钟从**部署日**开始 (与 v1.8.0 的进度预估一致; 部署越晚, 分层可用越晚)。
+- **"重复率"的口径偏差 (报告正文已标注)**: 分母是**全部群出站文本**, 含定时播报与人工手打,
+  ≠ "心流发言的重复率" ⇒ **只看趋势, 不判绝对超标**。要精确到心流需在发送侧落来源标记 (未做: 不动 `wpp_messages` 结构)。
+- **预算拦截计数是进程内累计** (重启清零), 报告如实标注, 不假装"按日统计"。
+
+### 测试状态
+- 新增 `tests/unit/heartflow-dedupe.test.mjs` (16 条) + `tests/unit/heartflow-observe.test.mjs` (15 条), 全绿。
+  结构性门: 闸与重复率**共用同一判定函数** / `suppressed` 分支不占预算·不开窗·不进历史 /
+  闸必须在 `sendAiReply` **之前** / 报告出口走 filehelper 且天数被钳 / 时间口径**不得写回** `create_time` /
+  出站归群必须 `COALESCE` 兜底 (否则分子恒 0)。
+- 既有测试同步: `heartflow-feedback` (方法清单 +2 / 行类型 +2)、`heartflow-learn` (`classifyHfSend` 第五态)。
+- 全量: **317 条 / 313 绿 / 2 红 / 2 skip**; 两条红仍是**刻意的「待部署」绊索**
+  (`deploy-integrity` 的 schema.sql 逐字节一致 + `p2-cleanup` 的部署版本号), 部署后自动转绿, **不要当回归修**。
+
+## [v1.8.0] 心流分层学习: 群 × 时段 (P2) (2026-09-26)
+
+> 承接 v1.6.8 (换标签) / v1.6.9 (发言预算) / v1.7.0 (群画像)。老板 2026-09-26 的原话:
+> "**根据每个群聊环境, 自动理解群身份与特征**" —— 画像解决了"这个群是什么群",
+> 本版解决"**同一个群在不同时段本来就不一样**": 上午的群和深夜的群, 一个标量管不了。
+> 分层**不是新的自学标量**: 它是"从群级阈值出发、按该时段的真实接话率走**一步**"的结果
+> (被硬区间钳死, 不累积不漂移), 段内样本不够就**回落**既有先验 —— 不引入第二套判定参数。
+
+### Added (分层统计: 群 × 时段)
+- **新表 `wpp_hf_layer_stat`** (`(account_id, group_id, layer_kind, layer_key)` 主键;
+  `n` / `engaged` / `ambient_p` / `window_start` / `updated_at`)。新表只用 `CREATE TABLE IF NOT EXISTS`
+  一条路 (applyMigrations + `db/schema.sql`), **不需要 `ensureColumn`**。
+- **新增 `src/inbound/heartflow-layer.ts`** (范式照 `heartflow-profile.ts`: 纯算法 + 内存缓存 + 一个 IO 入口):
+  - `aggregateHfLayerStats` (**纯函数**): 按 `sent_at` 的**本地小时**归段 → 信号值域校验 (旧行丢弃) →
+    **逐样本用它自己那一小时的**本底过滤 (强信号 `quote`/`mention`/`negative`/`veto` 不受过滤) → 计数。
+  - `normalizeHfBuckets`: 分段定义越界/倒置/重叠/非整数/超 6 段 ⇒ **整体**回落默认四段 (不半套生效)。
+  - `getHfLayerStat` / `loadHfLayerStats` / `resetHfLayerCache`: 段统计常驻内存 ⇒ **judge 热路径零 DB 读**
+    (与 P0.5 预算、P1 画像同一原则)。
+  - `loadHfGroupHourCounts`: 每群×每小时入站量的**唯一取数入口** (缓存 120s), 与调阈侧同一公式 ——
+    两处若各写一份, 同一条样本会在一边"可采信"、另一边"不可采信"。
+- **每轮 sweep 全量重算, 只 upsert 有变化的行** (稳态下 0 写)。**绝不做增量累加**: sweep 每 300s 一次,
+  累加会让 `n` 一小时虚涨 12 倍且**永远无法自愈**; 重算是幂等的, 改口径/改分段后自动收敛。
+- `windowDays` 默认 60 上限: 否则"某时段更受欢迎"会被 60 天前的旧样本永久锁死。
+
+### Added (读侧决策 + 影子)
+- `resolveHfThresholdDecision(accountId, groupId, hfCfg, nowSec?)`: 链路 = **段内样本够 且 `layered.apply`
+  ⇒ 分层值** → 否则群级 learned → 否则账号级; 全过读侧 `clampHfThresholdToBand`, 再由 handler 的
+  `max(..., 画像下限)` 兜底 (画像仍只收紧)。**纯内存, 无 await / 无 SQL**。
+- `resolveThresholdOverride` **保名加第 4 参 `nowSec`** (照 `markHfGroupEngaged` 的先例): 分层要按当前时段取值。
+- `layered.allowLoosen` 默认 **false** = 分层**只许收紧** (更克制)。放开"更主动"的权利是一个开关的事,
+  默认不放开是因为 v1.6.6 的教训: "回得多 → 群里反应多 → 比率更高 → 再下调"是会跑飞的正反馈。
+- **`apply` 默认 false = 影子**: 照算照记, 只在 `why` / `layers` 里显示"若生效会是多少"。
+
+### Added (一键反馈: 这条不该回)
+- **`/heartflow veto [群ID]`**: 把该群**最近一条已发出**的发言标成 `engaged=0 / signal='veto'`。
+  五件事缺一件就静默失效, 逐条落地:
+  1. `'veto'` 同时进 `HfEngageSignal` 联合类型 + `HF_ALL_SIGNALS` + `HF_STRONG_SIGNALS`
+     (漏 `HF_ALL_SIGNALS` ⇒ 读回 null ⇒ **完全无效且无报错**; 必须是强信号 ⇒ 冷清群里不被本底过滤)。
+  2. 选行 `ORDER BY sent_at DESC, id DESC` (**不能按 `judged_at`**: 一条被预算拦久的旧 judged 行会盖过刚发出的那条)。
+  3. 调 `forgetHfOpenWindow` 删内存开窗 —— 否则随后有人引用那条消息会把 veto 覆盖成 `engaged=1`,
+     样本从"不该回"翻转成"该回", **比不点更糟**。
+  4. 最近 15 分钟有 **≥2 个群**发过言 ⇒ 拒绝并要求显式群 ID (写错群不可撤销, 错样本会在 60 天窗口里持续污染)。
+  5. 回执**回声**被否决那条的内容开头, 让老板确认删的是哪条。
+
+### Added (可观测)
+- **`/heartflow layers [群ID]`**: 各时段 `n / rate / 本底 / 影子建议 / 是否生效` + **每段样本进度 `n/门槛`**
+  (主力时段约 2–3 周、上午段约 6 周、夜段约 3 个月才够门槛 —— 让老板看得见进度, 否则影子态像"什么都没发生")。
+- **`/heartflow why <群ID>` 加归因行**: `当前有效阈值 X = 分层[段] (n/rate, 生效或影子) ← 群级 / 账号 / 画像下限`。
+- `/heartflow status`: learned 群清单加显示上限 (超出折叠成 `…其余 N 群`) + 分层模式与已达标段摘要。
+
+### Changed
+- `classifyHfSend` / `HfSendOutcome` 等既有算法**未改** (P3 才会新增第五态)。
+- `loadAmbientByGroup` 改为复用 `loadHfGroupHourCounts` (同一条查询 + 同一公式), 语义与取值**完全不变**。
+
+### 与计划的偏差与取舍
+- **话题层降级为"只记不判"**: `layer_kind` 字段与 `'topic'` 槽位预留, 本版不做话题决策 ——
+  每群每天约 4 条发言的量级下话题桶的 `n` 会长期低于门槛 (比最冷的时段还冷), 且会让 `why` 的归因链
+  变成三层不可解释。等时段层样本攒够再评估。
+- **分层不做冷却**: 全量重算天然不累积 + 复用既有死区滞回已经够; 再加冷却会与 `evalHfThreshold`
+  的参数打架 (两套防抖参数互相抵消)。
+- **影子阈值不落库**: 它是 `(n, engaged, 群级阈值, 账号级阈值, 参数)` 的纯函数, 落库反而会漂移
+  (群级阈值变了表里还是旧影子, `why` 自相矛盾); 改为展示时现算。
+
+### 测试状态
+- 新增 `tests/unit/heartflow-layer.test.mjs` (22 条全绿), 含三条**行为级**回归门:
+  分层桶幂等 (同一批输入连跑两次 ⇒ 第二次 upsert 调用数 **0**, 防"累加桶"复活)、
+  veto 能落库读回、判定热路径无 `await`/无 SQL。
+- 既有测试同步: `heartflow-feedback` (表/方法/行类型清单 + `resolveThresholdOverride` 保名加参的正则)、
+  `heartflow-label` (信号值域 + 强信号含 veto)、`schema-sql-split` (注释行数绊索)。
+- `deploy-integrity` 的 schema.sql 逐字节一致 + `p2-cleanup` 的部署版本号**仍是刻意的「待部署」绊索**,
+  部署后自动转绿 —— 不要当回归修。
+
+## [v1.7.0] 心流群画像: 按群自动理解身份与特征 (P1) (2026-09-26)
+
+> 承接 v1.6.8 (换标签) + v1.6.9 (预算)。老板 2026-09-26 的原话:
+> "**希望能根据每个群聊环境, 能自动理解群身份与特征, 建立画像, 应景回复**" +
+> "**我不愿意设定固定的触发的关键词**" + "使其更贴合一个真人身份角色"。
+> 本版就是那句"自动理解"的落地: **画像不是关键词表** —— 它是每天由群里真实消息归纳出的背景,
+> 注入给 judge 当"该不该开口、该用什么口气"的依据; 触发与否仍然只看五维打分 + 结构预算。
+
+### Added (群画像)
+- **新表 `wpp_hf_group_profile`** (`(account_id, group_id)` 主键, `profile_json` / `stats_json` / `sample_msgs` /
+  `model` / `version` / `generated_at` / `updated_at`)。走既有 9 步落地 (applyMigrations → `db/schema.sql` →
+  types → mysql adapter 显式列清单 → `storage/db/*.ts` 薄封装 → barrel); 薄封装仍**不 import mysql2**。
+- **新增 `src/inbound/heartflow-profile.ts`**: 每日每群一次 LLM 归纳, 产出结构化画像
+  (`nature` 群性质 / `style` 语言风格 / `bot_role` 我在群里的角色 / `engage` 宜接话题 / `avoid` 忌接话题 /
+  `active_hours` 活跃时段 / `quiet_hours` 建议静默段 / `band` 建议阈值 / `budget` 建议预算 / `summary` 一句话基调)。
+- `/heartflow profile <群ID>`: 显示当前画像 + 统计素材 (消息数/活跃天数/发言 TOP/类型分布/平均长度),
+  并把**模型说的活跃时段**与**统计实测的活跃时段**并排展示 —— 二者不符时以实测为准, 便于老板判断画像可信度。
+- `/heartflow why <群ID>`: 追溯**最近一条台账行** —— 五维分、当时有效阈值、命中信号、开窗/静默原因,
+  再叠上**此刻**的有效阈值 (learned/账号级/画像下限三者取 max) 与预算计数 (本小时/本日已用 + 最近发言时刻)。
+  为此新增一条真实单行读 `getHfLedgerLast` (不拿已收敛样本拼近似值)。
+- `/heartflow status` 用法提示同步补上新命令。
+
+### Changed (画像怎么被用上 —— 三处)
+- **judge prompt 注入**: `buildHeartflowPrompt` 增可选 `groupProfile`, 挂在"群聊基本信息"之后、带小标题
+  (**让 judge 知道这是背景而非待判内容**)。注入前**截断 ≤400 字符**, 且截断按**整行丢弃**而不是硬切 ——
+  半句话比没有更误导; `summary` 排在最后, 紧张时最先被丢 (它是上面几项的重述)。
+- **阈值下限**: handler 里 `effThreshold = max(learned ?? 账号级, 画像下限)`。
+- **发言预算**: 触发侧 `tightenHfBudget(resolveHfBudget(cfg), getHfProfileBudget(...))` 后作为
+  `checkHeartflowGate` 第 7 参传入。**画像只能收紧, 永远不能放开** (见下)。
+- sweep 里画像生成排在 `if (!L.enabled) return;` **之前** ⇒ 关掉调阈学习, 画像照常生成 (两者本就独立)。
+- 画像生成失败 (超时/坏 JSON/字段全空) **保留上一版**, 单群失败只 warn 不拖垮整轮; 一轮最多生成 `maxPerRun` (3) 个。
+
+### 安全边界 (本版最重要的部分)
+- **画像只能让 bot 更收敛, 不能更激进**:
+  阈值 `band` 过**代码侧硬区间**钳制 (`HF_LEARNING_DEFAULTS.bandMin` 0.5 下限 / `bandMax` 上限, 越界值被**抬回区间**
+  而不是丢弃 —— 免得模型给个 0.2 就被当成"无建议"而绕开地板);
+  预算三项与配置取 `min` (间隔取 `max`); 画像给 `enabled: false` **无权**关掉结构约束。
+- **静默段默认不自动生效** (`HF_PROFILE_DEFAULTS.applyQuietHours = false`): 画像算出的静默段会**入库并展示**
+  (标明"已生效 / 未生效, 仅建议"), 但除非账号配置显式打开, 不参与判定。
+  理由: 它是**总静默开关**, 一次幻觉就能让 bot 整天不吭声 —— 这个风险不该由一个每天自动生成的字段承担。
+  即便打开也有硬上限: 单段 ≤6h、全天合计 ≤8h, **超限的整段丢弃**(不是截断), 短的优先保留。
+- **绝不写空画像**: 解析出一无所有 (`nature`/`style`/`bot_role`/`summary` 全空且无宜忌且无 band) 一律当失败,
+  保留上一版 —— 否则模型偶尔摆烂会让 bot 当场失忆。
+- **画像素材不出机器**: 统计只读本地 `wpp_messages` (**单表**, 见下), 生成 prompt 里**不含群 ID**
+  (样本 `wxid` 已截断脱敏为前 6 字符 + `**`); 画像/统计/群 ID 一律留在本地 DB 与 `accounts/*`, **绝不进公开仓**。
+
+### 与计划的偏差与取舍 (如实记录)
+- 计划 P1-3 让画像"单独传 `maxTokens`" —— 落地为 `maxTokens 1200` / `timeoutMs 20000` (judge 那处硬编码的 300
+  一个字没动)。**不复用 judge 的 300** 是刻意的: 2026-09-13 那次心流静默瘫 3 天, 根因正是 reasoning 与正文抢
+  `max_tokens=300`; 画像输出更长 (含数组与多字段), 复用必现同样故障。思考仍走 `callJudge` 默认的关闭。
+- 计划 P1-2 写"现有 `getMessages` 不支持聚合, 必须新加方法" —— 二者都保留了: 统计聚合新增
+  `getHfGroupMessageStats` (`COUNT`/`GROUP BY`/小时直方图); 样本消息仍走既有 `getMessages` 复用
+  (它已带分页与类型解析, 重造一份反而多一处要维护的 SQL)。样本只取 `direction === 'inbound'`。
+- **collation 地雷照旧绕开**: `wpp_messages` 是 `utf8mb4_unicode_ci` 而 `wpp_hf_*` 是 `utf8mb4_uca1400_ai_ci`
+  (MariaDB 11 对裸 `CHARSET=utf8mb4` 的默认), 跨表 JOIN 直接报 `Illegal mix of collations`。
+  故本版所有统计聚合都是**对 `wpp_messages` 的单表查询**, 与 `wpp_hf_*` 的关联全在应用层内存里做。
+- **刻意不 import 造成的两处"重复"**: (a) `heartflow-profile.ts` 里重写了 2 行 band 钳制而没 import
+  `heartflow-learn.ts` 的 `clampHfThresholdToBand` —— 否则 `heartflow-learn → heartflow-profile → heartflow-learn` 成环;
+  (b) `checkHeartflowGate` 用**可选第 7 参** `budgetOverride` 接收收紧后的预算, 而不是让 `heartflow.ts` 去 import 画像模块
+  (`heartflow.ts` 只 `import type` 画像的配置类型, 值导入会成环)。两处都写了注释说明原因。
+- `summary` 字段是**补回来的**: prompt 里要求模型给一句话基调, 初版解析时把它丢了 (问了又不用)。
+  现补进画像结构并渲染在最后一行; 只含 `summary` 的画像算"有内容"(不判空)。
+- **judge 热路径零 DB 读**这条约定照旧: 画像缓存由 sweep **每轮一次** `listHfGroupProfiles` 预热
+  (已消失的群会从缓存里删掉, 不然吃的是过期画像), judge/handler 只读内存
+  (`getHfProfilePromptText` / `getHfProfileBandFloor` / `getHfProfileBudget`)。
+- `/heartflow profile` 的静默段那一行**必须标明是否生效** —— 老板看到的每个数字都要有出处, 否则会以为已经静音了。
+- 计划 P1-5 提到"回复风格/长度提示沿用现有 prompt 结构" ⇒ 未新增提示词层级, 画像只是一段背景文本。
+
+### 影子验证 (部署前只读回放生产账本, 2026-09-26)
+> 量化结果属生产统计 ⇒ **只保留结论与判据, 具体数值不入公开仓** (红线)。方法与取舍如下。
+- 用生产账本里**观察窗已结束**的全部 bot 发言, 拿**已编译的**新判据 (dist) 逐行重放, 对比旧标签:
+  - 旧标签的接话率**很高且与台账存量 `engaged` 率逐位吻合** ⇒ 机制诊断被数据证实 (旧闭环学的就是"群里有没有人说话");
+    新判据在同一批样本上**大幅回落并落进死区 (0.15, 0.5)** ⇒ 学习者**不再下调** (旧行为是每轮都下调)。
+    阈值变更审计同向印证: 一天内连续多次下调, 每次理由都是"接话率远高于 `highEngageRate`"。
+  - 弱信号窗的实测命中率与参数注释记录的 60s 档同量级 ⇒ 交叉验证支持选 60s 而非 120s。
+  - ⚠️ **强信号 (引用/@) 在这批样本里命中 0 次**: 当前生产里"接话"完全由**窄窗 + 沉默**两个弱判据承担。
+    已知局限 (如实记录): 窄窗内的群消息未必真是对 bot 那句的回应 —— 它比旧的 600s 宽窗窄得多, 但仍是代理指标;
+    真正的"被引用/被 @"要等上线后按新台账攒出来, 届时强信号才起作用。
+  - 反事实基线在生产当前量级下**不拦任何样本** (`ambientP` 远小于 `ambientMax`):
+    它是"未来出现高流量刷屏群"的保险, **不是**本次跑飞的解药 —— 解药是标签换锚 (让旧的高接话率落回死区)。
+  - 预算实测: 总发出条数被压掉约两成, 且**突发**压得更狠 —— 最挤的一段窗口内条数接近腰斩再腰斩
+    (老板原话"频率太高"针对的就是这种突发)。
+  - 旁证: 多数 bot 发言在 10 分钟内**没有任何人接话** —— bot 此前确实说得过多。
+- 回放脚本是一次性诊断, 含真实群 ID ⇒ **不入仓** (只读 SELECT, 未写任何表)。
+
+### 测试状态
+- **264 tests / 260 pass / 2 fail / 2 skip**。
+- 新增 `tests/unit/heartflow-profile.test.mjs` (**24 条全绿**): 参数缺省与覆盖 / 生成 prompt 含统计与样本且**不含群 ID** /
+  容忍围栏与前后废话、坏 JSON、全空对象 (含"只有 summary 不算空") / band 越界被**抬回区间**而非丢弃 /
+  数组与小时与静默段的限长去重过滤 / **预算只收紧不放开** (含 `enabled: false` 无权关约束) /
+  渲染 ≤上限且**不切半行**、`summary` 排最后先被丢 / 活跃时段确定性推导 / 新旧判定边界 /
+  缓存预热与重置与账号隔离与坏行跳过与**旧群清理** / 静默段默认不并入且单段 6h 全天 8h 硬上限 /
+  **7 条源级接线守卫** (sweep 顺序与 catch、无循环依赖、prompt 注入、触发侧第 7 参、两个子命令、失败保留上一版、
+  统计单表无 JOIN 只数入站)。
+- **2 条 fail 仍是刻意钉下的「待部署」绊索, 不是回归**: `deploy-integrity.test.mjs` 的
+  "部署端 `db/schema.sql` 与源码仓逐字节一致" 与 `p2-cleanup.test.mjs` P2-4.2 "部署端 manifest 版本 = 源码仓"
+  (部署端仍是 1.6.7, 源码仓 1.7.0)。`deploy-swap.sh` 跑过后两条自动转绿, 基线恢复 0 fail。
+
+### 部署与生产
+- **尚未部署**。P0+P0.5+P1 按老板拍板"三批一起做、一次部署" ⇒ 本版继续留在 dev。
+- 需要: 一次 `deploy-swap.sh --force` + `systemctl --user restart openclaw-gateway` (**外部动作, 等老板明确授权**)。
+- 部署后观察口径: `/heartflow profile <群ID>` 的画像是否贴合群身份 (模型说的活跃时段 vs 实测)、
+  `/heartflow why <群ID>` 里画像下限有没有把阈值顶起来、以及阈值是否不再贴地板。
+
+## [v1.6.9] 心流发言预算: 频率约束上移到结构层 (P0.5) (2026-09-26)
+
+> 承接 v1.6.8。老板 2026-09-26: "**群里回复消息的频率太高了**" + "如果我不设定下限, 就会一直降低"。
+> v1.6.8 修的是**标签学错了** (根因之一); 本版修**第二个根因**: **拿一个被自学的标量去控频率, 它必然漂到边界**。
+> 阈值是"要不要开口"的**质量**判据, 不该同时兼任"多久能开口一次"的**频率**闸。
+> 档位由老板当轮拍板 = **中等**; 静默段**默认关** (机制做好, 等 v1.7.0 画像按群自动填)。
+
+### Added (结构层频率约束)
+- **新增 `src/inbound/heartflow-budget.ts`** (纯函数 + 进程内计数, judge 热路径**零 DB IO**):
+  每群**最小发言间隔** / **每小时上限** / **每天上限** / **静默段** / **陈旧触发防重放**。
+  默认档 `HF_BUDGET_DEFAULTS` = `minGapSec 180` (1 条/3 分钟) · `maxPerHour 8` · `maxPerDay 60` ·
+  `noConsecutiveWithoutHuman true` · `quietHours []` (关)。
+  挂 `HeartflowConfig.budget?: HfBudgetConfig`, 可在 `accounts/default.json` 按账号覆盖。
+- 判定是**纯函数** `checkHfBudget(state, cfg, nowSec, candidateAtSec)`, 只报**第一条**命中原因:
+  `quiet-hours` → `budget-gap` → `budget-consecutive` → `budget-hour` → `budget-day` (从最绝对到最软),
+  便于 `/heartflow status` 归因, 不叠加。
+- 静默段按本地小时、**半开区间** `[start, end)` (相邻段 `[9,12)`/`[12,15)` 不重叠; `start===end` 视为**空段**,
+  防 `[0,0]` 变成全天静默); `start > end` 表示跨零点 (`[23, 7]`)。
+- `/heartflow status` 增一行**发言预算**: 生效档位 + **本次运行**的拦截计数 (按原因分布; 计数在内存, 重启归零, 故标注)。
+
+### Changed (落点与计数)
+- 闸落在 `checkHeartflowGate` 内**既有冷却/judge 频率闸之后、judge 之前** ⇒ 被拦的消息**连 LLM 都不调**
+  (顺带省掉被拦那次的 maxtoken 花销)。
+- **只有真正发出去才占额度**: 记账点是 `persistHfSendOutcome` 的 `sent` 分支 (与"开观察窗"同一时刻同一条件);
+  `suppressed` (模板回复被丢 / 去重 / 空文本) **不占额度** —— 判了但被下游拦掉的不该吃掉预算。
+- 计数在内存 Map (`key = ${accountId}:${groupId}`), 账号启动时用**一条** `GROUP BY group_id` 聚合
+  (`listHfSentCountsRecent`) 回填小时/天计数 ⇒ **重启不清零额度** (否则"重启刷额度"成了后门)。
+  回填边界走**本地整点/零点** (`hfHourStartSec`/`hfDayStartSec`, 与运行时桶键同口径; 用 `now-3600` 会把上一小时的
+  尾巴算进本小时, 新小时一开局就少一条额度); 回填失败只 warn, **不打断账号启动**。
+- 陈旧触发的候选时刻用**消息自己的时刻** (`msg.ts`, parser 给的 unix 秒) 而非 debounce flush 的墙上时间。
+- 既有机制**一律保留不动**: `energy` 状态机 (软性精力衰减, 影响 judge 的 willingness 维度)、
+  `minReplyIntervalSec` (冷却)、`minJudgeIntervalSec` (LLM 调用闸)。
+  预算不是替代品, 是**结构兜底**: 前两者会随状态漂移, 本条天然有界。
+
+### 与计划的偏差与取舍 (如实记录)
+- 计划里 `noConsecutiveWithoutHuman` 写的是"**无人类插话不得连发第 2 条**"。**照字面实现会永远不生效**:
+  心流的每次触发本身就源自一条人类消息, 故"上次发言后没有人类消息"在门禁处不可能成立。
+  本版落成 **陈旧触发防重放** (候选消息不晚于我们上次发言 ⇒ 同批/重试/补扫的重复处理, 拦住它)。
+  真频率约束由 `minGapSec`/`maxPerHour`/`maxPerDay` 承担。配置项名保留 (语义按注释为准)。
+- `lastHumanAtSec` **仅用于观测, 不参与判定**: 它在 handler 按**墙上时间**记录, 而门禁按**消息时间**判定,
+  两者有抖动量级偏差; 拿它当闸会误拦紧随其后的正常消息。**宁可少一条规则, 不要一个会误杀的规则**。
+  已知降级: 该字段**无法从账本回填** ⇒ 重启后为空 (不影响判定, 只看观测)。
+- 静默段**默认关**是老板的决定 (各组活跃时段不同, 不擅自改夜间行为), 机制与配置项已就绪, 等 v1.7.0 画像按群填。
+- 新增聚合**只查 `wpp_hf_ledger` 单表**: 避开 v1.6.8 记录过的 collation 地雷
+  (线上 `wpp_hf_*` 是 `utf8mb4_uca1400_ai_ci`, 而 `wpp_messages` 是 `utf8mb4_unicode_ci`, 跨表 JOIN 直接报
+  `Illegal mix of collations`)。
+
+### 测试状态
+- **240 tests / 236 pass / 2 fail / 2 skip**。
+- 新增 `tests/unit/heartflow-budget.test.mjs` (**30 条全绿**): 档位与覆盖 / 桶键与回填口径同源 / 静默段半开与跨零点与空段 /
+  五条闸各自拦住 + 边界值不误拦 (恰好第 8 条、第 60 条放行) / 跨小时跨天滚动 / 纯函数性 (不改入参) /
+  进程内状态 (判定记账·回填·脏值收敛·快照·重置·账号与群互不串账) / **7 条源级接线守卫**
+  (闸在 judge 之前且挂在冷却之后、触发侧传账号与消息时刻、真发出去才占额度、handler 记人类消息、启动回填、既有机制仍在)。
+  源级守卫自带**自检**: 切片必须真的限定在该函数内 + 函数被改名时必须报错, 防止守卫退化成"假绿"。
+- **2 条 fail 是刻意钉下的「待部署」绊索, 不是回归** (v1.6.5 事故后加的):
+  `deploy-integrity.test.mjs` 的"部署端 `db/schema.sql` 与源码仓逐字节一致" (v1.6.8 改过 schema.sql)
+  与 `p2-cleanup.test.mjs` 的"部署端 manifest 版本 = 源码仓" (部署端仍是 1.6.7, 源码仓 1.6.9)。
+  `deploy-swap.sh` 跑过后**两条自动转绿**, 基线恢复 0 fail。
+
+### 部署与生产
+- **尚未部署**。P0+P0.5+P1 按老板拍板"三批一起做、一次部署" ⇒ 本版继续留在 dev。
+- 需要: 一次 `deploy-swap.sh --force` + `systemctl --user restart openclaw-gateway` (**外部动作, 等老板明确授权**)。
+- 部署后观察口径: `/heartflow status` 的预算拦截原因分布 + 每群日发言条数 (应从"一分钟内连发数条长话术"的量级显著下降)
+  + 阈值是否不再贴地板 + 回填计数是否与账本一致 (重启后额度不应回到满格)。
+
+## [v1.6.8] 心流换标签: engaged 锚回「bot 自己那条」+ 反事实基线 (P0) (2026-09-26)
+
+> 老板 2026-09-26 原话: "我现在设置了 0.5 底线, 因为之前会无限降低, 都到 0.3 左右了。群里回复消息的频率太高了。
+> 这不是我希望的。**但是如果我不设定下限, 就会一直降低**。" 且明确: 要**按每个群的环境自动建画像、应景回复**, "**不愿意设定固定的触发关键词**"。
+> 本版只做 **P0 (把标签换对)**; 频率的结构约束是 v1.6.9 (P0.5), 群画像是 v1.7.0 (P1) —— 三批一起做, 最后**一次**部署。
+
+**根因 (代码级, 不是调参问题)**
+- `handler.ts` 的 `markHfGroupEngaged` 旧触发条件 = 「该群 600s 内**出现过任意人类群消息**」。
+  活跃群这条**恒为真** ⇒ "接话率"饱和 ⇒ `evalHfThreshold` 每轮 sweep 都走**下调**分支 ⇒ 阈值单调递减到 `bandMin`。
+  **它学的是"群里有没有人说话", 不是"我上一条说得怎么样"** —— 这就是"不设下限就会一直降低"的机制本身。
+- 真信号一直存在但没进闭环: judge prompt 里的"上次回复后无人接话 / 群里有热烈讨论"只用于拼提示词, 不落库、不进学习样本。
+- bot 自己那条消息的 id 此前**没入库** (`new_msg_id` 存的是**入站**消息的), 而发送侧拿得到 (`sendAiReply` 返回 `msgId`)
+  ⇒ "有人引用了我那条"这个最可靠的信号此前根本无法判定。
+- v1.6.6 的硬地板 (bandMin=0.5 + 读取侧钳制) 只挡症状, 不治病: 阈值被钉在地板上, 而地板之上的下调压力依旧存在。
+
+### Changed (标签语义)
+- **新增 `src/inbound/heartflow-label.ts`** (纯函数, 无 DB / 无 IO): 把标签锚回 **bot 自己发的那条**:
+  `quote`(有人引用了我那条) / `mention`(@我) / `negative`(针对我那句说"别刷了") 为**强信号**;
+  `short-window`(弱窗内有人说话) 为**弱正**; 窗满无人接话 = `silence`。
+  优先级 `negative > quote > mention > short-window` (引用比 @ 强: 引用带上下文, @ 可能只是叫人)。
+  **强信号在整个 `observeWindowSec`(600s) 内有效** —— 晚到的引用也是真接话; `short-window` 只在
+  `labelWindowSec`(默认 120s) 内成立, 且**先落 `engaged=1` 但不关窗**, 留给更强的信号升级
+  (弱→强可覆盖, 强信号之间不互相覆盖, 已有强结论不被覆盖)。
+- `wpp_hf_ledger` 增两列 (既有 CREATE 块内 + `ensureColumn` 守卫, 因为生产表已存在 `CREATE IF NOT EXISTS` 改不到它):
+  - `bot_msg_id VARCHAR(128) NULL` —— vendor 返回的 bot 那条的 msgId (vendor 不回 id 时为 NULL ⇒ 该行只能拿弱信号, 已知降级);
+  - `engage_signal VARCHAR(24) NULL` —— 命中信号 (可观测 + 审计)。
+- 开窗表在内存里 (`heartflow-learn.ts` 的 `_openWindows`, 按 `${accountId}:${groupId}` 索引), judge 路径**零额外 DB 读**;
+  已知降级: 进程重启会丢掉进行中的窗 ⇒ 那些行按 `silence` 收敛 (不会漏收敛, 只是信号变粗)。
+- 新语义键 (三处齐: 接口 / `HF_LEARNING_DEFAULTS` / `resolveHfLearning`): `labelWindowSec: 60`、`ambientMax: 0.5`。
+  ⚠️ 弱信号窗由计划的 120s **改为 60s**, 依据是下面影子验证的实测曲线 (120s 余量太薄会重新点燃飞轮)。
+  **`observeWindowSec` 保持 600 未动** (账本行寿命 + dispatcher 引用它的字面量被回归门锁死)。配置项仍**不进** UI schema。
+
+### Fixed (治本: 反事实基线 —— 不再把"群本来就热闹"当成绩)
+- 新增 `hfAmbientP(count, observedSec, windowSec) = 1 - exp(-rate * windowSec)` (泊松近似, 纯函数, 无新依赖),
+  `rate` = 该群**同一小时段**近 14 天的入站人类消息速率 (按本地小时分桶, 捕获"该时段本来就这么热闹"而不是被 7 天平均稀释掉)。
+- `isHfSampleInformative(signal, ambientP, ambientMax)`: 强信号**永远**可采信 (引用/@ 是有指向的行为, 群里再热闹也不减损含义);
+  `short-window` / `silence` **仅当 `ambientP < ambientMax`** 才进学习统计。素材来自新增聚合 `listHfGroupMsgHourBuckets`。
+- 效果 (回归门已固化): 饱和群 (`ambientP≈1`) 的弱样本被全部跳过 ⇒ 样本不足 ⇒ `evalHfThreshold` 返回 `changed:false`
+  ⇒ **不再单调下调**; 冷清群的 `silence`(没人理) 照常触发**上调**(少说精选)。`ambientP` 与信号直方图写进调阈审计的 `reason`, 便于回看。
+
+### Added (可观测与回归门)
+- `/heartflow status` 增 "信号分布(近 24h)" (quote/mention/negative/short-window/silence, 旧行归 `legacy`), 新增适配器方法
+  `countHfEngageSignals` + `listHfGroupMsgHourBuckets` (薄封装/barrel/类型齐)。
+- `tests/unit/heartflow-label.test.mjs` (24 例, 纯函数 + 源级接线守卫), 核心是**三条回归门**:
+  ① 饱和群过滤后样本 0 ⇒ 不下调 (同时**先复现旧行为下调**再断言新行为不调, 证明这条门真的在拦);
+  ② 冷清群样本照常参与 (别把学习一起掐死);
+  ③ 负词表**不得出现在触发路径** (`heartflow.ts` 触发/闸门不许引用它) —— 老板红线: 触发必须由心流五维判断, 不许用固定关键词。
+- 既有 `heartflow-feedback.test.mjs` 的清单同步: adapter 方法 12→14, HF 行类型 4→5, `HF_LEARNING_DEFAULTS` 键表 +2。
+
+### 影子验证 (部署前, **只读** 生产库; 2026-09-26)
+> 量化结果属生产统计 ⇒ **只保留结论与口径, 具体数值不入公开仓** (红线)。方法与取舍如下。
+拿生产账本 (`wpp_hf_ledger`, 已收敛行) 与 `wpp_messages` 回放, 不写任何一行数据:
+- **旧标签被逐位证实**: 对已收敛且有 `sent_at` 的行算"该群 600s 内出现人类消息", 命中比率与台账里存量
+  `engaged=1` 的比率**逐位吻合** —— 旧闭环学的确实就是"群里有没有人说话"。
+- **阈值确实只会降**: 唯一有学习状态的群, 其审计行的 `rate` 远高于 `highEngageRate` (⇒ 恒走下调分支);
+  而上次变更记录显示它其实是 v1.6.6 的**地板钳制**把它抬回来的, 不是学习修正的。
+- **窗长单调曲线** (同一批已收敛行, 只换弱信号窗长): 命中比率随窗长**单调上升**, 旧标签那个宽窗的比率
+  **恒在 `highEngageRate` 0.5 以上 ⇒ 每轮必下调**; 窗口收窄到 120s 已落进死区, 但离上限只剩很薄的余量
+  (该样本量下置信区间就能跨过 0.5), 而该标签**因果上受 bot 自己影响** (回得多 → 群里反应多 → 比率更高
+  ⇒ 再下调 = 正反馈), 余量太薄就会重新点燃飞轮; **60s 档正好在死区 (`lowEngageRate` 0.15 /
+  `highEngageRate` 0.5) 中点附近, 两侧余量大致对称**, 故取 60s。
+- **反事实基线在当前数据量下不生效 (如实说明)**: 当前各群的 `ambientP(60s)` 都远小于 `ambientMax=0.5`
+  ⇒ 弱样本**一条都不会被过滤** (要过线需要该时段持续相当高的消息密度)。
+  也就是说 **本次止住跑飞靠的是"标签换锚 + 弱窗收窄", 不是反事实过滤**; 过滤器是给"将来某群真的变得极吵"留的闸
+  (以及未来 P1 画像的路标), 现在它在待命而没在工作 —— 这一点不含糊其辞。
+- 顺带修掉一个跨表雷 (仅注释记录, 未改行为): `wpp_messages` 是 `utf8mb4_unicode_ci`, 而 `wpp_hf_*` 三表是
+  MariaDB 11 默认的 `utf8mb4_uca1400_ai_ci` ⇒ **两表 JOIN 会直接报 `Illegal mix of collations`** (实测)。
+  新聚合 `listHfGroupMsgHourBuckets` 刻意做成单表查询; 将来跨表比较必须显式 `COLLATE`。
+
+### 与计划的偏差 / 已知代价 (如实记录)
+- **"消息被撤回"这条负信号按计划本该做, 本次没做**: 判定需要额外 vendor 查询或轮询, 成本与可靠性都不划算,
+  且撤回在群聊里语义含糊 (可能是发错字)。负信号**只保留文本词表** (且分强弱两档: 引用/@ 消息用完整 14 词,
+  窗内裸消息只认 4 个硬词 —— 裸消息没有上下文, 误报代价是冤枉一次好回复, 宁可少判)。
+- **v1.6.8 之前落的账本行没有 `engage_signal` (NULL) ⇒ 一律不采信** (`asHfEngageSignal` → null)。
+  代价: 阈值学习在部署后会先"冻结"一段时间 (每群攒够 `minSample` 条**新**样本才恢复调阈), 这是**有意**的 ——
+  那些行正是**旧错误标签**, 采信它们等于改造白做。
+- 词表位置: `HF_NEGATIVE_PHRASES` (14) / `HF_HARD_NEGATIVE_PHRASES` (4) 在 `heartflow-label.ts`,
+  文件头与常量注释都写明 **"只用于给 bot 自己的发言打分, 不是触发关键词"**。
+- 另一处偏差: 计划里 `labelWindowSec` 写的是 120s, 实测后改为 **60s** (依据见上面影子验证的窗长曲线)。
+
+### 测试状态 (必读: 有 2 条**预期红**, 都是"待部署"绊索)
+- `npm test` = **210 tests / 206 pass / 2 fail / 2 skip**。两条红都是**故意**的"改了就该部署"提醒, 不是回归:
+  1. `deploy-integrity.test.mjs:47`「部署端 `db/schema.sql` 与源码仓逐字节一致」—— 本版改了 `db/schema.sql` (v1.6.5 事故刻意钉下的绊索);
+  2. `p2-cleanup.test.mjs:140` P2-4.2「deploy `openclaw.plugin.json`.version = dev (部署没掉队)」—— 本版版本号 1.6.7→1.6.8 而部署端仍是 1.6.7。
+  两条都在 `deploy-swap.sh` 跑过后自动转绿 (无需改代码)。**改 schema / 改版本前**的基线为 186 tests / 184 pass / 0 fail / 2 skip。
+
+### Fixed (发布链)
+- `sync-github.sh --dry-run` 会**留下脏镜像**: dry-run 为了让 `git diff --cached --stat` 输出真实差异, 会把文件写进
+  本地镜像 `/root/git/wpp-openclaw` 的工作树, 但**不提交** ⇒ 下一次真跑在 `git checkout main` 处报
+  "local changes would be overwritten ... Aborting" (2026-09-26 实测踩到)。现在 dry-run 会记录运行前的分支,
+  结束时还原 (`checkout -f` + `reset --hard` + `clean -fd`, 镜像仓是脚本专属纯 clone) 并打印还原点。
+
+### 部署与生产
+- **尚未部署** (按老板 2026-09-26 拍板: P0+P0.5+P1 **三批一起做、一次部署**)。需要老板明确授权后执行
+  一次 `deploy-swap.sh --force` + `systemctl --user restart openclaw-gateway`。
+- 部署前会先做**只读影子验证**: 拿生产账本回放最近 7 天, 按新判据重算 engaged/信号分布, 输出"旧标签 vs 新标签"对比,
+  并量化"多少行属可采信样本""阈值还会不会继续降"。
+
+## [运维] 公开仓脱敏加固: 脱敏规则外置单一真源 + `master`/`main` 双分支历史重写 + 发布三门 (2026-09-26, 无插件代码变更)
+
+> 老板指令: **必须脱敏**。这一版没有改插件运行时行为, 改的是"发布链"本身。
+> 事故性质 (两轮审计): 公开仓 `jiexiaoyin/wpp-openclaw` 的 **`master`(源码分支) 从 Initial commit 起 62 个提交全部**
+> 带个人信息, 46 个文件命中。第一轮重写 master 后, 用**逐提交**校验 (`--check-history`) 复核时又抓出两类:
+> ① **元数据**泄漏 —— `main` 27 个提交 + `master` 新增的 1 个提交, 作者/提交者邮箱是老板**个人 gmail**
+> (根因: 本地镜像仓 `.git/config` 的 `user.email` 一直是它, 每次同步**新建**的提交又把 gmail 带回来);
+> ② `main` 的**历史**里有 1 个提交 (2026-08-20) 的 `USAGE.md` 把真实群 ID 当示例写了。
+> ⚠️ 教训: ①的根因说明"**只查 tip 的门 = 假安全**", ②的根因说明"**只看文件内容的门看不见 git 元数据**"。
+
+**根因 —— 脱敏规则内联在"要发布的脚本"里**
+- 旧版 `build-release.sh` / `sync-github.sh` 各自内联了一份 `PERSONAL` 正则 + `sanitize_file()` 替换清单
+  (含真实 wxid / 群 ID / 老板登录名 / vendor host / 机器路径 / **生产密钥前缀**)。
+- 这两个脚本**自己在 `master` 分支里** ⇒ 脚本本身成了泄漏源; 而"每次更新同步 GitHub"是铁律
+  ⇒ 每发布一次就把这份清单再公开一次。
+- 审计另发现 `CHANGELOG.md` 里躺着一把**明文 API key**(`sk-…`, 已脱敏为 `sk-REDACTED`)。
+  该 key **不在** `/root/.openclaw/.env` 中 (疑似早已作废/未启用), 但既然公开过 ⇒ 必须假定已泄露并作废。
+
+### Changed
+- **脱敏规则外置为单一真源**: `~/.openclaw/wpp-sanitize.rules` (0600, `WPP_SANITIZE_RULES` 可覆盖, **绝不入仓**)。
+  规则 = `<匹配串>\t<替换串>` + `@scan\t<扫描串>\t<改写串>`。
+- **新增执行器 `tools/sanitize-source.sh`** (本文件无任何敏感串 ⇒ 可发布):
+  `--check <dir|file>` / `--apply <dir>` / `--check-history <repo> [ref]` / `--emit-filter-repo <f>`。
+  用 **python3 + 前后视断言** 而不是 sed: 手机号/群 ID 这类规则必须能表达"两侧不是数字",
+  否则长数字 ID 与 hex 里的片段会被误伤 (实测 `9007199254740992` 能"匹配"出手机号);
+  且 python `re` 与历史重写工具 (git-filter-repo) 语义一致 ⇒ 树脱敏与历史重写结果可逐字节对齐。
+- `build-release.sh` / `sync-github.sh` 改为调用执行器, **脚本内不再内联任何敏感串**;
+  release 脱敏范围从 `*.js`+`*.md` 扩到**整棵 `release/`** (旧清单漏过 `dist/*.map` 一类)。
+- `sync-github.sh`: 新增 `[4/4] master 脱敏源码快照同步` (`--main-only` 可只跑旧行为);
+  快照排除 `node_modules/` `coverage/` `release/` `dist-release/` `accounts/default.json`
+  ⇒ master 不再靠手工 push (手工 push 正是本次泄漏的成因)。
+- 规则新增覆盖面: 真实手机号 / 真实群 ID (含未列举的, 兜底 `[0-9]{10,12}@chatroom`) / 明文 `sk-` key /
+  生产文件名里的 ID / 老板邮箱 → GitHub noreply。
+
+### Fixed
+- **`master` 历史重写并强推** (`tools/oneoff-rewrite-master-history-2026-09-26.sh`, 保留全部 62 个提交与提交信息,
+  提交数、作者、消息都校验过): 每个提交的文件内容重新脱敏; 历史里移除 `node_modules/` `coverage/` `release/`
+  `dist-release/` `accounts/default.json`; 作者邮箱由个人 gmail 改为 GitHub noreply。
+  旧 tip `bb78ca4` → `133aabd`。备份: `/data/wpp-github-mirror-backup-20260926-111713.git`。
+- **`master` + `main` 元数据/历史内容二次重写并强推** (`tools/oneoff-scrub-author-email-2026-09-26.sh`):
+  `--mailmap` 把个人 gmail 全换成 noreply (`main` 27 提交 + `master` 1 提交) + `--replace-text` 清掉
+  `main` 历史里那处群 ID; 提交数不变、**两分支 `tip` 树 SHA 不变** (公开的当前内容逐字节零变化),
+  逐提交校验 0 命中。`master` `32fd6e5` → `3a6b1edf`; `main` `456bdf68` → `0144fdaa`。
+  备份: `/data/wpp-github-mirror-backup-20260926-112330.git` (含各分支 bundle)。
+  根因同时修掉: 镜像仓 `git config user.email` → **`jiexiaoyin@users.noreply.github.com`** (身份来源收口)。
+- 发布门升级为**三道**: 快照 `--check` 0 命中 / 新建提交过 `check-commit-metadata.sh` (查作者·提交者邮箱) /
+  历史改动后过 `--check-history`(**逐提交**树 + 提交信息 + 作者)。只查 tip 等于假安全。
+
+### Added
+- 回归测试 `tests/unit/sanitize-rules.test.mjs` (全在 `/tmp`, 不碰生产/不读真实规则文件):
+  临时规则文件驱动 apply/check、前后视断言不误伤长数字、替换值不自我匹配 (无死循环)、规则缺失时**拒绝工作**、
+  "公开仓源文件里不得内联敏感串"的静态断言, 以及**提交元数据门**的拦下/放行双向测试。
+- **`tools/check-commit-metadata.sh`**: 提交元数据门 (作者/提交者邮箱 + 提交信息过同一套规则);
+  `sync-github.sh` 每次 commit 后必过, 不过则 `git reset --soft HEAD~1` 撤销提交并中止 push。
+- `DEV.md §6.1 脱敏` 写清发布链、排除项、三道门的用法与本次事故教训。
+
+### 部署与生产
+- **无插件代码变更 ⇒ 不打版本号、不部署** (生产插件仍为 v1.6.7; `package.json` / `openclaw.plugin.json` 保持 1.6.7,
+  免得触发"改了版本没重新部署"的回归门)。本条目按仓库惯例用 `[运维]` 前缀。
+
+### 遗留 / 提醒
+- force-push **不会**从 GitHub 删掉旧对象: 在服务端 GC 前, 被替换掉的历史仍可按旧 SHA 直接访问
+  (`bb78ca4…` / `133aabd…` / `32fd6e5…` / `456bdf68…` 及其父提交)。要彻底消除须**删仓重建**或联系
+  GitHub Support —— 老板若要求"一点都不能留", 这是唯一彻底路径。
+- 已公开的那把 API key 请确认作废 (若还在用 ⇒ 立即轮换)。
+
+## [v1.6.7] 适配 OpenClaw 2026.9.6+ plugin source capture (插件根解析单一真源) + deploy-swap `--dry-run` 谎报修复 (2026-09-26)
+
+> 起因: OpenClaw 升级 2026.9.4 → 2026.9.6 后, **可变的账号配置写到了临时副本里**。
+> (2026.9.6 换树失败/回滚的排查见 git log + `/data/openclaw-preupgrade-2026.9.4-1790389681/`; 停 Gateway 后从独立 shell 重跑 `openclaw update --yes` 成功。)
+
+**根因 —— 「插件根」解析到了 openclaw 的临时源捕获副本**
+- OpenClaw 2026.9.6 起, 本地插件在**每次 CLI 调用 / gateway 加载**时会被「源捕获」(plugin source capture) **实体复制**到
+  `<stateDir>/tmp/plugin-captures/<instance-uuid>/captures/openclaw-plugin-build-XXXX/package-0/node_modules/wechatpadpro/`;
+  该副本**临时**(进程退出即 `sweepPluginSourceCaptureDirectories()` 清掉, 实测 uuid 根已轮换 4 个: `da5eaf4e` / `a5dfa290` / `3a591cca` / `9c6531d9`)。
+  捕获上下文是 openclaw 内部 `AsyncLocalStorage`, **不对插件 SDK 暴露** ⇒ 插件侧拿不到"真实源目录"。
+- 插件原有 **3 份各自独立的** 向上 walk (`core/paths.ts#findPluginRoot`、`config-helpers.ts#findPluginRootSync`、`channel-ui-bridge.ts#resolveManifestRoot`)
+  都停在副本根 —— 副本里同样有 `openclaw.plugin.json` + `package.json`。于是
+  `join(findPluginRoot(), "accounts" | "config.json" | "db/schema.sql")` 全部落到副本。
+- **真实故障证据** (2026-09-26 10:41, `openclaw status --all` 期间, 生产 journal):
+  `WARN [WPP v1.6.6] config hot-reload failed: default: account config not found:
+  /root/.openclaw/tmp/plugin-captures/3a591cca-…/openclaw-plugin-build-KjW3dz/package-0/node_modules/wechatpadpro/accounts/default.json`
+  ⇒ 账号配置**读**不到 / **写**进临时目录 = 进程结束即丢 (线上 `accounts/default.json` 未被破坏纯属时机运气: 部署副本最后写入 09-16 18:53, 副本拷贝恰好一致)。
+
+### Changed
+- **`src/core/paths.ts` 成为插件根解析单一真源**: `findPluginRoot()`(async) + 新增 `findPluginRootSync()`(sync, 共用同一 cache)。
+  解析到 capture 路径时映射回**稳定安装根**:
+  `stateDir` 由副本路径 `/tmp/plugin-captures/` 之前片段反推 (再退化到 `OPENCLAW_STATE_DIR` / `~/.openclaw`) →
+  `name` 取副本 `package.json#name` (再退化到目录名) → 命中 `<stateDir>/extensions/<name>`, 否则扫 `extensions/*` 比对
+  `package.json#name` / `openclaw.plugin.json#id` → **都失败则保留副本路径并只 warn 一次**(降级, 绝不因探测失败让插件起不来)。
+  副本识别看**整条路径**(`openclaw-plugin-build-*` 标记在祖先里, 8 层 walk 停下的通常是它下面的插件根)。
+- `config-helpers.ts` / `channel-ui-bridge.ts`: 删除各自的第二、三份 walk, 改用共享解析器 (消除三处漂移风险; sync 语义保持, 见文件内 `listAccountIds` 必须 sync 的 P0 记录)。
+- 版本 1.6.6 → 1.6.7 (`package.json` = 单一来源, manifest 同步)。
+
+### Fixed (部署脚本)
+- **`deploy-swap.sh --dry-run` 此前是「谎报的只读」**: `DRY_RUN` 只被最后那句 `echo` 使用 ⇒ `--dry-run` 实际执行**完整真实部署**
+  (备份 / `rm -rf $DEPLOY` / 拷贝 / 重启 gateway), 却打印"没真写任何文件"; 且 gate 条件里含 `DRY_RUN` ⇒ 同时绕过
+  「必须刚跑过 `deploy.sh`」的防呆。现在 7 个步骤里的写操作全部由 `DRY_RUN` 真正把门 (dry-run 只做只读预检)。
+- 新增 `--skip-build` / `SKIP_BUILD=1` (复用当前 `dist/`, 便于验证脚本本身)。
+
+### Added (防回归门)
+- `tests/unit/plugin-capture-paths.test.mjs` (10 例, 全在 `/tmp`, 不碰生产): 用**真编译产物**放进**真形状的 capture 树**,
+  断言 async/sync 都映射回稳定根、目录名≠包名/manifest id 兜底、找不到稳定根时降级不抛、正常安装路径行为不变、
+  `OPENCLAW_STATE_DIR` 兜底; 并用**假 OPENCLAW_ROOT 真跑一次 `deploy-swap.sh --dry-run`** 断言哨兵文件/`openclaw.json`/备份目录逐字节未变 + 源码仓三处解析器已收口。
+  (基线: `npm test` 174 pass / 0 fail。)
+
+### 部署与生产验证 (2026-09-26 10:47)
+- `deploy.sh` dry-run PASS(19) / WARN(0) → `deploy-swap.sh --force`: 备份 `/data/wpp-deploy-swap-1790390847/`(12846 文件, 与新部署清单逐项一致),
+  **`openclaw.json` sha256 未变** (`dce0dc37…`, 铁律), gateway 10:47:36 起 (PID 679070)。
+- 生产日志实证 (3 次捕获构建各自命中): `[WPP v1.6.7] [paths] plugin source capture 适配: …/captures/openclaw-plugin-build-jxFTKW/… → 稳定根 /root/.openclaw/extensions/wechatpadpro`;
+  `watching accounts dir: /root/.openclaw/extensions/wechatpadpro/accounts`; `applySchemaSql: 11 statements applied from …/extensions/wechatpadpro/db/schema.sql`;
+  `ws connected` / `setWebhook OK` / `setBusinessWebhook OK` / `startAutoSync OK` / `[WPP v1.6.7 STARTUP] … selfWxid=wxid_eezdbu1ytws422`, 新进程 error/fail = 0。
+- 热重载实测: `touch accounts/default.json`(内容 hash 不变) ⇒ `config hot-reload detected: default (change)` → `hot-reload: account default runtime config updated` (旧版此路径读的是副本)。
+
+### 观察 (未改, 留档)
+- 同一 gateway 进程内插件会被注册多次 (**每次注册各自 capture 一份**), 修复后多了几个 watcher 同时 watch **同一个**真实 `accounts/` 目录
+  ⇒ 一次配置变更会产生 N 次 apply (实测 1 次 `runtime config updated` + 2 次 `not running, config cache refreshed only`, 内容相同 ⇒ 幂等, 无重连/无重起账号)。
+  若将来 apply 变成非幂等 (如每次 apply 都重连), 需在此处去重。
+
+> 注: v1.6.6 (心流阈值硬地板 0.5) 未在本文留条目, 详情见 git log (`ab24ae0`)。
+
 ## [运维] agent 拿不到发卡工具: `tools.alsoAllow` 白名单把 channel agentTools 全挡了 (2026-09-13, 无代码变更)
 
 > 起因 (老板): 让 wpp-wechat agent「将这个卡片转发给我」, 它回了 **"已转发 ✅ 卡片已转到你微信"** ——

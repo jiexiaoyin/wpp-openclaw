@@ -18,6 +18,16 @@ import type {
   ContactRecord,
   DbAdapter,
   HfClosedSample,
+  HfGroupHourBucket,
+  HfGroupMsgStats,
+  HfGroupShareRow,
+  HfOutboundTextRow,
+  HfGroupProfileRecord,
+  HfLayerSampleRow,
+  HfLayerStatRecord,
+  HfLedgerTrace,
+  HfSentCountRow,
+  HfVetoResult,
   HfGroupStateRecord,
   HfLedgerRecord,
   HfThresholdAuditRecord,
@@ -179,6 +189,9 @@ async function applySchemaSql(pool: Pool): Promise<void> {
 /** Always include these migrations for vendor schema drift safety */
 async function applyMigrations(pool: Pool): Promise<void> {
   // 撤回时间戳应来自原始消息入库时间: wpp_messages 加 create_time BIGINT 列 (ensureColumn 幂等 ADD)
+  // ⚠️ 2026-09-26 生产实测: 该列已是**死列** —— 当前代码只读不写, 且 2026-08-11 之后的行全为 NULL;
+  //   更早的非空值形如 20260811094227 (YYYYMMDDHHMMSS), **不是 epoch**。保留 ADD 只为兼容老库,
+  //   任何时间聚合/排序都必须走 ts (见 listHfGroupMsgHourBuckets 的说明)。
   await ensureColumn(pool, "wpp_messages", "create_time", "BIGINT NULL");
   await ensureColumn(pool, "wpp_messages", "from_wxid", "VARCHAR(128) NULL");
   // 旧行回填: 从 raw_payload.sender_id 提取 (已有行无 from_wxid)
@@ -248,7 +261,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
 
   // ====== v1.6.x HEARTFLOW-FEEDBACK (心流反馈闭环) ======
   // 生产建表唯一途径 = applyMigrations (deploy-swap.sh 不拷 db/, schema.sql 只在 dev 生效)
-  // 纯增量 CREATE IF NOT EXISTS, 幂等, 每 boot 3 条空执行. 表无 FK, 不 ALTER 旧表.
+  // 纯增量 CREATE IF NOT EXISTS, 幂等, 每 boot 4 条空执行 (v1.7.0 起含群画像表). 表无 FK, 不 ALTER 旧表.
   // 心流「应触发发送」决策 + 发送结果 + 接话观察窗 (per-群自适应调阈样本库)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS wpp_hf_ledger (
@@ -256,6 +269,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
       account_id VARCHAR(64) NOT NULL,
       inbound_msg_id VARCHAR(128) NOT NULL,
       new_msg_id VARCHAR(128) NULL,
+      bot_msg_id VARCHAR(128) NULL,
       group_id VARCHAR(128) NOT NULL,
       from_wxid VARCHAR(128) NULL,
       msg_type VARCHAR(32) NULL,
@@ -271,6 +285,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
       status ENUM('judged','sent','suppressed','closed') NOT NULL DEFAULT 'judged',
       suppressed_reason VARCHAR(96) NULL,
       engaged TINYINT(1) NULL,
+      engage_signal VARCHAR(24) NULL,
       judged_at INT UNSIGNED NOT NULL,
       sent_at INT UNSIGNED NULL,
       window_expires_at INT UNSIGNED NULL,
@@ -312,6 +327,50 @@ async function applyMigrations(pool: Pool): Promise<void> {
       KEY idx_hf_audit (account_id, group_id, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  // v1.7.0 群画像 (1 行/群): 每日一次 LLM 生成的结构化画像 + 生成时的统计快照.
+  //   用途 = 给 judge prompt 注入"这个群是什么群、bot 在这里该怎么说话"(老板 2026-09-26 要的"应景").
+  //   画像只**收紧**约束 (更克制的阈值/更小的预算), 不许放开 —— 见 heartflow-profile.ts 的钳制函数.
+  //   单表读写 (不 JOIN wpp_messages —— 两者 collation 不同, 见 listHfGroupMsgHourBuckets 的警告).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wpp_hf_group_profile (
+      account_id VARCHAR(64) NOT NULL,
+      group_id VARCHAR(128) NOT NULL,
+      profile_json TEXT NULL,
+      stats_json TEXT NULL,
+      sample_msgs INT UNSIGNED NOT NULL DEFAULT 0,
+      model VARCHAR(64) NULL,
+      version INT UNSIGNED NOT NULL DEFAULT 1,
+      generated_at INT UNSIGNED NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (account_id, group_id),
+      KEY idx_hf_profile_gen (account_id, generated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // v1.8.0 分层统计 (群 × 时段, 1 行/群/段): **每轮 sweep 全量重算后的快照**, 不是累加器.
+  //   n/engaged 只反映 windowDays 窗口内的可采信样本; 不做增量累加 (累加不幂等: sweep 每 300s 一次,
+  //   同一批行会被重复计入 ⇒ n 一小时虚涨 12 倍且永不收敛) —— 见 heartflow-layer.ts 文件头.
+  //   新表 (不是给旧表加列) ⇒ 不需要 ensureColumn; 单表读写, 不与 wpp_messages JOIN.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS wpp_hf_layer_stat (
+      account_id VARCHAR(64) NOT NULL,
+      group_id VARCHAR(128) NOT NULL,
+      layer_kind VARCHAR(16) NOT NULL DEFAULT 'daypart',
+      layer_key VARCHAR(32) NOT NULL,
+      n INT UNSIGNED NOT NULL DEFAULT 0,
+      engaged INT UNSIGNED NOT NULL DEFAULT 0,
+      ambient_p DECIMAL(6,4) NULL,
+      window_start INT UNSIGNED NOT NULL DEFAULT 0,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (account_id, group_id, layer_kind, layer_key),
+      KEY idx_hf_layer_acct (account_id, layer_kind, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // v1.6.8 心流标签改造: 生产上 wpp_hf_ledger 早已存在, 上面的 CREATE ... IF NOT EXISTS 不会给它加列
+  //   ⇒ 新列只能 ensureColumn 幂等补 (SHOW COLUMNS 判重). 见 heartflow-label.ts 的设计注释.
+  await ensureColumn(pool, "wpp_hf_ledger", "bot_msg_id", "VARCHAR(128) NULL", "new_msg_id");
+  await ensureColumn(pool, "wpp_hf_ledger", "engage_signal", "VARCHAR(24) NULL", "engaged");
 }
 
 /**
@@ -886,18 +945,36 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       }
       return { total, byStatus, bySuppressedReason };
     },
+    // v1.6.8 可观测: 近 N 秒已收敛样本按信号分布 (让"标签换对了没有"在运维面可见)
+    async countHfEngageSignals(accountId, sinceSec) {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT engage_signal, COUNT(*) AS n FROM wpp_hf_ledger
+         WHERE account_id = ? AND status = 'closed' AND judged_at >= ?
+         GROUP BY engage_signal`,
+        [accountId, sinceSec],
+      );
+      const out: Record<string, number> = {};
+      for (const r of rows) {
+        const k = r.engage_signal == null ? "legacy" : String(r.engage_signal);
+        out[k] = (out[k] ?? 0) + (Number(r.n) || 0);
+      }
+      return out;
+    },
     async setHfLedgerSent(
       accountId,
       inboundMsgId,
       sentAtSec,
       windowExpiresAtSec,
+      botMsgId?: string | null,
     ): Promise<void> {
       const p = getPool();
       await queryWithTimeout(
         p,
-        `UPDATE wpp_hf_ledger SET status = 'sent', sent_at = ?, window_expires_at = ?
+        `UPDATE wpp_hf_ledger SET status = 'sent', sent_at = ?, window_expires_at = ?, bot_msg_id = ?
          WHERE account_id = ? AND inbound_msg_id = ? AND status = 'judged'`,
-        [sentAtSec, windowExpiresAtSec, accountId, inboundMsgId],
+        [sentAtSec, windowExpiresAtSec, botMsgId ?? null, accountId, inboundMsgId],
       );
     },
     async setHfLedgerSuppressed(accountId, inboundMsgId, reason, atSec): Promise<void> {
@@ -909,21 +986,46 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
         [reason, atSec, accountId, inboundMsgId],
       );
     },
-    async markHfEngaged(accountId, groupId, atSec): Promise<void> {
+    // v1.6.8 按信号收敛 (替代旧"任意人类消息即 engaged=1+关窗"):
+    //   close=false (弱信号 short-window) → 只记 engaged=1 + 信号, **保持** status='sent' 继续开窗,
+    //     这样晚到的引用/@ 还能把它升级成强信号 (旧码一旦 engaged 就关窗, 升级无从谈起)
+    //   close=true  → 落结论并关窗; WHERE 里允许覆盖 'short-window' (弱→强升级), 但不许覆盖已有强信号
+    async markHfEngaged(accountId, groupId, atSec, engaged: 0 | 1, signal: string, close: boolean): Promise<void> {
       const p = getPool();
+      if (!close) {
+        await queryWithTimeout(
+          p,
+          `UPDATE wpp_hf_ledger SET engaged = 1, engage_signal = ?
+           WHERE account_id = ? AND group_id = ? AND status = 'sent'
+             AND engage_signal IS NULL
+             AND window_expires_at IS NOT NULL AND window_expires_at > ?`,
+          [signal, accountId, groupId, atSec],
+        );
+        return;
+      }
       await queryWithTimeout(
         p,
-        `UPDATE wpp_hf_ledger SET engaged = 1, status = 'closed', closed_at = ?
+        `UPDATE wpp_hf_ledger SET engaged = ?, engage_signal = ?, status = 'closed', closed_at = ?
          WHERE account_id = ? AND group_id = ? AND status = 'sent'
-           AND engaged IS NULL AND window_expires_at IS NOT NULL AND window_expires_at > ?`,
-        [atSec, accountId, groupId, atSec],
+           AND (engage_signal IS NULL OR engage_signal = 'short-window')
+           AND window_expires_at IS NOT NULL AND window_expires_at > ?`,
+        [engaged, signal, atSec, accountId, groupId, atSec],
       );
     },
     async closeHfExpiredWindows(accountId, atSec): Promise<void> {
       const p = getPool();
+      // (1) 已落弱信号但没人升级 → 到期关窗, **保持 engaged=1** (它确实被弱信号命中过)
       await queryWithTimeout(
         p,
-        `UPDATE wpp_hf_ledger SET status = 'closed', engaged = 0, closed_at = ?
+        `UPDATE wpp_hf_ledger SET status = 'closed', closed_at = ?
+         WHERE account_id = ? AND status = 'sent' AND engage_signal = 'short-window'
+           AND window_expires_at IS NOT NULL AND window_expires_at <= ?`,
+        [atSec, accountId, atSec],
+      );
+      // (2) 整窗无任何信号 → 判 silence (engaged=0), 供"冷清群里 bot 说话没人理"沉淀为负样本
+      await queryWithTimeout(
+        p,
+        `UPDATE wpp_hf_ledger SET status = 'closed', engaged = 0, engage_signal = 'silence', closed_at = ?
          WHERE account_id = ? AND status = 'sent' AND engaged IS NULL
            AND window_expires_at IS NOT NULL AND window_expires_at <= ?`,
         [atSec, accountId, atSec],
@@ -942,7 +1044,7 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       const p = getPool();
       const rows = await queryWithTimeout<RowDataPacket[]>(
         p,
-        `SELECT engaged, closed_at FROM wpp_hf_ledger
+        `SELECT engaged, closed_at, engage_signal FROM wpp_hf_ledger
          WHERE account_id = ? AND group_id = ? AND status = 'closed' AND engaged IS NOT NULL
          ORDER BY closed_at DESC LIMIT ?`,
         [accountId, groupId, Math.min(Math.max(limit, 1), 500)],
@@ -950,7 +1052,366 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       return rows.map((r) => ({
         engaged: Number(r.engaged),
         closed_at: r.closed_at == null ? null : Number(r.closed_at),
+        engage_signal: r.engage_signal == null ? null : String(r.engage_signal),
       }));
+    },
+    // v1.6.8 反事实基线: 每群 × 每小时段的**入站人类消息数** (供 hfAmbientP 算"那时段本来多热闹").
+    //   时间口径 = UNIX_TIMESTAMP(ts): 绝对 epoch (TIMESTAMP 内部存 UTC, UNIX_TIMESTAMP() 反解回来仍是
+    //   绝对秒, 与 session 时区无关) ⇒ 加 localOffsetSec 取模即**本地**小时, 与 new Date().getHours() 一致.
+    //   ⚠️ **不要退回 create_time**: 它是个**遗留死列** (当前代码只读不写). 2026-09-26 生产实测:
+    //   非空值形如 20260811094227 = YYYYMMDDHHMMSS **不是 epoch**, 且最后一条这类行停在 2026-08-11
+    //   (之后的出站/入站行该列全 NULL). 把它当秒用会把那些行排到公元 643000 年 ⇒ 分桶/排序/窗口全错,
+    //   且**不报错**. 当前窗口 (≤30 天) 恰好够不到它们, 属于"埋着的雷", 故一并拆掉.
+    //   ⚠️ **单表查询**是有意的: wpp_messages 是 utf8mb4_unicode_ci, 而 wpp_hf_* 三表是 MariaDB 11
+    //   默认的 utf8mb4_uca1400_ai_ci (2026-09-26 生产实测 wpp_messages.chat_id JOIN wpp_hf_ledger.group_id
+    //   直接报 "Illegal mix of collations"). 将来若要跨表 JOIN, 被比较的两列都必须显式 COLLATE 到同一侧.
+    async listHfGroupMsgHourBuckets(
+      accountId,
+      sinceSec,
+      localOffsetSec,
+    ): Promise<HfGroupHourBucket[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT chat_id AS group_id,
+                FLOOR((((UNIX_TIMESTAMP(ts) + ?) % 86400) + 86400) % 86400 / 3600) AS h,
+                COUNT(*) AS n
+         FROM wpp_messages
+         WHERE account_id = ? AND peer_kind = 'group' AND direction = 'inbound'
+           AND chat_id IS NOT NULL AND chat_id <> ''
+           AND ts >= FROM_UNIXTIME(?)
+         GROUP BY group_id, h`,
+        [localOffsetSec, accountId, sinceSec],
+      );
+      return rows.map((r) => ({
+        group_id: String(r.group_id),
+        hour: Number(r.h) || 0,
+        n: Number(r.n) || 0,
+      }));
+    },
+    // v1.6.9 发言预算回填: 每群近 1 小时 / 近 24 小时的**已发出**条数 + 最近发出时刻 (账号启动时一次).
+    //   "已发出" = sent_at 非空 (sent 行还在观察窗内, closed 行已收敛) ⇒ 两种状态都算, 与运行时
+    //   noteHfReplySent 的记账口径一致 (发送成功即占额度, 不因后续收敛而退还)。
+    //   两个边界由调用方给: `hourSinceSec` 必须是**本地整点** (与运行时小时桶键同口径), 否则上一小时的
+    //   尾巴会被算进本小时, 让新小时一开始就少一条额度 (调用方见 seedHfBudgetStates)。
+    async listHfSentCountsRecent(
+      accountId,
+      hourSinceSec,
+      daySinceSec,
+    ): Promise<HfSentCountRow[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT group_id,
+                SUM(sent_at >= ?) AS hour_count,
+                COUNT(*) AS day_count,
+                MAX(sent_at) AS last_sent_at
+         FROM wpp_hf_ledger
+         WHERE account_id = ? AND sent_at IS NOT NULL AND sent_at >= ?
+         GROUP BY group_id`,
+        [hourSinceSec, accountId, daySinceSec],
+      );
+      return rows.map((r) => ({
+        group_id: String(r.group_id),
+        hour_count: Number(r.hour_count) || 0,
+        day_count: Number(r.day_count) || 0,
+        last_sent_at: r.last_sent_at == null ? null : Number(r.last_sent_at),
+      }));
+    },
+    // v1.7.0 /heartflow why: 该群最近一条台账行 (只读; 判不出原因时运维就只能靠猜 —— 老板要的"为什么"落这里)
+    async getHfLedgerLast(accountId, groupId): Promise<HfLedgerTrace | null> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT account_id, inbound_msg_id, new_msg_id, bot_msg_id, group_id, from_wxid, msg_type,
+                content_head, judge_overall, dim_r, dim_w, dim_s, dim_t, dim_c,
+                effective_threshold, energy, status, suppressed_reason, engaged, engage_signal,
+                judged_at, sent_at
+         FROM wpp_hf_ledger
+         WHERE account_id = ? AND group_id = ?
+         ORDER BY judged_at DESC, id DESC LIMIT 1`,
+        [accountId, groupId],
+      );
+      const first = rows[0];
+      if (!first) return null;
+      const num = (v: unknown): number | null => (v == null ? null : Number(v));
+      return {
+        account_id: String(first.account_id),
+        inbound_msg_id: String(first.inbound_msg_id),
+        new_msg_id: first.new_msg_id == null ? null : String(first.new_msg_id),
+        bot_msg_id: first.bot_msg_id == null ? null : String(first.bot_msg_id),
+        group_id: String(first.group_id),
+        from_wxid: first.from_wxid == null ? null : String(first.from_wxid),
+        msg_type: first.msg_type == null ? null : String(first.msg_type),
+        content_head: first.content_head == null ? null : String(first.content_head),
+        judge_overall: num(first.judge_overall),
+        dim_r: num(first.dim_r),
+        dim_w: num(first.dim_w),
+        dim_s: num(first.dim_s),
+        dim_t: num(first.dim_t),
+        dim_c: num(first.dim_c),
+        effective_threshold: num(first.effective_threshold),
+        energy: num(first.energy),
+        status: String(first.status),
+        suppressed_reason: first.suppressed_reason == null ? null : String(first.suppressed_reason),
+        engaged: num(first.engaged),
+        engage_signal: first.engage_signal == null ? null : String(first.engage_signal),
+        judged_at: Number(first.judged_at) || 0,
+        sent_at: num(first.sent_at),
+      };
+    },
+    // v1.7.0 群画像: 覆盖写 (PK = account_id+group_id). 调用方**只在解析成功时**才调它 ⇒ 不会写空画像.
+    //   version 由调用方给 (旧 version+1), 这里不做自增 —— 自增在 ON DUPLICATE 里看似优雅, 但生成失败/重放时
+    //   版本号会虚长, 反而失去"第几版"的可读性.
+    async upsertHfGroupProfile(record: HfGroupProfileRecord): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `INSERT INTO wpp_hf_group_profile
+           (account_id, group_id, profile_json, stats_json, sample_msgs, model, version, generated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           profile_json = VALUES(profile_json),
+           stats_json = VALUES(stats_json),
+           sample_msgs = VALUES(sample_msgs),
+           model = VALUES(model),
+           version = VALUES(version),
+           generated_at = VALUES(generated_at)`,
+        [
+          record.account_id,
+          record.group_id,
+          record.profile_json,
+          record.stats_json ?? null,
+          record.sample_msgs ?? 0,
+          record.model ?? null,
+          record.version ?? 1,
+          record.generated_at ?? null,
+        ],
+      );
+    },
+    // 显式列清单 (不用 SELECT *) —— 加列时不至于悄悄改掉行形状
+    async getHfGroupProfile(accountId, groupId): Promise<HfGroupProfileRecord | null> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT account_id, group_id, profile_json, stats_json, sample_msgs, model, version, generated_at
+         FROM wpp_hf_group_profile WHERE account_id = ? AND group_id = ? LIMIT 1`,
+        [accountId, groupId],
+      );
+      const first = rows[0];
+      return first ? rowToHfGroupProfile(first) : null;
+    },
+    async listHfGroupProfiles(accountId): Promise<HfGroupProfileRecord[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT account_id, group_id, profile_json, stats_json, sample_msgs, model, version, generated_at
+         FROM wpp_hf_group_profile WHERE account_id = ?`,
+        [accountId],
+      );
+      return rows.map(rowToHfGroupProfile);
+    },
+    // v1.7.0 画像素材: 4 条**单表**只读聚合 (wpp_messages). 每群每天只跑一次 (生成画像时), 不在热路径上.
+    //   口径与 listHfGroupMsgHourBuckets 一致: peer_kind='group' + direction='inbound' (排除 bot 自己的出站),
+    //   时间走 UNIX_TIMESTAMP(ts) (绝对 epoch) 并加 localOffsetSec 偏移后取本地小时/日.
+    //   ⚠️ 同 listHfGroupMsgHourBuckets: 不得用 create_time (遗留死列, 值是 YYYYMMDDHHMMSS 不是 epoch).
+    //   ⚠️ 不 JOIN wpp_hf_* : wpp_messages 是 utf8mb4_unicode_ci, wpp_hf_* 是 utf8mb4_uca1400_ai_ci ⇒ 跨表报错.
+    async getHfGroupMessageStats(accountId, groupId, sinceSec): Promise<HfGroupMsgStats> {
+      const p = getPool();
+      const localOffsetSec = -new Date(sinceSec * 1000).getTimezoneOffset() * 60;
+      const base = `FROM wpp_messages
+         WHERE account_id = ? AND peer_kind = 'group' AND direction = 'inbound'
+           AND chat_id = ? AND chat_id <> '' AND ts >= FROM_UNIXTIME(?)`;
+      const totals = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT COUNT(*) AS n,
+                AVG(CHAR_LENGTH(COALESCE(content, ''))) AS avg_len,
+                COUNT(DISTINCT DATE(FROM_UNIXTIME(UNIX_TIMESTAMP(ts) + ?))) AS active_days
+         ${base}`,
+        [localOffsetSec, accountId, groupId, sinceSec],
+      );
+      const hours = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT FLOOR((((UNIX_TIMESTAMP(ts) + ?) % 86400) + 86400) % 86400 / 3600) AS h,
+                COUNT(*) AS n
+         ${base}
+         GROUP BY h`,
+        [localOffsetSec, accountId, groupId, sinceSec],
+      );
+      const senders = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT from_wxid, COUNT(*) AS n ${base}
+         GROUP BY from_wxid ORDER BY n DESC LIMIT 5`,
+        [accountId, groupId, sinceSec],
+      );
+      const types = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT msg_type, COUNT(*) AS n ${base} GROUP BY msg_type`,
+        [accountId, groupId, sinceSec],
+      );
+      const hourHist = new Array<number>(24).fill(0);
+      for (const r of hours) {
+        const h = Number(r.h) || 0;
+        if (h >= 0 && h < 24) hourHist[h] = Number(r.n) || 0;
+      }
+      const typeHist: Record<string, number> = {};
+      for (const r of types) {
+        const k = r.msg_type == null ? "unknown" : String(r.msg_type);
+        typeHist[k] = (typeHist[k] ?? 0) + (Number(r.n) || 0);
+      }
+      return {
+        total: Number(totals[0]?.n) || 0,
+        activeDays: Number(totals[0]?.active_days) || 0,
+        avgLen: Math.round(Number(totals[0]?.avg_len) || 0),
+        hourHist,
+        topSenders: senders.map((r) => ({ wxid: String(r.from_wxid ?? ""), n: Number(r.n) || 0 })),
+        typeHist,
+      };
+    },
+    // v1.8.0 分层统计输入: 窗口内**全部群**已收敛行, 一次批量取 (避免逐群 N+1).
+    //   engaged IS NOT NULL 排除 suppressed (没进观察窗的行不是样本); engage_signal 允许 NULL ——
+    //   由 aggregateHfLayerStats 侧丢弃 (v1.6.8 之前的旧行没有信号列, 那些正是旧错误标签).
+    //   单表查询, 理由同 listHfGroupMsgHourBuckets 的 collation 警告.
+    async listHfClosedSince(accountId, sinceSec, limit): Promise<HfLayerSampleRow[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT group_id, engaged, engage_signal, sent_at FROM wpp_hf_ledger
+         WHERE account_id = ? AND status = 'closed' AND engaged IS NOT NULL AND sent_at IS NOT NULL AND sent_at >= ?
+         ORDER BY sent_at DESC LIMIT ?`,
+        [accountId, sinceSec, Math.min(Math.max(limit, 1), 5000)],
+      );
+      return rows.map((r) => ({
+        group_id: String(r.group_id),
+        engaged: Number(r.engaged) || 0,
+        engage_signal: r.engage_signal == null ? null : String(r.engage_signal),
+        sent_at: Number(r.sent_at) || 0,
+      }));
+    },
+    // v1.8.0 分层统计落库 (只写**有变化**的行; 稳态下每轮 0 写). window_start 每次覆盖 = 窗口起点在滚动.
+    async upsertHfLayerStat(record: HfLayerStatRecord): Promise<void> {
+      const p = getPool();
+      await queryWithTimeout(
+        p,
+        `INSERT INTO wpp_hf_layer_stat
+         (account_id, group_id, layer_kind, layer_key, n, engaged, ambient_p, window_start)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           n = VALUES(n),
+           engaged = VALUES(engaged),
+           ambient_p = VALUES(ambient_p),
+           window_start = VALUES(window_start)`,
+        [
+          record.account_id,
+          record.group_id,
+          record.layer_kind,
+          record.layer_key,
+          record.n,
+          record.engaged,
+          record.ambient_p ?? null,
+          record.window_start,
+        ],
+      );
+    },
+    // v1.8.0 启动预热: 账号全部段统计 (判定热路径不读它).
+    async listHfLayerStats(accountId): Promise<HfLayerStatRecord[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT account_id, group_id, layer_kind, layer_key, n, engaged, ambient_p, window_start
+         FROM wpp_hf_layer_stat WHERE account_id = ?`,
+        [accountId],
+      );
+      return rows.map((r) => ({
+        account_id: String(r.account_id),
+        group_id: String(r.group_id),
+        layer_kind: String(r.layer_kind ?? "daypart"),
+        layer_key: String(r.layer_key),
+        n: Number(r.n) || 0,
+        engaged: Number(r.engaged) || 0,
+        ambient_p: r.ambient_p == null ? null : Number(r.ambient_p),
+        window_start: Number(r.window_start) || 0,
+      }));
+    },
+    // v1.8.0 一键否决 (`/heartflow veto`): 把该群**最近一条已发出**的行标成"这条不该回".
+    //   ⚠️ 排序键必须是 sent_at (不是 judged_at): 一条被预算/冷却拦了很久的旧 judged 行会盖过刚发出的那条.
+    //   ⚠️ 不能写成 `WHERE id = (SELECT ... FROM 同一张表)` —— MariaDB 拒绝同表子查询更新, 故分两步.
+    //   status='closed' + closed_at 一并写上: 该行从此是**终态样本**, sweep 不会再动它.
+    async markHfLedgerVeto(accountId, groupId, atSec): Promise<HfVetoResult | null> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT id, content_head, sent_at FROM wpp_hf_ledger
+         WHERE account_id = ? AND group_id = ? AND status IN ('sent','closed') AND sent_at IS NOT NULL
+         ORDER BY sent_at DESC, id DESC LIMIT 1`,
+        [accountId, groupId],
+      );
+      const row = rows[0];
+      if (!row) return null;
+      const id = Number(row.id);
+      await queryWithTimeout(
+        p,
+        `UPDATE wpp_hf_ledger SET engaged = 0, engage_signal = 'veto', status = 'closed', closed_at = ?
+         WHERE id = ? AND account_id = ?`,
+        [atSec, id, accountId],
+      );
+      return {
+        id,
+        content_head: row.content_head == null ? null : String(row.content_head),
+        sent_at: row.sent_at == null ? null : Number(row.sent_at),
+      };
+    },
+    // v1.9.0: 每群发言占比素材 (只读单表 wpp_messages)。
+    //   ⚠️ `COALESCE(NULLIF(chat_id,''), peer_id)` 是**必须**的: 出站行只写 peer_kind='group' +
+    //   peer_id=目标群, chat_id/from_wxid 恒为 NULL (见 src/send/msg.ts 落库路径)。若直接
+    //   GROUP BY chat_id, bot 侧分子恒为 0、占比永远 0%, 而且**不报任何错** —— 外环静默失效。
+    //   ⚠️ 单表是刻意的 (跨表关联会撞 collation, 见 listHfGroupMsgHourBuckets 的警告)。
+    //   (此处不写那个 SQL 关键字, 免得被 heartflow-profile.test.mjs 的源级守卫按字面量误判 —— 该守卫扫的
+    //    函数体切片靠"下一个顶层声明"定界, 会把后面这些 adapter 方法一起吃进去。)
+    async listHfBotMsgShare(accountId, sinceSec): Promise<HfGroupShareRow[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT COALESCE(NULLIF(chat_id, ''), peer_id) AS gid, direction, COUNT(*) AS n
+         FROM wpp_messages
+         WHERE account_id = ? AND peer_kind = 'group' AND ts >= FROM_UNIXTIME(?)
+         GROUP BY gid, direction`,
+        [accountId, sinceSec],
+      );
+      return rows.map((r) => ({
+        group_id: String(r.gid ?? ""),
+        direction: String(r.direction ?? ""),
+        n: Number(r.n) || 0,
+      }));
+    },
+    // v1.9.0: 重复率素材 (群聊出站文本, 时间升序取最近 limit 条)。
+    //   时间口径 = UNIX_TIMESTAMP(ts) (绝对 epoch, 与 session 时区无关, 见 listHfGroupMsgHourBuckets 说明);
+    //   ⚠️ 不用 create_time: 遗留死列, 值是 YYYYMMDDHHMMSS 不是 epoch ⇒ 会把旧行排到"最后面"并让
+    //   6h 窗口判定把它们全算成窗内 (at_sec 巨大 ⇒ now - at_sec 为负), 静默制造假重复。
+    //   空文本行 (媒体占位) 直接滤掉 —— 归一化后为空, 参与相似度计算只会制造假重复。
+    async listHfOutboundTexts(accountId, sinceSec, limit): Promise<HfOutboundTextRow[]> {
+      const p = getPool();
+      const cap = Math.min(Math.max(Math.floor(limit), 1), 2000);
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT COALESCE(NULLIF(chat_id, ''), peer_id) AS gid,
+                content,
+                UNIX_TIMESTAMP(ts) AS at_sec
+         FROM wpp_messages
+         WHERE account_id = ? AND peer_kind = 'group' AND direction = 'outbound'
+           AND content IS NOT NULL AND content <> ''
+           AND ts >= FROM_UNIXTIME(?)
+         ORDER BY at_sec DESC LIMIT ?`,
+        [accountId, sinceSec, cap],
+      );
+      // DB 侧取"最近 N 条"(DESC), 用侧要按时间升序扫描 ⇒ 这里反转 (让"历史里有更早的一条"这个语义成立)
+      return rows
+        .map((r) => ({
+          group_id: String(r.gid ?? ""),
+          content: String(r.content ?? ""),
+          at_sec: Number(r.at_sec) || 0,
+        }))
+        .reverse();
     },
     async upsertHfGroupState(record: HfGroupStateRecord): Promise<void> {
       const p = getPool();
@@ -1038,6 +1499,20 @@ function rowToHfGroupState(r: RowDataPacket): HfGroupStateRecord {
     last_change_old: r.last_change_old == null ? null : Number(r.last_change_old),
     last_change_new: r.last_change_new == null ? null : Number(r.last_change_new),
     last_change_reason: r.last_change_reason == null ? null : String(r.last_change_reason),
+  };
+}
+
+function rowToHfGroupProfile(r: RowDataPacket): HfGroupProfileRecord {
+  return {
+    account_id: String(r.account_id),
+    group_id: String(r.group_id),
+    // profile_json 为 NULL 的存量/异常行 → 空串 (上层解析失败即视为无画像, 不注入)
+    profile_json: r.profile_json == null ? "" : String(r.profile_json),
+    stats_json: r.stats_json == null ? null : String(r.stats_json),
+    sample_msgs: Number(r.sample_msgs) || 0,
+    model: r.model == null ? null : String(r.model),
+    version: Number(r.version) || 1,
+    generated_at: r.generated_at == null ? null : Number(r.generated_at),
   };
 }
 

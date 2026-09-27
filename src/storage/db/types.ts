@@ -124,12 +124,20 @@ export interface DbAdapter {
     accountId: string,
     sinceSec: number,
   ): Promise<{ total: number; byStatus: Record<string, number>; bySuppressedReason: Record<string, number> }>;
+  /**
+   * v1.6.8 可观测: 近 sinceSec 秒**已收敛**的样本按命中信号计数
+   * (quote/mention/negative/short-window/silence; NULL 旧行归 'legacy'). 供 /heartflow status
+   * 显示"新标签是否在工作" —— 老板要看的就是这个分布, 而不是又一个被自学的标量.
+   */
+  countHfEngageSignals(accountId: string, sinceSec: number): Promise<Record<string, number>>;
   /** judged → sent (guard: 仅 judged 可推进, 防 deliver 双调重置窗) */
   setHfLedgerSent(
     accountId: string,
     inboundMsgId: string,
     sentAtSec: number,
     windowExpiresAtSec: number,
+    /** v1.6.8: vendor 返回的 bot 发出那条的 msgId (用于"有人引用了我那条"判定; 不回 id 时 NULL) */
+    botMsgId?: string | null,
   ): Promise<void>;
   /** judged → suppressed (guard: 仅 judged) */
   setHfLedgerSuppressed(
@@ -138,8 +146,38 @@ export interface DbAdapter {
     reason: string,
     atSec: number,
   ): Promise<void>;
-  /** 人类接话: sent 开窗且未定 → engaged=1 + closed (立即收敛) */
-  markHfEngaged(accountId: string, groupId: string, atSec: number): Promise<void>;
+  /**
+   * 按信号收敛该群开窗中的账本行.
+   * v1.6.8 起语义变更 (旧码 = 任意人类消息即 engaged=1+关窗, 是标签跑飞的根因, 见 heartflow-label.ts):
+   *   close=false → 只落弱信号 (short-window) 并**保持开窗**, 等更强的信号 (引用/@/负词) 来升级;
+   *   close=true  → 落结论并关窗; WHERE 允许覆盖 'short-window' (弱→强升级), 不覆盖已有强信号.
+   */
+  markHfEngaged(
+    accountId: string,
+    groupId: string,
+    atSec: number,
+    engaged: 0 | 1,
+    signal: string,
+    close: boolean,
+  ): Promise<void>;
+  /**
+   * v1.6.8 反事实基线素材: 近 sinceSec 秒内, **每群 × 每小时段**的入站人类消息数
+   * (hour = 按 localOffsetSec 偏移后的本地小时 0-23). 用于算"该群那时段本来就有多热闹".
+   */
+  listHfGroupMsgHourBuckets(
+    accountId: string,
+    sinceSec: number,
+    localOffsetSec: number,
+  ): Promise<HfGroupHourBucket[]>;
+  /**
+   * v1.6.9 发言预算回填: 每群在 `[hourSinceSec, now]` / `[daySinceSec, now]` 内的**已发出**条数 + 最近发出时刻。
+   * 一条条件聚合搞定 (judge 热路径零 DB 读, 只在账号启动时跑一次)。
+   */
+  listHfSentCountsRecent(
+    accountId: string,
+    hourSinceSec: number,
+    daySinceSec: number,
+  ): Promise<HfSentCountRow[]>;
   /** sweep: sent 到期无人接话 → ignored (engaged=0) + closed */
   closeHfExpiredWindows(accountId: string, atSec: number): Promise<void>;
   /** sweep: judged 无发送结果超上限 → suppressed (呆账收敛) */
@@ -164,6 +202,68 @@ export interface DbAdapter {
   logHfThresholdChange(record: HfThresholdAuditRecord): Promise<void>;
   /** sweep: 有已收敛样本的群清单 (since 之后) */
   getHfLedgerDistinctClosedGroups(accountId: string, sinceSec: number): Promise<string[]>;
+
+  /**
+   * v1.7.0 可观测: 该群**最近一条**台账行 (任意 status) —— `/heartflow why <群ID>` 的依据.
+   * 只读单行 (ORDER BY judged_at DESC LIMIT 1), 不参与任何判定.
+   */
+  getHfLedgerLast(accountId: string, groupId: string): Promise<HfLedgerTrace | null>;
+
+  // ====== v1.7.0 HEARTFLOW-PROFILE (群画像) ======
+  /** 覆盖写单群画像 (PK = account_id+group_id; 生成失败时调用方**不写**, 保留上一版) */
+  upsertHfGroupProfile(record: HfGroupProfileRecord): Promise<void>;
+  /** 读单群画像 (无则 null) */
+  getHfGroupProfile(accountId: string, groupId: string): Promise<HfGroupProfileRecord | null>;
+  /**
+   * 列账号全部画像 (sweep 每轮预热内存缓存 ⇒ judge 热路径零 DB 读, 遵守 perf-heat-path D6).
+   * 一次查询覆盖所有群, 不按群逐个查。
+   */
+  listHfGroupProfiles(accountId: string): Promise<HfGroupProfileRecord[]>;
+  /**
+   * v1.7.0 画像素材: 该群近 sinceSec 秒的**入站人类消息**统计
+   * (总数/活跃天数/小时直方图/发言 TOP 成员/类型分布/平均字数)。
+   * **单表只读** (wpp_messages) —— 不 JOIN wpp_hf_* (collation 不同, 见 mysql.ts 注释)。
+   */
+  getHfGroupMessageStats(
+    accountId: string,
+    groupId: string,
+    sinceSec: number,
+  ): Promise<HfGroupMsgStats>;
+
+  // ====== v1.8.0 HEARTFLOW-LAYERED (群 × 时段分层统计) ======
+  /**
+   * 分层统计的**输入**: 窗口内**全部群**已收敛 (status='closed' 且 engaged 非空) 的台账行, 一次批量取回。
+   * 一次查询覆盖所有群是刻意的 (避免 N+1: 20 个群一次 sweep 打 20 次 DB)。
+   * 只读单表 wpp_hf_ledger (不与 wpp_messages JOIN: collation 不同)。
+   */
+  listHfClosedSince(accountId: string, sinceSec: number, limit: number): Promise<HfLayerSampleRow[]>;
+  /** upsert 一行段统计 (PK = account_id+group_id+layer_kind+layer_key); 调用方只在内容变化时调 */
+  upsertHfLayerStat(record: HfLayerStatRecord): Promise<void>;
+  /** 读账号全部段统计 (启动预热内存缓存; 判定的热路径不读它) */
+  listHfLayerStats(accountId: string): Promise<HfLayerStatRecord[]>;
+  /**
+   * v1.8.0 一键否决: 把该群**最近一条已发出**的台账行标成"这条不该回"
+   * (engaged=0 / engage_signal='veto' / status='closed')。
+   * 选行必须 `ORDER BY sent_at DESC, id DESC` —— **不能按 judged_at**: 一条被预算拦了很久的旧 judged
+   * 行会盖过刚发出的那条。无行可标 ⇒ 返回 null (上层如实回执"没找到")。
+   */
+  markHfLedgerVeto(accountId: string, groupId: string, atSec: number): Promise<HfVetoResult | null>;
+
+  // ====== v1.9.0 HEARTFLOW-OBSERVE (观测复盘 + 占比外环) ======
+  /**
+   * 每群发言占比素材: 窗口内按群 × 方向的条数 (只读**单表** wpp_messages)。
+   *
+   * ⚠️ 出站行的 `chat_id`/`from_wxid` 恒为 NULL (出站只写 peer_kind='group' + peer_id=目标群),
+   *   故归群必须 `COALESCE(NULLIF(chat_id,''), peer_id)` —— 直接 GROUP BY chat_id 会让 bot 侧分子
+   *   **恒为 0 且不报错** (占比永远显示 0%, 外环永远不触发)。
+   * ⚠️ 不与 wpp_hf_* JOIN: 两者 collation 不同 (MariaDB 实测 Illegal mix of collations)。
+   */
+  listHfBotMsgShare(accountId: string, sinceSec: number): Promise<HfGroupShareRow[]>;
+  /**
+   * 重复率素材: 窗口内**群聊出站**文本 (按时间升序, 取最近 limit 条)。
+   * 口径偏差: 出站行含"老板自己用 iPad 手打的消息", 插件发送与人工发送在 wpp_messages 里无法区分。
+   */
+  listHfOutboundTexts(accountId: string, sinceSec: number, limit: number): Promise<HfOutboundTextRow[]>;
 }
 
 /** v1.6.x: 心流 ledger 行类型 (wpp_hf_ledger, 落行字段; 列见 DDL) */
@@ -212,6 +312,132 @@ export interface HfThresholdAuditRecord {
 export interface HfClosedSample {
   engaged: number; // 0 | 1
   closed_at?: number | null;
+  /** v1.6.8: 命中信号 (quote/mention/negative/short-window/silence) —— 决定该样本是否可采信 */
+  engage_signal?: string | null;
+}
+
+/** v1.6.8: 反事实基线素材行 (每群 × 每小时段的入站人类消息数) */
+export interface HfGroupHourBucket {
+  group_id: string;
+  /** 本地小时 0-23 */
+  hour: number;
+  n: number;
+}
+
+/** v1.6.9: 发言预算回填行 (每群已发出的条数 + 最近发出时刻) */
+export interface HfSentCountRow {
+  group_id: string;
+  /** 近 1 小时 (本地小时桶) 内已发出条数 */
+  hour_count: number;
+  /** 近 24 小时内已发出条数 */
+  day_count: number;
+  /** 最近一次发出的时刻 (unix 秒; 无则 null) */
+  last_sent_at: number | null;
+}
+
+/** v1.8.0: 分层统计的输入样本 (已收敛台账行; 只取算得着的列) */
+export interface HfLayerSampleRow {
+  group_id: string;
+  engaged: number;
+  /** 命中信号 (quote/mention/negative/veto/short-window/silence); NULL = v1.6.8 前的旧行 ⇒ 不采信 */
+  engage_signal?: string | null;
+  /** 发出时刻 (unix 秒) —— 归段依据是"什么时候说的", 不是"什么时候收敛的" */
+  sent_at?: number | null;
+}
+
+/** v1.8.0: 一行段统计 (wpp_hf_layer_stat) */
+export interface HfLayerStatRecord {
+  account_id: string;
+  group_id: string;
+  /** 'daypart' (话题层预留未启用) */
+  layer_kind: string;
+  /** 段名, 如 "18-24" (起-止, 自解释) */
+  layer_key: string;
+  n: number;
+  engaged: number;
+  /** 段内本底 (该段各小时 ambientP 最大值; 展示用, 不参与判定) */
+  ambient_p: number | null;
+  /** 统计窗口起点 (unix 秒) */
+  window_start: number;
+}
+
+/** v1.8.0: veto 回执 (被标成"这条不该回"的那一行) */
+export interface HfVetoResult {
+  id: number;
+  /** 被否决那条的内容开头 (回声给老板确认删的是哪条) */
+  content_head: string | null;
+  sent_at: number | null;
+}
+
+/**
+ * v1.9.0: 每群发言占比素材 (wpp_messages 按群 × 方向计数)
+ * `group_id` 已 `COALESCE(NULLIF(chat_id,''), peer_id)` 归一 (出站行 chat_id 为 NULL)。
+ */
+export interface HfGroupShareRow {
+  group_id: string;
+  /** inbound | outbound */
+  direction: string;
+  n: number;
+}
+
+/** v1.9.0: 重复率素材行 (群聊出站文本) */
+export interface HfOutboundTextRow {
+  group_id: string;
+  content: string;
+  /** unix 秒 (取 create_time, 与 listHfGroupMsgHourBuckets 同口径: TIMESTAMP 会随 DB 时区漂) */
+  at_sec: number;
+}
+
+/**
+ * v1.7.0: 台账单行追溯 (`/heartflow why`). 在 HfLedgerRecord (写入字段) 基础上补**决策结果**字段.
+ */
+export interface HfLedgerTrace extends HfLedgerRecord {
+  /** judged | sent | suppressed | closed */
+  status: string;
+  suppressed_reason?: string | null;
+  /** NULL=不在样本内 (suppressed); 1=被接话; 0=没人理 */
+  engaged?: number | null;
+  /** v1.6.8 命中信号 (quote/mention/negative/short-window/silence) */
+  engage_signal?: string | null;
+  sent_at?: number | null;
+  bot_msg_id?: string | null;
+}
+
+/** v1.7.0: 群画像行 (wpp_hf_group_profile) */
+export interface HfGroupProfileRecord {
+  account_id: string;
+  group_id: string;
+  /** 结构化画像 JSON 串 (解析失败即视为无画像, 上层降级为不注入) */
+  profile_json: string;
+  /** 生成时的统计快照 JSON (审计用; 可为 null) */
+  stats_json?: string | null;
+  /** 参与生成的样本消息数 */
+  sample_msgs?: number;
+  /** 产出该画像的模型名 */
+  model?: string | null;
+  /** 版本号 (每次重生成 +1) */
+  version?: number;
+  /** 生成时刻 (unix 秒) */
+  generated_at?: number | null;
+}
+
+/**
+ * v1.7.0: 群消息统计 (由 getHfGroupMessageStats 一次聚合产出; 只读本地 DB, 不出机器).
+ * 注意: 统计本身**不进公开仓** —— 这是运行期数据, 不是代码.
+ */
+export interface HfGroupMsgStats {
+  /** 窗口内入站人类消息总数 */
+  total: number;
+  /** 有消息的天数 (按本地日) */
+  activeDays: number;
+  /** 本地小时直方图 (长度 24; 索引 = 小时) */
+  hourHist: number[];
+  /** 发言 TOP 成员 (按条数降序, 最多 5) */
+  topSenders: Array<{ wxid: string; n: number }>;
+  /** msg_type → 条数 */
+  typeHist: Record<string, number>;
+  /** 平均字数 (content 字符数) */
+  avgLen: number;
 }
 
 /** v1.3.76: 群黑话词条 row (wpp_jargon_terms) */

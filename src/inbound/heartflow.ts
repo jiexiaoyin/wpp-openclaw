@@ -28,6 +28,12 @@
 
 import { warn } from "../core/logger.js";
 import { callJudge, resolveJudgeCreds } from "../llm-judge.js";
+import type { HfBudgetConfig } from "./heartflow-budget.js";
+import type { HfDedupeConfig } from "./heartflow-dedupe.js";
+import type { HfLayeredConfig } from "./heartflow-layer.js";
+import type { HfShareGuardConfig } from "./heartflow-observe.js";
+import type { HfProfileConfig } from "./heartflow-profile.js";
+import { peekHfBudget, resolveHfBudget } from "./heartflow-budget.js";
 
 // ===== 配置接口 =====
 
@@ -72,6 +78,40 @@ export interface HeartflowConfig {
    * learned 阈值本身存 DB (wpp_hf_group_state), 不回写 accounts JSON
    */
   learning?: HfLearningConfig;
+  /**
+   * v1.6.9 发言预算 (结构层频率约束): 每群最小间隔 / 每小时 / 每天上限 + 静默段 + 陈旧触发防重放.
+   * 在 `checkHeartflowGate` 里**judge 之前**判定 (被拦的消息不花 LLM 调用); 缺省走 HF_BUDGET_DEFAULTS
+   * (老板 2026-09-26 选"中等"档), 可在 accounts/default.json 覆盖 —— **不进 UI schema**。
+   */
+  budget?: HfBudgetConfig;
+  /**
+   * v1.7.0 群画像 (老板 2026-09-26 要的"按群自动理解身份与特征, 应景回复"): 每群每日一份 LLM 归纳的画像,
+   * 注入 judge prompt 供参考; 其建议的阈值/预算只能让约束**更紧**(更克制)。缺省走 HF_PROFILE_DEFAULTS。
+   * ⚠️ 用 `import type` 只为类型 (heartflow-profile.ts 反向 import 本文件, 值导入会成环)。
+   */
+  profile?: HfProfileConfig;
+  /**
+   * v1.8.0 分层学习 (群 × 时段): 同一个群上午和深夜的合适频率本就不同, 一个标量管不了。
+   * 每轮 sweep **全量重算**该群各段的样本/接话率, 段内样本够时从群级 learned 出发走**一步**
+   * evalHfThreshold (±step, 被 band 钳死, 不累积不漂移)。
+   * ⚠️ 默认 `apply:false` = **影子**: 照算照记, 只在 `/heartflow why` `/heartflow report` 里显示
+   * "若生效会是多少" —— 老板看够了再手动开。缺省走 HF_LAYERED_DEFAULTS。
+   * ⚠️ 用 `import type` 只为类型 (heartflow-layer.ts 反向 import 本文件, 值导入会成环)。
+   */
+  layered?: HfLayeredConfig;
+  /**
+   * v1.9.0 重复内容闸 (老板 2026-09-26 拍板): 同群 6 小时内高度相似 (≥0.85) 的心流**主动插话**不发。
+   * 只读回放真实账本显示 bot 一部分发言是"换个日期的同一段话" —— 这是"不像真人"最刺眼的症状。
+   * ⚠️ 只在 dispatcher 的心流 deliver 路径生效 (@/引用/关键词等"被叫到"的回复不拦)。
+   * ⚠️ 用 `import type` 只为类型 (heartflow-dedupe.ts 反向 import 本文件, 值导入会成环)。
+   */
+  dedupe?: HfDedupeConfig;
+  /**
+   * v1.9.0 占比外环 (老板拍板): 该群 bot 发言占比 > 目标 (默认 5%) 且样本够 ⇒ 收紧当日预算。
+   * **不动阈值** —— 只动有界的预算参数 (间隔×2 有 cap, 上限÷2 有 floor), 与画像收紧走同一条复合路径。
+   * 缺省走 HF_SHARE_GUARD_DEFAULTS。
+   */
+  shareGuard?: HfShareGuardConfig;
 }
 
 /**
@@ -95,8 +135,23 @@ export interface HfLearningConfig {
   bandMax?: number;
   /** 参与统计的最近 closed 样本数 (滚窗) */
   sampleWindow?: number;
-  /** 观察窗时长 (秒): 心流回复发出后多久内有人类消息 = engaged */
+  /**
+   * 观察窗时长 (秒): 心流回复发出后多久内算"这条还有可能被接话".
+   * 同时也是账本行 `window_expires_at = sent_at + observeWindowSec` 的依据 (到期仍未定 → 判 silence).
+   */
   observeWindowSec?: number;
+  /**
+   * v1.6.8 弱信号窗 (秒): 只有这段时间内出现的**人类消息**才算"可能接了我那句"(弱正).
+   * 与 observeWindowSec 的分工: 弱信号必须紧贴 bot 发言 (晚 5 分钟的"有人说话"多半与 bot 无关);
+   *   而强信号 (引用 bot / @bot / 针对 bot 的负词) 在**整个** observeWindowSec 内都有效 ——
+   *   晚来的引用依然是真接话. 默认 60s 的实测依据见 HF_LEARNING_DEFAULTS 注释.
+   */
+  labelWindowSec?: number;
+  /**
+   * v1.6.8 反事实基线阈值: 该群**同一时段**本来就有人说话的概率 ≥ 此值 ⇒ 弱信号/沉默样本不采信
+   * (群里本来就热闹, "窗内有人说话"证明不了 bot 说得怎么样). 强信号不受此限.
+   */
+  ambientMax?: number;
   /** 相邻两次阈值变更最小间隔 (秒, 防抖) */
   minChangeCooldownSec?: number;
   /** sweep 周期 (秒) */
@@ -116,13 +171,25 @@ export const HF_LEARNING_DEFAULTS: Required<Omit<HfLearningConfig, "enabled">> &
   step: 0.05,
   // v1.6.6 硬地板 0.3 → 0.5 (老板 2026-09-16 拍板: 阈值最低不能低于 0.5).
   //   起因: 接话率指标饱和 (群内 600s 有任意人类消息即 engaged, 见 handler.ts onFlush) ⇒ 闭环必然
-  //   把阈值推到地板; 华为群 20h 内 0.6→0.3 后卡死 6 天, 群里刷口号时 bot 4 分钟回 5 条长话术.
+  //   把阈值推到地板; 生产上出现过阈值降到地板后长期卡死, 群里刷口号时 bot 连续快速回长话术的极端情形.
   //   ⚠️ 单靠本参数不够: evalHfThreshold 只在 delta≠0 时钳制, 接话率落死区时库里存量旧值会绕过它 ⇒
   //   读取侧另有 clampHfThresholdToBand (heartflow-learn.ts) 兜底.
   bandMin: 0.5,
   bandMax: 0.9,
   sampleWindow: 20,
   observeWindowSec: 600,
+  // v1.6.8 标签锚回 bot 自己那条 (老板 2026-09-26 拍板): 弱信号窗 60s.
+  //   取值不是拍的 —— 拿生产账本里已收敛的样本实测"窗内出现人类消息"的比例 (只读回放, 不落库):
+  //     窗越宽比率越高, 且旧标签那个宽窗的实测值几乎与台账存量 engaged 率逐位吻合 ⇒ 机制诊断被数据证实.
+  //   选 60s 而不是更宽的窗的理由: 死区是 (lowEngageRate 0.15, highEngageRate 0.5), 中点 0.325。
+  //     宽窗的实测比率离上调上限 0.5 只剩很薄的余量 (样本量不大时置信区间就会跨过 0.5),
+  //     而该标签**因果上受 bot 自己影响** (回得多 → 群里反应多 → 比率更高 ⇒ 再下调 = 正反馈跑飞),
+  //     余量太薄会重新点燃同一个飞轮; 60s 的实测比率落在死区中点附近, 两侧余量大致对称。
+  //   ⚠️ 弱信号窗变窄**不会漏掉真接话**: 引用 bot / @bot / 负词这些强信号在整个 observeWindowSec
+  //     (600s) 内都有效 (见 heartflow-label.ts).
+  labelWindowSec: 60,
+  // v1.6.8 反事实基线: 该群同一时段本来就有 ≥50% 概率有人说话 ⇒ 弱信号/沉默不采信.
+  ambientMax: 0.5,
   minChangeCooldownSec: 4 * 3600,
   sweepIntervalSec: 300,
   staleJudgedMaxSec: 1800,
@@ -142,6 +209,8 @@ export function resolveHfLearning(cfg?: HeartflowConfig): Required<HfLearningCon
     bandMax: l?.bandMax ?? D.bandMax,
     sampleWindow: l?.sampleWindow ?? D.sampleWindow,
     observeWindowSec: l?.observeWindowSec ?? D.observeWindowSec,
+    labelWindowSec: l?.labelWindowSec ?? D.labelWindowSec,
+    ambientMax: l?.ambientMax ?? D.ambientMax,
     minChangeCooldownSec: l?.minChangeCooldownSec ?? D.minChangeCooldownSec,
     sweepIntervalSec: l?.sweepIntervalSec ?? D.sweepIntervalSec,
     staleJudgedMaxSec: l?.staleJudgedMaxSec ?? D.staleJudgedMaxSec,
@@ -424,6 +493,13 @@ export interface HeartflowJudgeInput {
   secondsSinceLastReply: number;
   /** 精力水平 */
   energy: number;
+  /**
+   * v1.7.0 群画像文本 (由 heartflow-profile 生成并**已截断**到上限, 缺省不注入)。
+   * 只读参考: 让 judge "应景" —— 这是老板要的"自动理解群身份与特征"的落点。
+   * ⚠️ 必须是**已截断**的成品 (上层 renderHfProfileForPrompt 产出): llm-judge 的输出预算只有 300 token,
+   *   未截断的长画像会挤掉 judge 自己的输出空间 (2026-09-13 静默瘫的同类事故)。
+   */
+  groupProfile?: string;
 }
 
 export interface HeartflowJudgeOptions {
@@ -442,6 +518,11 @@ export function buildHeartflowPrompt(input: HeartflowJudgeInput, cfg: HeartflowC
     : "";
   const lastReplyStr = input.lastBotReply || "暂无上次回复记录";
   const sinceMin = input.secondsSinceLastReply > 0 ? Math.round(input.secondsSinceLastReply / 60) : "从未回复";
+  // v1.7.0 群画像 (可选): 只提供"这个群是什么群、我在这该怎么说话"的背景, 不改变打分口径;
+  //   文本已在上游截断 (heartflow-profile.renderHfProfileForPrompt), 这里不做二次裁剪.
+  const profilePart = input.groupProfile
+    ? `\n\n## 本群画像 (系统按历史消息自动归纳, 供你应景参考)\n${input.groupProfile}`
+    : "";
 
   return `你是群聊机器人的决策系统，需要判断是否应该主动回复以下消息。
 
@@ -454,7 +535,7 @@ ${input.botNickname ? `我是 ${input.botNickname}，一个群聊机器人助手
 - 上次发言: ${sinceMin}${typeof sinceMin === "number" ? "分钟前" : ""}
 
 ## 群聊基本信息
-${input.chatContext}
+${input.chatContext}${profilePart}
 
 ## 最近${cfg.contextMessagesCount ?? 5}条对话历史
 ${input.recentMessages}
@@ -627,7 +708,11 @@ export interface HeartflowGateResult {
  * - 群白名单 (非空) 且 chatId 不在 → 拒绝
  * - 空消息 → 拒绝
  * - 冷却期 (minReplyIntervalSec) → 拒绝
+ * - v1.6.9 发言预算 (每群最小间隔/每小时/每天/静默段/陈旧触发) → 拒绝
  * 通过后由调用方调 judgeHeartflow 做 LLM 打分。
+ *
+ * @param accountId 预算计数按账号分桶用; 省略时退化为 `*` 桶 (group id 本身全局唯一, 不会串群)
+ * @param candidateAtSec 本次候选消息的时刻 (秒); 省略 = nowMs/1000 (仅用于预算的陈旧触发判定)
  */
 /** P1: 每群最近一次 LLM judge 时间 (minJudgeIntervalSec 频率闸用) */
 const lastJudgeAt = new Map<string, number>();
@@ -647,6 +732,14 @@ export function checkHeartflowGate(
   content: string,
   cfg: HeartflowConfig,
   nowMs: number,
+  accountId?: string,
+  candidateAtSec?: number,
+  /**
+   * v1.7.0: 画像收紧后的有效预算 (调用方用 tightenHfBudget 与账号配置取交集)。
+   * 缺省 = 只用账号配置。**用参数而不是在函数内 import 画像模块**: heartflow.ts 被 heartflow-profile.ts
+   * 反向 import (拿 isHfGroupAllowed / HF_LEARNING_DEFAULTS), 从这边再 import 回去就成环。
+   */
+  budgetOverride?: Required<HfBudgetConfig>,
 ): HeartflowGateResult {
   if (!cfg.enabled) return { allowed: false, reason: "disabled" };
   if (cfg.whitelistGroups && cfg.whitelistGroups.length > 0) {
@@ -666,5 +759,17 @@ export function checkHeartflowGate(
       return { allowed: false, reason: "judge-cooldown" };
     }
   }
+  // v1.6.9 发言预算 (结构层频率约束): 放在最后、judge 之前 —— 被拦的消息连 LLM 都不调。
+  //   用 peek (判定+计数+debug 日志), 真正的计数落账在发送成功时 (heartflow-learn.persistHfSendOutcome),
+  //   这样"判了但被下游拦掉"的不会占用预算额度。
+  const nowSec = Math.floor(nowMs / 1000);
+  const verdict = peekHfBudget(
+    accountId,
+    chatId,
+    budgetOverride ?? resolveHfBudget(cfg),
+    nowSec,
+    candidateAtSec ?? nowSec,
+  );
+  if (!verdict.allowed) return { allowed: false, reason: verdict.reason ?? "budget" };
   return { allowed: true };
 }
