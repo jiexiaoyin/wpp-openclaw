@@ -23,3 +23,11 @@ release/               # 同上
 #   已用 git rm --cached 脱离跟踪; 此规则防再次被带入。
 #   ⚠️ 只在 root 层忽略: 用 /src/**/*.js 锚定, 避免误伤未来合法子目录。
 src/**/*.js
+
+# 2026-09-28 审阅加固: 依赖目录不入 git
+#   现状: node_modules 被跟踪 12,570 个文件 (磁盘 42,984 个), 而 .gitignore 里没有这条规则。
+#   影响: (1) 每次 npm install/ci 都污染 git status (本次装 openclaw 后出现 3,860 项改动);
+#         (2) 依赖内容随提交进入历史, 与「只发源码」的发布模型相悖;
+#         (3) sanitize-source.sh 的 SKIP_DIRS 跳过 node_modules ⇒ 这批文件绕过脱敏器。
+#   已用 git rm -r --cached 脱离跟踪 (磁盘文件保留); 本规则防再次被 git add 带入。
+node_modules/
