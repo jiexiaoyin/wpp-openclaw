@@ -158,6 +158,23 @@ export interface HfLearningConfig {
   sweepIntervalSec?: number;
   /** judged 无发送结果呆账上限 (秒) */
   staleJudgedMaxSec?: number;
+  /**
+   * v1.10.0 可达性护栏 (默认 true): 阈值不得**高于**该群近期判定过的最高分 (+step)。
+   *
+   * 为什么必须有 (2026-09-28 的 P0 教训): 心流的失效模式不是"回错话"而是**彻底不吭声** —— 09-26 起
+   *   4/5 个群的生效阈值被抬到 0.70-0.90, 而裁判实际给分上限 0.39, 于是 38 次判定全军覆没、零发言,
+   *   而且**完全静默**: 台账里只有 below-threshold, 日志里只有 debug, 没有任何一处会喊"我停了"。
+   *   阈值可以因为任何原因 (画像 band / 学习调高 / 手工 /heartflow threshold) 走出可达范围, 所以护栏
+   *   不能只挂在某一个入口上 —— 本参数是**读取侧的最后一道**: 无论谁把阈值抬上去, 只要该群近期
+   *   没有任何一条消息够得着它, 就把生效阈值压回"最高分 + 一步", 但**绝不低于 bandMin**
+   *   (那是老板 2026-09-16 定的质量底线, 保证护栏不会把阈值压进垃圾消息堆里)。
+   *   ⚠️ 这是**只读天花板** (不改库里的 learned 值), 一旦出现够得着的消息, 天花板自动抬回去。
+   */
+  recoverUnreachable?: boolean;
+  /** 可达性统计窗口 (秒; 默认 7 天) */
+  reachabilityWindowSec?: number;
+  /** 可达性判定最小样本 (默认 20; 样本太少时"没够着"可能只是没聊到) */
+  reachabilityMinSample?: number;
 }
 
 /** v1.6.x 心流学习参数缺省表 (代码默认; schema default 与 accounts JSON 缺省保持一致) */
@@ -193,6 +210,12 @@ export const HF_LEARNING_DEFAULTS: Required<Omit<HfLearningConfig, "enabled">> &
   minChangeCooldownSec: 4 * 3600,
   sweepIntervalSec: 300,
   staleJudgedMaxSec: 1800,
+  // v1.10.0 可达性护栏 (见 HfLearningConfig.recoverUnreachable): 阈值高于近期最高分 ⇒ 压回最高分+step.
+  //   窗口/样本量取值: 7 天 × 20 条 —— 比调阈的 minSample(10) 高一档, 因为"把阈值压下来"比"抬上去"更需要证据:
+  //   压错了会多说话 (老板要治的病), 抬错了只是少说话 (护栏本身不会抬, 只抬天花板)。
+  recoverUnreachable: true,
+  reachabilityWindowSec: 7 * 86400,
+  reachabilityMinSample: 20,
 };
 
 /** v1.6.x: 合并账号 learning 配置与缺省 (enabled 取配置或缺省) */
@@ -214,6 +237,9 @@ export function resolveHfLearning(cfg?: HeartflowConfig): Required<HfLearningCon
     minChangeCooldownSec: l?.minChangeCooldownSec ?? D.minChangeCooldownSec,
     sweepIntervalSec: l?.sweepIntervalSec ?? D.sweepIntervalSec,
     staleJudgedMaxSec: l?.staleJudgedMaxSec ?? D.staleJudgedMaxSec,
+    recoverUnreachable: l?.recoverUnreachable ?? D.recoverUnreachable,
+    reachabilityWindowSec: l?.reachabilityWindowSec ?? D.reachabilityWindowSec,
+    reachabilityMinSample: l?.reachabilityMinSample ?? D.reachabilityMinSample,
   };
 }
 
@@ -511,6 +537,20 @@ export interface HeartflowJudgeOptions {
 /**
  * 构造 5 维判断 prompt (移植自 Heartflow judge_prompt)。
  * 返回完整 user prompt。
+ *
+ * v1.10.0 (2026-09-28): **删掉原上游 prompt 里的 `**回复阈值**: X (综合评分达到此分数才回复)` 一行**。
+ *
+ * 为什么 (生产实测, 不是理论洁癖): 该行把"我方当前的及格线"告诉裁判模型, 裁判随即**按这个数字校准自己的
+ *   打分**, 于是阈值一动, 分数就跟着动, 闭环失效。2026-09-26 上线群画像后, 有效阈值被画像 band 抬到
+ *   0.85/0.90, prompt 里那行就写着 0.85/0.90 —— 同一天起 `wpp_hf_ledger` 里"该回"档 (0.61-0.82) 整体消失,
+ *   38 次判定最高只到 0.39, 阈值再也不可能被越过 (自锁)。
+ *   回溯验证 (23 条 09-22..25 曾得 ≥0.6 的真实消息, 同一 judge 同一模型):
+ *     带阈值行 + 现状画像 = 均分 0.322 / 仅 2 条 ≥0.6  (线上现状)
+ *     去掉阈值行 + 现状画像 = 均分 0.374 / 3 条 ≥0.6
+ *     去掉阈值行 + 画像改口吻 = 均分 0.669 / 20 条 ≥0.6  (修法)
+ *   即: 这一行是**第二抑制源** (主抑制源是画像的"少插话"文本, 见 heartflow-profile.stripHfMutePhrases)。
+ * 判定仍按数值阈值做, 但那个数只在代码里 (`parseHeartflowResponse`: overall >= cfg.replyThreshold),
+ *   模型不需要知道 —— 它的职责是给绝对值, 不是猜我们的及格线。
  */
 export function buildHeartflowPrompt(input: HeartflowJudgeInput, cfg: HeartflowConfig): string {
   const reasoningPart = cfg.includeReasoning
@@ -573,8 +613,6 @@ ${lastReplyStr}
    - 如果当前消息是对上次回复的回应或延续，应给高分
    - 如果当前消息与上次回复完全无关，给中等分数
    - 如果没有上次回复记录，给默认分数5分
-
-**回复阈值**: ${cfg.replyThreshold ?? 0.6} (综合评分达到此分数才回复)
 
 **重要！！！请严格按照以下JSON格式回复，不要添加任何其他内容：**
 

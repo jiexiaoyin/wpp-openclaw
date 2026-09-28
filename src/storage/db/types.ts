@@ -159,6 +159,12 @@ export interface DbAdapter {
     engaged: 0 | 1,
     signal: string,
     close: boolean,
+    /**
+     * v1.10.0 可选: 收敛**只作用于这一行** (ledger.inbound_msg_id)。
+     * 不传 = 旧语义 (该群所有 sent 行); 传了才能防"同群两条 sent 行被同一条信号一起标记"
+     * (minGapSec < observeWindowSec 时可达 ⇒ 一条信号被算两遍, 样本被污染)。见 HfOpenWindow 注释。
+     */
+    inboundMsgId?: string | null,
   ): Promise<void>;
   /**
    * v1.6.8 反事实基线素材: 近 sinceSec 秒内, **每群 × 每小时段**的入站人类消息数
@@ -178,6 +184,17 @@ export interface DbAdapter {
     hourSinceSec: number,
     daySinceSec: number,
   ): Promise<HfSentCountRow[]>;
+  /**
+   * v1.10.0 可达性护栏素材: 近 sinceSec 秒内**判过的所有分** (含 sent/closed 行, 按时间倒序, 最多 rowCap 行)。
+   * 注意必须含已发出的行 —— "发得出去"本身就是阈值可达的证据 (见 mysql.ts 实现注释)。
+   */
+  listHfRecentJudgedScores(
+    accountId: string,
+    sinceSec: number,
+    rowCap: number,
+  ): Promise<HfJudgedScoreRow[]>;
+  /** v1.10.0 静默金丝雀: 账号最后一次**真发出**心流回复的时刻 (无则 null) */
+  getHfLastSentAtSec(accountId: string): Promise<number | null>;
   /** sweep: sent 到期无人接话 → ignored (engaged=0) + closed */
   closeHfExpiredWindows(accountId: string, atSec: number): Promise<void>;
   /** sweep: judged 无发送结果超上限 → suppressed (呆账收敛) */
@@ -336,6 +353,13 @@ export interface HfSentCountRow {
   day_count: number;
   /** 最近一次发出的时刻 (unix 秒; 无则 null) */
   last_sent_at: number | null;
+}
+
+/** v1.10.0: 可达性护栏素材行 (该群近期判过的一个分) */
+export interface HfJudgedScoreRow {
+  group_id: string;
+  /** 5 维加权总分 (0-1) */
+  judge_overall: number;
 }
 
 /** v1.8.0: 分层统计的输入样本 (已收敛台账行; 只取算得着的列) */

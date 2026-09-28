@@ -109,20 +109,16 @@ test('7. heartflow.ts: 默认 heartbeat 不含 learning (默认关, 旧行为等
 // ===== 3. 埋点层 =====
 test('8. handler.ts: effCfg override 注入 + persistHfJudged + markHfGroupEngaged', () => {
   const h = src('src/inbound/handler.ts');
-  // v1.8.0 保名加参: 分层要按"当前时段"取值 ⇒ 第 4 参 nowSec (照 markHfGroupEngaged 的先例)
-  assert.match(
-    h,
-    /resolveThresholdOverride\(m\.accountId, chatId, hfCfg(,|\))/,
-    'judge 前必须 resolveThresholdOverride',
-  );
-  assert.match(h, /resolveThresholdOverride\(m\.accountId, chatId, hfCfg, Math\.floor\(nowMs \/ 1000\)\)/, 'v1.8.0 必须传当前时刻 (分层按段取值)');
-  // v1.7.0: 有效阈值 = max(learned override ?? 账号阈值, 画像下限) —— 画像只能抬高, 不能下压
-  assert.match(h, /const profileFloor = getHfProfileBandFloor\(m\.accountId, chatId\)/, 'v1.7.0 必须取画像阈值下限');
-  assert.match(
-    h,
-    /const effThreshold =[\s\S]{0,120}?Math\.max\(baseThreshold, profileFloor\)/,
-    '画像下限只能取 max (画像不许把阈值往下压)',
-  );
+  // v1.10.0: judge 前不再自己拼阈值, 改调**唯一入口** resolveHfEffectiveThreshold(账号, 群, cfg, nowSec)。
+  //   旧断言钉的是内联写法 (`resolveThresholdOverride(...)` + `Math.max(base, profileFloor)`),
+  //   而那个 `Math.max` 无上界正是 09-26 静默停摆的点火器 (画像 0.85 直接成为及格线) ——
+  //   所以这里改钉新契约为:**仍然有 per-群 override 与画像参与, 但只能通过统一入口**。
+  assert.match(h, /resolveHfEffectiveThreshold\(m\.accountId, chatId, hfCfg, nowSec\)/,
+    'judge 前必须走统一入口 (含 per-群 override + 画像有界抬升 + 可达性天花板)');
+  assert.doesNotMatch(h, /Math\.max\(baseThreshold, profileFloor\)/, '无上界的画像硬地板不得回归');
+  const hl = src('src/inbound/heartflow-learn.ts');
+  assert.match(hl, /resolveThresholdOverride\(accountId, groupId, hfCfg, nowSec\)/, '统一入口内部仍须取 per-群 learned 覆盖 (第 4 参 = 当前时刻, 分层按段取值)');
+  assert.match(hl, /resolveHfProfileBandEffectFor\(accountId, groupId,/, '统一入口内部仍须让画像参与 (有界抬升)');
   // 零 clone 不变: 有效阈值与账号阈值相同 ⇒ 沿用 hfCfg 本体 (不每次 judge 都造新对象)
   assert.match(h, /const effCfg =\s*\n?\s*effThreshold === hfCfg\.replyThreshold \? hfCfg :/, '无变化则沿用 hfCfg (零 clone)');
   // v1.6.1: ledger 行字段上提为 hfRecord ({judgeResult ? {...} : null}), 两分支共用 → 断言改形不移牙

@@ -29,7 +29,10 @@ import {
   logHfThresholdChange,
   getHfLedgerDistinctClosedGroups,
   listHfBotMsgShare,
+  listHfRecentJudgedScores,
+  getHfLastSentAtSec,
 } from "../storage/db/heartflow.js";
+import { HeartflowMetrics } from "../monitor/metrics.js";
 import {
   resolveHfLearning,
   isHfGroupAllowed,
@@ -48,7 +51,7 @@ import {
   hfDayStartSec,
   hfLocalHour,
 } from "./heartflow-budget.js";
-import { maybeGenerateHfGroupProfiles } from "./heartflow-profile.js";
+import { maybeGenerateHfGroupProfiles, resolveHfProfileBandEffectFor } from "./heartflow-profile.js";
 import {
   HF_DEDUPE_DEFAULTS,
   noteHfRecentReply,
@@ -72,6 +75,12 @@ import {
   resetHfLayerCache,
   resolveHfLayeredCfg,
 } from "./heartflow-layer.js";
+
+/**
+ * v1.10.0 可达性护栏的单轮取数上限 (行): sweep 每 300s 一次, 不能把台账整表拉进内存。
+ * 5000 行 ≈ 生产 5 个群跑 2 周的判定量, 远高于 reachabilityMinSample(20) —— 只为防御脏数据/异常刷单。
+ */
+export const HF_REACH_DB_ROW_CAP = 5000;
 
 // ============ 纯算法 (可单测) ============
 
@@ -165,6 +174,33 @@ export function clampHfThresholdToBand(t: number, bandMin: number, bandMax: numb
   return round2(Math.max(bandMin, Math.min(bandMax, t)));
 }
 
+/**
+ * v1.10.0 可达性天花板 (纯函数): 阈值不得高于"该群近期判定过的最高分 + step"。
+ *
+ * 语义 (为什么是这个形状, 而不是"什么都没过就调低"): 归因必须**无歧义**。
+ *   "最近 N 条消息没有一条达到阈值" = 阈值落在裁判可给的分域之外 ⇒ 它不是在筛选, 是在**关闸**。
+ *   注意不能用"最近有没有发出"当判据 —— 冷清群本来就该一条不发, 那是健康的; 只有**分数够不着**才是坏的。
+ * 上下界:
+ *   - 上界 = maxScore + step: 只比历史最好那条高一步, 保证下一出现同类消息就能过 (略有择优而非来者不拒);
+ *   - 下界 = bandMin (0.5): 老板 2026-09-16 定的质量底线 —— 护栏绝不允许把阈值压进垃圾分域
+ *     (生产垃圾档实测 0.18-0.39, 全部低于 0.5, 所以这道下界真的能挡住"为了有话说而回垃圾")。
+ * 无数据 (n=0) / 样本不足 / 最高分已经够得着 ⇒ 返回 null (= 不设天花板, 保持调用方原值)。
+ */
+export function hfReachabilityCap(
+  scores: readonly number[],
+  threshold: number,
+  params: { minSample: number; step: number; bandMin: number },
+): { cap: number; maxScore: number; n: number } | null {
+  const valid = scores.filter((s) => Number.isFinite(s));
+  if (valid.length < Math.max(1, params.minSample)) return null;
+  const maxScore = Math.max(...valid);
+  if (maxScore >= threshold) return null; // 够得着 ⇒ 阈值可达, 无需护栏
+  const cap = Math.max(params.bandMin, round2(maxScore + params.step));
+  // 天花板 ≥ 原阈值时它不起作用 (例如 maxScore 0.58 + 0.05 = 0.63 > 阈值 0.6 —— 那是"刚好差一点", 属正常滞回)
+  if (cap >= threshold) return null;
+  return { cap, maxScore, n: valid.length };
+}
+
 /** 发送结果真发判别: ok:true ≠ 真发 (dedup/ack/空文本 是占位符, 见 sendAiReply) */
 export type HfSendOutcome = "sent" | "suppressed" | "pending";
 
@@ -209,6 +245,14 @@ const _learnedThresholds = new Map<string, number>();
  *   影响面 = 重启前 10 分钟内发过心流回复的群, 且只损失一次样本).
  */
 interface HfOpenWindow {
+  /**
+   * v1.10.0: 本窗对应的**那条台账行** (ledger.inbound_msg_id)。
+   * 为什么必须记住它: 收敛标记过去只按 (账号, 群, status='sent') 匹配 ⇒ 当同群有**两条** sent 行重叠
+   *   (minGapSec < observeWindowSec 时可达, 生产 `minReplyIntervalSec=0`+`minGapSec=180` 即满足) 时,
+   *   一个"有人引用了我"会给**两条**都记 engaged=1, 一句"别刷了"会**罚两条** —— 一条信号被算两遍,
+   *   样本量凭空翻倍、接话率被稀释/放大, 学习直接被喂脏数据。故收敛必须精确到行。
+   */
+  inboundMsgId: string;
   /** bot 发出那条的 vendor msgId (null = vendor 未回 id ⇒ 引用匹配退化为"同群 outbound + 窗内") */
   botMsgId: string | null;
   sentAtSec: number;
@@ -220,6 +264,37 @@ const _openWindows = new Map<string, HfOpenWindow>();
 /** 读单群 learned (无则 undefined) */
 export function getLearnedThreshold(accountId: string, groupId: string): number | undefined {
   return _learnedThresholds.get(_key(accountId, groupId));
+}
+
+/**
+ * v1.10.0 可达性天花板缓存 (每群一份, 由 sweep 每轮用一条聚合查询刷新 ⇒ judge 热路径零 DB IO)。
+ * 只存"天花板"这一个数 + 诊断用的三要素 (最高分/样本数/刷新时刻), 供 /heartflow status 展示。
+ */
+interface HfReachCap {
+  cap: number;
+  maxScore: number;
+  n: number;
+  atSec: number;
+}
+const _reachCaps = new Map<string, HfReachCap>();
+
+/**
+ * 读取侧可达性钳制: 返回不高于天花板的阈值 (无天花板 ⇒ 原值)。
+ * 与 clampHfThresholdToBand 同为**读取侧硬保证** —— 天花板来自 sweep 的观测, 这里只做取 min。
+ */
+export function clampHfThresholdToReachability(accountId: string, groupId: string, t: number): number {
+  const c = _reachCaps.get(_key(accountId, groupId));
+  if (!c) return t;
+  return Math.min(t, c.cap);
+}
+
+/** 该群当前的可达性天花板信息 (供 /heartflow status / why 展示; 无则 null) */
+export function getHfReachabilityCap(
+  accountId: string,
+  groupId: string,
+): { cap: number; maxScore: number; n: number; atSec: number } | null {
+  const c = _reachCaps.get(_key(accountId, groupId));
+  return c ? { ...c } : null;
 }
 
 /**
@@ -363,6 +438,54 @@ export function resolveThresholdOverride(
   return eff;
 }
 
+/** 生效阈值的完整分解 (判定用 `threshold`, 其余字段只供 /heartflow status · why 展示) */
+export interface HfEffectiveThreshold {
+  /** 真正生效的阈值 —— judge 拿它与 judge_overall 比的就是这个 */
+  threshold: number;
+  /** 账号级基线 (heartflow.replyThreshold) */
+  base: number;
+  /** 群级 learned / 分层覆盖值 (未覆盖 ⇒ undefined) */
+  override?: number;
+  /** 画像建议的 band (无画像 ⇒ null) */
+  band: number | null;
+  /** 画像抬升被上限截断 (画像想要得更高, 但只给了 base+maxRaise) */
+  bandCapped: boolean;
+  /** 可达性天花板 (未被压 ⇒ null) */
+  reachCap: number | null;
+  /** 天花板依据: 窗口内判定条数 / 最高分 (无天花板 ⇒ null) */
+  reachInfo: { n: number; maxScore: number } | null;
+}
+
+/**
+ * v1.10.0: **唯一**的"生效阈值"计算入口 —— judge 判定与 `/heartflow status` 共用。
+ *
+ * 为什么必须收口成一个函数: 2026-09-26 的静默停摆之所以能藏 3 天, 一半原因是**各处各算一份**——
+ *   judge 按 profile band 抬到 0.85, 状态页却打印账号级 0.6 (看起来一切正常), sweep 的告警又是第三份。
+ *   只要三处不共用同一段代码, 它们迟早会漂移, 而漂移的那一刻恰好就是"看起来正常但已经死了"。
+ *   链路顺序 (与旧内联代码逐字等价): 学习/分层覆盖 → 画像 band 有界抬升 → 可达性天花板。
+ */
+export function resolveHfEffectiveThreshold(
+  accountId: string,
+  groupId: string,
+  hfCfg: HeartflowConfig,
+  nowSec: number = Math.floor(Date.now() / 1000),
+): HfEffectiveThreshold {
+  const base = hfCfg.replyThreshold ?? 0.6;
+  const override = resolveThresholdOverride(accountId, groupId, hfCfg, nowSec);
+  const bandEff = resolveHfProfileBandEffectFor(accountId, groupId, override ?? base, hfCfg);
+  const cap = getHfReachabilityCap(accountId, groupId);
+  const threshold = clampHfThresholdToReachability(accountId, groupId, bandEff.threshold);
+  return {
+    threshold,
+    base,
+    override,
+    band: bandEff.band,
+    bandCapped: bandEff.capped,
+    reachCap: cap && threshold < bandEff.threshold - 1e-9 ? cap.cap : null,
+    reachInfo: cap && threshold < bandEff.threshold - 1e-9 ? { n: cap.n, maxScore: cap.maxScore } : null,
+  };
+}
+
 // ============ DB 薄管线 (全 catch, 失败不阻断 dispatch / 收发) ============
 
 /** judge 通过落 ledger 行 (insert 失败仅 warn, 不阻断 dispatch) */
@@ -427,6 +550,7 @@ export async function persistHfSendOutcome(
   const outcome = classifyHfSend(result);
   try {
     if (outcome === "sent") {
+      HeartflowMetrics.incSent();
       // msgId 可能 undefined (vendor 不回 id) 或占位符; 占位符不会走到这里 (classifyHfSend 已判 suppressed)
       const botMsgId = result.msgId ? result.msgId : null;
       await setHfLedgerSent(
@@ -436,7 +560,17 @@ export async function persistHfSendOutcome(
         atSec + opts.observeSec,
         botMsgId,
       );
+      // v1.10.0: 若覆盖掉一个还没收敛的旧窗, 说明该群在 observeWindowSec 内发了第二条 —— 旧窗
+      //   从此不再收到"接话"信号, 会按 silence 收敛 (由 closeHfExpiredWindows 到期处理, 语义正确:
+      //   它确实没人接)。留一行 debug 让这种重叠可见 (它是样本可信度的一个风险点)。
+      const prevWin = _openWindows.get(_key(accountId, opts.groupId));
+      if (prevWin && prevWin.sentAtSec + prevWin.observeWindowSec > atSec) {
+        debug(
+          `[WPP HF] window overlap: account=${accountId} group=${opts.groupId} prev=${prevWin.inboundMsgId} (${atSec - prevWin.sentAtSec}s ago) ⇒ prev 按 silence 收敛`,
+        );
+      }
       _openWindows.set(_key(accountId, opts.groupId), {
+        inboundMsgId,
         botMsgId,
         sentAtSec: atSec,
         observeWindowSec: opts.observeSec,
@@ -502,7 +636,8 @@ export async function markHfGroupEngaged(
   });
   if (verdict.signal == null || verdict.engaged == null) return;
   try {
-    await markHfEngaged(accountId, groupId, atSec, verdict.engaged, verdict.signal, verdict.close);
+    // v1.10.0: 精确到**这一行** (w.inboundMsgId) —— 见 HfOpenWindow.inboundMsgId 注释 (防两行同标)
+    await markHfEngaged(accountId, groupId, atSec, verdict.engaged, verdict.signal, verdict.close, w.inboundMsgId);
     // 关窗了才从内存摘掉; 弱信号仍留在表里等更强信号升级
     if (verdict.close) _openWindows.delete(key);
   } catch (e) {
@@ -579,6 +714,7 @@ export async function loadHfBudgetSeed(
 export function resetLearnedThresholdCache(): void {
   _learnedThresholds.clear();
   _openWindows.clear();
+  _reachCaps.clear();
   resetHfLayerCache();
   resetHfDedupeStore();
   resetHfShareGuard();
@@ -629,6 +765,22 @@ export async function runHeartflowSweep(
     await maybeRecomputeHfShareGuard(accountId, cfg, nowSec);
   } catch (e) {
     warn(`[WPP HF] share-guard pass failed (不影响调阈): ${formatErr(e)}`);
+  }
+
+  // v1.10.0 可达性护栏: 阈值高于"近期最高分+step" ⇒ 记天花板 (judge 读侧压回), 并告警。
+  //   放在 learning.enabled 判定**之前**: 它保的是"心流还能不能说话", 与自动调阈开关无关。
+  try {
+    await refreshHfReachabilityCaps(accountId, cfg, nowSec);
+  } catch (e) {
+    warn(`[WPP HF] reachability pass failed (不影响调阈): ${formatErr(e)}`);
+  }
+
+  // v1.10.0 静默金丝雀: 距上次真发言多久 —— 心流停摆时台账/日志都看不出, 只有这个数能一眼看出。
+  try {
+    const last = await getHfLastSentAtSec(accountId);
+    HeartflowMetrics.setLastSendAgeSec(last == null ? -1 : Math.max(0, nowSec - last));
+  } catch {
+    /* 观测失败不影响任何功能 */
   }
 
   // v1.9.0 重复闸历史裁剪 (防长跑进程里内存无限增长; 与 pruneOpenWindows 同级, 零 IO)
@@ -770,6 +922,81 @@ async function maybeRecomputeHfShareGuard(
     }
   }
   return hits;
+}
+
+/**
+ * v1.10.0 可达性护栏刷新 (sweep 侧, 每轮一次 DB 聚合): 逐群算"阈值够得着吗", 够不着就记天花板。
+ *
+ * 为什么放在 sweep 而不是 judge 热路径: 判据需要"该群近期判过的最高分", 是一条聚合查询 ——
+ *   放进 judge 就是每条群消息一次查询 (违反 perf-heat-path 约定)。sweep 每 300s 一次, 结果落内存,
+ *   judge 侧只做一次 Map 查 (clampHfThresholdToReachability)。
+ *
+ * 为什么无条件跑 (不受 learning.enabled 影响): 它保护的是**功能可用性**, 不是学习闭环 ——
+ *   老板关掉自动调阈 (learning.enabled=false) 时, 阈值仍可能被画像/手工设到够不着的高度。
+ *
+ * 返回被压住的群数 (测试与指标用)。
+ */
+async function refreshHfReachabilityCaps(
+  accountId: string,
+  cfg: HeartflowConfig,
+  nowSec: number,
+): Promise<number> {
+  const L = resolveHfLearning(cfg);
+  if (!L.recoverUnreachable) {
+    // 关掉时清空缓存: 否则旧的压住值会继续生效 (开关要真能关)
+    for (const k of [..._reachCaps.keys()]) if (k.startsWith(`${accountId}:`)) _reachCaps.delete(k);
+    return 0;
+  }
+  const rows = await listHfRecentJudgedScores(accountId, nowSec - L.reachabilityWindowSec, HF_REACH_DB_ROW_CAP);
+  const byGroup = new Map<string, number[]>();
+  for (const r of rows) {
+    if (!r.group_id) continue;
+    const arr = byGroup.get(r.group_id);
+    if (arr) arr.push(Number(r.judge_overall));
+    else byGroup.set(r.group_id, [Number(r.judge_overall)]);
+  }
+  const base = cfg.replyThreshold ?? 0.6;
+  let capped = 0;
+  let reachable = 0;
+  let maxEff = 0;
+  for (const [groupId, scores] of byGroup) {
+    if (!isHfGroupAllowed(groupId, cfg)) continue;
+    // 生效阈值必须与 judge 路径算得**一模一样** (学习值 → 读侧钳制 → 画像 band 有界抬升),
+    //   否则护栏量错了对象: 拿账号级 0.6 去比 0.85 的生效值, 就永远发现不了自锁。
+    const override = resolveThresholdOverride(accountId, groupId, cfg, nowSec);
+    const anchor = override ?? base;
+    const { threshold: eff } = resolveHfProfileBandEffectFor(accountId, groupId, anchor, cfg);
+    maxEff = Math.max(maxEff, eff);
+    const r = hfReachabilityCap(scores, eff, {
+      minSample: L.reachabilityMinSample,
+      step: L.step,
+      bandMin: L.bandMin,
+    });
+    const key = _key(accountId, groupId);
+    const prev = _reachCaps.get(key);
+    if (!r) {
+      if (prev) _reachCaps.delete(key);
+      if (scores.length >= L.reachabilityMinSample) reachable++;
+      continue;
+    }
+    capped++;
+    _reachCaps.set(key, { cap: r.cap, maxScore: r.maxScore, n: r.n, atSec: nowSec });
+    // 告警: **只在这一格首次出现 / 压住值变化 / 每小时一次** 时打 —— sweep 每 300s 一轮,
+    //   不做节流会把 journal 刷满, 反而让这条真正重要的告警被淹没。
+    const shouldWarn = !prev || prev.cap !== r.cap || nowSec - prev.atSec >= 3600;
+    if (shouldWarn) {
+      HeartflowMetrics.incReachCapApplied();
+      warn(
+        `[WPP HF] threshold unreachable ⇒ capped: account=${accountId} group=${groupId} ` +
+          `eff=${eff.toFixed(2)} 但近 ${Math.round(L.reachabilityWindowSec / 86400)} 天 ${r.n} 条判定最高只 ${r.maxScore.toFixed(2)} ⇒ ` +
+          `生效阈值压到 ${r.cap.toFixed(2)} (心流此前等于停摆; 检查画像 band / 学习值 / 手工阈值)`,
+      );
+    }
+  }
+  HeartflowMetrics.setEffectiveThresholdMax(maxEff);
+  HeartflowMetrics.setThresholdCeilingGroups(capped);
+  HeartflowMetrics.setReachableGroups(reachable);
+  return capped;
 }
 
 /** 样本信号分布 `quote:2,short-window:5` (审计 reason 用, 有界: 信号种类固定 5 种, 样本 ≤ sampleWindow) */

@@ -335,10 +335,15 @@ test('接线: judge prompt 注入画像 (已截断) + handler 从缓存取', (t)
 
 test('接线: 触发侧把画像预算并进 gate (第 7 参), 且 gate 用 override 优先', (t) => {
   const tr = src('src/inbound/triggers.ts');
-  assert.match(tr, /tightenHfBudget\(/, '触发侧必须做"配置 ∩ 画像"');
-  assert.match(tr, /getHfProfileBudget\(msg\.accountId, chatId\)/, '画像预算从内存缓存取');
-  assert.match(tr, /applyQuietHours: cfg\.heartflow\.profile\?\.applyQuietHours === true/, '静默段要显式开关才并');
-  assert.match(tr, /resolveHfBudget\(cfg\.heartflow\)/, '基准仍是账号配置 (画像只是收紧)');
+  // v1.10.0: "配置 ∩ 画像 ∩ 占比外环" 收口到 resolveHfEffectiveBudget (判定与 /heartflow status 共用),
+  //   断言随之落到该函数体内 —— 意图不变 (画像只许收紧 + 显式开关才并静默段 + 基准仍是账号配置)。
+  const eff = fnBody('src/inbound/triggers.ts', 'export function resolveHfEffectiveBudget(');
+  assert.match(eff, /tightenHfBudget\(/, '触发侧必须做"配置 ∩ 画像"');
+  assert.match(eff, /getHfProfileBudget\(accountId, groupId\)/, '画像预算从内存缓存取');
+  assert.match(eff, /applyQuietHours: hfCfg\.profile\?\.applyQuietHours === true/, '静默段要显式开关才并');
+  assert.match(eff, /resolveHfBudget\(hfCfg\)/, '基准仍是账号配置 (画像只是收紧)');
+  assert.match(fnBody('src/inbound/triggers.ts', 'export function shouldTrigger('), /resolveHfEffectiveBudget\(msg\.accountId, chatId, cfg\.heartflow/,
+    'shouldTrigger 必须用统一入口算生效预算');
   assert.match(tr, /effBudget,\s*\n\s*\);/, '必须作为 checkHeartflowGate 的第 7 参传入');
   const gate = fnBody('src/inbound/heartflow.ts', 'export function checkHeartflowGate');
   assert.match(gate, /budgetOverride \?\? resolveHfBudget\(cfg\)/, 'gate 必须用 override 优先、缺省回落到配置');

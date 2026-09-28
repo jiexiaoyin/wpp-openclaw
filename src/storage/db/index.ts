@@ -37,6 +37,8 @@ export {
   getHfClosedRecent,
   listHfGroupMsgHourBuckets,
   listHfSentCountsRecent,
+  listHfRecentJudgedScores,
+  getHfLastSentAtSec,
   upsertHfGroupState,
   getHfGroupState,
   listHfGroupStates,
