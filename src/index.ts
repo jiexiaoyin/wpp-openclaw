@@ -4,6 +4,7 @@
 //   - named export wppChannelPlugin = 实际 channel 实现 (start/stop/sendText/sendImage)
 // 多账号管理走 AccountRegistry class
 
+import type { ChannelPlugin, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { logObj as log, formatErr } from "./core/logger.js";
 import { SetWebhookMetrics } from "./monitor/metrics.js";
 import { CHANNEL_ID, PLUGIN_NAME, PLUGIN_VERSION, DEFAULT_BOT_NICKNAME } from "./core/constants.js";
@@ -108,7 +109,10 @@ function maskSecret(secret: string): string {
  * 框架调 outbound.sendText/sendImage/sendMedia 时 accountId 缺失 → 用当前 dispatch 账号 (ALS),
  * 再兜底 "default" (单账号兼容)。
  */
-function resolveOutboundAccount(accountId: string | undefined, via: string): string {
+// 2026-09-28 契约对齐: 形参加宽 `string | undefined` → `string | null | undefined`
+//   (契约 ChannelOutboundContext.accountId 为 `string | null`);
+//   函数体首行 `if (accountId)` 本就 falsy 兜底 null, 运行时零变化。
+function resolveOutboundAccount(accountId: string | null | undefined, via: string): string {
   if (accountId) return accountId;
   const ctx = getCurrentAccountId();
   if (ctx) {
@@ -822,8 +826,50 @@ export function inferFileNameForMedia(mediaUrl: string, explicitFileName?: strin
   return explicitFileName ?? inferredFileName;
 }
 
-export const wppChannelPlugin = {
-  id: CHANNEL_ID,
+// ============================================================
+// 2026-09-28 契约对齐 (S8): 原对象字面量里混着 **9 个非契约成员**
+//   (name / version / kind / start / stop / sendText / sendImage / sendMessage / buildSessionKey)
+//   以及嵌套在 outbound 下的 1 个非契约成员 (sendImage)。
+//   `satisfies ChannelPlugin` 对**新鲜对象字面量**做 excess-property 检查 ⇒ 这些成员必须先移出。
+//
+// 处置 = 方案 (a)+(c) 的组合: **移出为独立 export**, 再用 Object.assign 合并回去。
+//   - 仓内对这 9 个成员**零调用点** (全仓 src/ + tests/ grep 命中均为注释/定义处);
+//     openclaw 2026.9.6 也**完全不读不调** (证据见下)。
+//   - 但「openclaw 2026.7.1 ~ 2026.9.5 是否调用 plugin.start/stop/sendText」**未经验证** ⇒
+//     直接删除、或只移出不挂回, 都可能在更老框架上丢掉启动/收发入口 (与"不弱化连接/收发"冲突)。
+//   - 故: 契约面走受检字面量, 历史面走独立 export, Object.assign 合回 →
+//     **运行时对象成员集合与改动前完全一致** (零行为变化), 且全程无 as any / @ts-expect-error / 断言。
+//   - 若确认部署目标只有 2026.9.6, 后续可把 wppChannelLegacyApi 从合并里摘掉 (纯减法)。
+//
+// 证据 (openclaw 2026.9.6 dist):
+//   - 生命周期走 plugin.gateway.startAccount / stopAccount
+//     (server-channels-D1JRZ19m.mjs:409-410, 590-595), **不调** plugin.start / plugin.stop。
+//   - outbound 只调 sendText / sendMedia (channel-outbound-c-7621zH.mjs:161-176);
+//     全 dist `sendImage` 仅 3 处且都是 Telegram 内部 sendImageAsPhoto,
+//     契约 ChannelOutboundAdapter 亦无该成员。
+//   - buildSessionKey 全 dist 0 命中。
+// ============================================================
+
+/** outbound 下的历史方法 (非契约; 保留运行时以兼容更老框架 —— 见上方 S8 说明) */
+const wppOutboundLegacyApi = {
+  async sendImage(opts: { accountId?: string | null; to: string; imageUrl: string }) {
+    const r = await dispatchSendImage(resolveOutboundAccount(opts.accountId, "sendImage"), opts.to, opts.imageUrl);
+    return {
+      ok: r.ok, error: r.error,
+      msgId: r.msgId, newMsgId: r.newMsgId, createTime: r.createTime,
+      messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : ""),
+      chatId: opts.to,
+      roomId: opts.to.includes("@chatroom") ? opts.to : undefined,
+    };
+  },
+};
+
+/**
+ * wppChannelPlugin 的**历史 API 面** (非 ChannelPlugin 契约; 见上方 S8 说明)。
+ * 独立导出, 便于潜在调用方显式迁移; 同时由 Object.assign 合回 wppChannelPlugin,
+ * 使运行时对象与改动前逐成员一致。
+ */
+export const wppChannelLegacyApi = {
   name: PLUGIN_NAME,
   version: PLUGIN_VERSION,
   kind: "channel" as const, // channel 类型 (供 registerChannel 识别)
@@ -845,9 +891,6 @@ export const wppChannelPlugin = {
       throw e;
     }
   },
-
-  // 注入 agentTools 供 OpenClaw 框架读取 (配合 api/client.ts 空凭证兑底 → 工具真正可调)
-  agentTools: AGENT_TOOLS,
 
   async stop(): Promise<void> {
     await shutdown();
@@ -884,6 +927,16 @@ export const wppChannelPlugin = {
     return dispatchSendMessage(params);
   },
 
+  buildSessionKey,
+};
+
+/** 受 `satisfies ChannelPlugin` 检查的契约对象 (excess 字段已全部移出, 见上方 S8 说明) */
+const wppChannelContract = {
+  id: CHANNEL_ID,
+
+  // 注入 agentTools 供 OpenClaw 框架读取 (配合 api/client.ts 空凭证兑底 → 工具真正可调)
+  agentTools: AGENT_TOOLS,
+
   // ============================================================
   // v1.3.43 OUTBOUND-RUNTIME (2026-08-12 接总立 P1, 修复 cron announce delivery 永久错误)
   //
@@ -899,7 +952,9 @@ export const wppChannelPlugin = {
   // 不动 wppChannelPlugin.sendText/sendImage/sendMessage (历史 inbound/outbound 都在调, 不能破坏)
   // 不动 gateway.startAccount (v1.1.14 已修 inbound dispatcher 的 channelRuntime 注入)
   // 最小可行版: 只 sendText + sendImage + deliveryMode, 跑通再说; chunker/normalizePayload/resolveTarget 后补
-  outbound: {
+  // Object.assign = 把非契约的 outbound.sendImage 合回 (运行时与改动前一致)。
+  //   返回的是交叉类型 (非新鲜字面量) ⇒ 不触发 excess-property 检查; 无任何断言。
+  outbound: Object.assign({
     deliveryMode: "direct" as const,
     // v1.3.46 IDENTITY-RETURN (2026-08-12 接总立 P1, 修复 framework hasDeliveryResultIdentity 报
     //   "adapter_returned_no_identity" → payload outcome: suppressed → message 工具看似 ok 但实际没发)
@@ -922,27 +977,25 @@ export const wppChannelPlugin = {
     //
     // 不动现有功能 (sendText/sendImage/sendMedia 行为保持)
     // 仿 GeWe v1.4.4 范式 (gewe-multi-agent/src/index.ts:231 完整 outbound 字段定义)
-    async sendText(opts: { accountId?: string; to: string; text: string; ats?: string[] }) {
+    // 2026-09-28 契约对齐 (E2): 契约签名 `(ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>`。
+    //   - 入参 accountId 放宽为 `string | null` (契约如此; 实现走 resolveOutboundAccount 的 falsy 兜底)
+    //   - 返回值补**必填** `channel`; `messageId` 由 `string | undefined` 收紧为 `string`
+    //     (缺失时用 "" —— 空串在框架 hasDeliveryResultIdentity 里与 undefined 同为 falsy,
+    //      故不会凭空制造投递身份; chatId/roomId 仍照旧兜底)
+    async sendText(opts: { accountId?: string | null; to: string; text: string; ats?: string[] }) {
       const r = await dispatchSendText(resolveOutboundAccount(opts.accountId, "sendText"), opts.to, opts.text, opts.ats);
       return {
         ok: r.ok, error: r.error,
         msgId: r.msgId, newMsgId: r.newMsgId, createTime: r.createTime,
-        // v1.3.46 identity 字段:
-        messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : undefined),
+        // v1.3.46 + 2026-09-28 identity 字段 (契约必填 channel/messageId):
+        channel: CHANNEL_ID,
+        messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : ""),
         chatId: opts.to,
         roomId: opts.to.includes("@chatroom") ? opts.to : undefined,
       };
     },
-    async sendImage(opts: { accountId?: string; to: string; imageUrl: string }) {
-      const r = await dispatchSendImage(resolveOutboundAccount(opts.accountId, "sendImage"), opts.to, opts.imageUrl);
-      return {
-        ok: r.ok, error: r.error,
-        msgId: r.msgId, newMsgId: r.newMsgId, createTime: r.createTime,
-        messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : undefined),
-        chatId: opts.to,
-        roomId: opts.to.includes("@chatroom") ? opts.to : undefined,
-      };
-    },
+    // 注: 原 outbound.sendImage 是非契约成员, 已移出为 wppOutboundLegacyApi (见上方 S8 说明),
+    //     并由本对象外层 Object.assign 在**运行时**合回 —— 行为与改动前一致。
     // ============================================================
     // v1.3.44 SENDMEDIA (2026-08-12 接总立 P1, 修复 cron 晨报图片降级为文件卡片)
     //
@@ -961,25 +1014,47 @@ export const wppChannelPlugin = {
     // framework sendMedia ctx (deliver.js:1454):
     //   { kind: "media", text: caption, mediaUrl, cfg, to, accountId, replyToId, threadId, formatting, ... }
     // WPP 暂不支持 replyToId/threadId (WPP outbound.ts sendText/sendImage 不支持 replyTo, 后续 P3 补)
+    // 2026-09-28 契约对齐 (E3):
+    //   - accountId: `string` → `string | null` (契约 ChannelOutboundContext.accountId)
+    //   - mediaUrl:   `string` → `string | undefined` (**契约里 mediaUrl 是可选的**, outbound.types:82)
+    //   - 返回值补必填 `channel` + `messageId` 收紧为 `string` (同 E2)
+    //   - 运行时防御: 旧实现 `opts.mediaUrl.split("?")` 在 mediaUrl 缺省时会抛 TypeError。
+    //     契约既然允许缺省, 就**不能崩**: 空 mediaUrl 直接返回结构化失败 (不发空媒体)。
+    //     这是把既有潜在崩溃改成显式失败, 正常路径 (mediaUrl 存在) 逐字不变。
     async sendMedia(opts: {
       cfg?: unknown;
       to: string;
-      accountId?: string;
+      accountId?: string | null;
       text?: string;          // caption
-      mediaUrl: string;
+      mediaUrl?: string;
       mediaType?: string;
       fileName?: string;      // v1.3.47: 调用方可显式传 fileName (framework 当前不传, 仅 plugin internal 可传)
       mimeType?: string;
-      replyToId?: string;
-      threadId?: string;
+      // 契约 ChannelOutboundContext.replyToId: `string | null` / threadId: `string | number | null`。
+      // 本实现**仍不消费**这两者 (WPP outbound.ts 不支持 replyTo, P3 补), 仅按契约放宽声明类型,
+      // 否则 ChannelOutboundContext 不可赋给本形参 (逆变检查)。
+      replyToId?: string | null;
+      threadId?: string | number | null;
       formatting?: unknown;
       audioAsVoice?: boolean;
       silent?: boolean;
     }) {
       const { sendMessage: dispatchSendMessage } = await import("./dispatch/send-message.js");
       const accountId = resolveOutboundAccount(opts.accountId, "sendMedia");
+      const mediaUrl = opts.mediaUrl ?? "";
+      if (!mediaUrl) {
+        log.warn(`outbound.sendMedia: mediaUrl missing (to=${opts.to}) — 拒绝发送空媒体 (契约允许 mediaUrl 缺省)`);
+        return {
+          ok: false,
+          error: "sendMedia: mediaUrl is required",
+          channel: CHANNEL_ID,
+          messageId: "",
+          chatId: opts.to,
+          roomId: opts.to.includes("@chatroom") ? opts.to : undefined,
+        };
+      }
       // 按 mediaType 优先; 没传则按 url 后缀推断
-      const urlNoQuery = (opts.mediaUrl.split("?")[0] ?? "").toLowerCase();
+      const urlNoQuery = (mediaUrl.split("?")[0] ?? "").toLowerCase();
       const inferred: WppSendType =
         /\.(jpg|jpeg|png|gif|webp|bmp|ico|tiff)$/i.test(urlNoQuery) ? "image" :
         /\.(mp4|mov|avi|mkv|webm|3gp)$/i.test(urlNoQuery) ? "video" :
@@ -1004,25 +1079,26 @@ export const wppChannelPlugin = {
       // 不动现有 framework ctx 接口 (让 plugin 兼容 framework 不传 fileName 的现状)。
       // 不动现有 sendMedia 类型推断 (v1.3.44 修复保持)。
       // ============================================================
-      const fileName = inferFileNameForMedia(opts.mediaUrl, opts.fileName);
+      const fileName = inferFileNameForMedia(mediaUrl, opts.fileName);
       // 走 WPP 统一 sendMessage 入口 (v1.3.17 MESSAGE-UNIFY 已统一所有 type 路由 + persist + oss)
       const r = await dispatchSendMessage({
         accountId,
         toWxid: opts.to,
         type,
-        content: opts.mediaUrl,
+        content: mediaUrl,
         fileName,  // v1.3.47: 传 fileName 给 dispatchSendMessage → vendor sendFile(toWxid, mediaUrl, fileName)
       });
       return {
         ok: r.ok, error: r.error,
         msgId: r.msgId, newMsgId: r.newMsgId, createTime: r.createTime,
-        // v1.3.46 identity 字段 (仿 framework hasDeliveryResultIdentity 期望):
-        messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : undefined),
+        // v1.3.46 + 2026-09-28 identity 字段 (契约必填 channel/messageId):
+        channel: CHANNEL_ID,
+        messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : ""),
         chatId: opts.to,
         roomId: opts.to.includes("@chatroom") ? opts.to : undefined,
       };
     },
-  },
+  }, wppOutboundLegacyApi), // ← 合回非契约的 outbound.sendImage (见上方 S8 说明)
 
   // ============================================================
   // v1.3.45 MESSAGING-TARGET-RESOLVER (2026-08-12 接总立 P1,
@@ -1275,7 +1351,16 @@ export const wppChannelPlugin = {
       return out;
     },
   },
+  // 2026-09-28 契约对齐 (E7): 契约要求 `configPrefixes: string[]` 为**必填** (types.plugin-DWwKnMgs.d.ts:40-44)。
+  //   补**空数组** = 不声明任何「热前缀」。framework 装配规则 (config-reload-plan-D9XO5ks7.mjs:308-322):
+  //     prefixes: plugin.reload?.configPrefixes ?? []  → 空数组不产出任何 hot 规则
+  //   ⇒ 与「完全不声明 configPrefixes」在 reload 计划上**逐位等价** (该 channel 只剩 noop 规则, kind: "none")
+  //     → 网关对 channels.wechatpadpro 不重启 channel runtime, 微信连接不掉。
+  //   ⚠️ 绝不可写成 ["channels.wechatpadpro"]: 等深同前缀时 hot 规则靠插入顺序排在 noop 前获胜
+  //      → accountId===null ⇒ plan.restartChannels.add(plugin.id) ⇒ 整 channel 停启 ⇒ **微信掉线**。
+  //   (复刻 config-reload-plan 的比较器 + 规则构造实测: absent / [] 均 kind:"none"; ["channels.wechatpadpro"] 为 kind:"hot")
   reload: {
+    configPrefixes: [],
     noopPrefixes: ["channels.wechatpadpro"],
   },
 
@@ -1335,38 +1420,50 @@ export const wppChannelPlugin = {
       }
       return { ok: true };
     },
-    async stopAccount(ctx: { accountId: string }): Promise<{ ok: boolean; error?: string }> {
+    // 2026-09-28 契约对齐 (E8): 返回 `Promise<{ok,error?}>` → `Promise<void>`。
+    //   依据: 契约 `stopAccount?: (ctx: ChannelGatewayContext) => Promise<void>` (types.adapters:503);
+    //   框架唯一调用点 server-channels-D1JRZ19m.mjs:590-595 走
+    //   `runPluginCleanup(stopAccount, …)`, 而 runPluginCleanup
+    //   (plugin-instance-scope-C9hxyH_A.mjs:32-35) **丢弃返回值** —— 框架从不读 {ok,error}。
+    //   故: 原来靠返回值传达的 "no-op / 失败" 改走 log (信息不减, 只是换成框架真会看的通道);
+    //   且旧实现本就**不抛**(错误被 catch 后转成 {ok:false}), 新实现同样不抛 → 上层语义不变。
+    async stopAccount(ctx: { accountId: string }): Promise<void> {
       log.info(`gateway.stopAccount: accountId=${ctx.accountId}`);
       const reg = getDefaultAccountRegistry();
-      // 显式检查 — registry.stop 对未知账号是 no-op + warn, OpenClaw gateway
-      // 需要明确知道 stop 是 no-op 还是真停了
+      // registry.stop 对未知账号是 no-op + warn → 这里显式记录, 便于区分 "真停了" 与 "什么都没做"
       if (!reg.has(ctx.accountId)) {
-        return { ok: false, error: `account not found: ${ctx.accountId}` };
+        log.warn(`gateway.stopAccount: no-op — account not found: ${ctx.accountId}`);
+        return;
       }
       try {
         await reg.stop(ctx.accountId);
         log.info(`gateway.stopAccount: stopped ${ctx.accountId}`);
-        return { ok: true };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         log.error(`gateway.stopAccount: failed ${ctx.accountId}: ${msg}`);
-        return { ok: false, error: msg };
       }
     },
   },
+} satisfies ChannelPlugin;
 
-  buildSessionKey,
-};
+/**
+ * wppChannelPlugin = 契约对象 (受 satisfies 检查) **合并** 历史 API 面。
+ * 合并后运行时对象与改动前成员集合一致 (含 name/version/kind/start/stop/sendText/sendImage/
+ * sendMessage/buildSessionKey + outbound.sendImage); 详见上方 S8 说明。
+ */
+export const wppChannelPlugin = Object.assign(wppChannelContract, wppChannelLegacyApi);
 
 // ============================================================
 // plugin — OpenClaw v2026.7.1+ 要求的 manifest wrapper (default export)
 // 范式: 仿 OpenClaw v2026.7.1+ plugin 对象
 // ============================================================
 
-/** OpenClaw runtime 提供的 API (最少需要 registerChannel) */
-interface OpenClawPluginApi {
-  registerChannel: (arg: { plugin: typeof wppChannelPlugin }) => void;
-}
+// 2026-09-28 契约对齐 (S9): 删除本地**自引用**的假接口
+//   interface OpenClawPluginApi { registerChannel: (arg: { plugin: typeof wppChannelPlugin }) => void }
+//   —— 它把契约检查完全绕过 (自己定义的目标类型引用自己, 任何形状都"满足")。
+//   改用 openclaw/plugin-sdk/core 的**真** OpenClawPluginApi
+//   (其 registerChannel 为 `(registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void`,
+//    见 agent-harness-runtime-wMciqZ6Z.d.ts:22305, 最终指向与 ChannelPlugin 同一份类型)。
 
 export const plugin = {
   id: CHANNEL_ID,
