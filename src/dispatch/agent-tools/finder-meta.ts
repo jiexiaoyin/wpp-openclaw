@@ -4,6 +4,27 @@
 //   (原先的 page/operation/objectId/finderId/liveId 不是 vendor 字段且部分从不透传);
 //   comment 补齐 11 字段 (CommentId/ObjectNonceId/Scene/SessionBuffer 不再硬编码),
 //   finderLiveDetail 暴露 FinderNonceID (原先恒为空).
+// 2026-09-28 (本轮): sendFinderDm / getFinderUserPage / getFinderCommentList 三处已按 vendor 契约重写
+//   (旧的 sessionId/content/finderId/objectId 不是 vendor 字段, 且 LastBuffer/ObjectNonceId/FinderUsername
+//   完全缺失或从不透传). 命名沿用前两轮: HTTP body 逐字 vendor PascalCase, schema 对外 camelCase.
+//
+// ⚠️ int64 精度风险 (本轮引入, 与上一轮 finderObjectId 同源): vendor 对 GetCommentList /
+//   FindLiveDetail 的 ID 字段声明 integer int64, 我们用 Type.Number 对齐 (Go int64 拒收 JSON 字符串).
+//   但 JS number 是 IEEE754 double, 仅能精确表示 |v| ≤ 2^53-1 (9007199254740991, 16 位);
+//   微信视频号真实内容 ID 常为 19 位 (如 1426183783175864217) → 超出精确范围会被静默四舍五入.
+//   若线上发现「ID 明明正确却查不到内容」, 优先怀疑此处 — 根治需 vendor 侧接受字符串.
+//
+// 仍有残留差异的端点 (未在本轮范围内, 供后续处理, 按严重度排序):
+//   1. searchFinderUser (/Finder/Search) — 最严重: send 层 body 发 `{keyword}`, 而 vendor
+//      Finder.DefaultParamDoc 要求 {FinderUsername, Value} → keyword 不是 vendor 字段, 该调用当前**必静默失效**.
+//   2. getFinderCommentDetail (/Finder/GetCommentDetail) — 与本轮 GetCommentList 共用同一 param doc 但未重写:
+//      schema 键 objectId ≠ vendor Id; Id/RootCommentId 仍是 String (vendor integer int64);
+//      LastBuffer/ObjectNonceId 未暴露 (send 层恒 "").
+//   3. getFinderMsgSessionId — schema 键 toFinderId ≠ vendor FinderUsername.
+//   4. decryptFinderComment — schema 键 encryptedContent, vendor 字段名是 Content.
+//   5. getFinderTopicList — vendor {LastBuffer, TopTitle}, schema 只暴露 topTitle (lastBuffer 恒 "").
+//   6. playVideo / playVideoStop — vendor 用 snake_case (object_id/finder_username/task_id 等),
+//      schema 是 camelCase; playVideo 另缺 feed_id/object_nonce_id/range_bytes/referer/urls 等 vendor 属性.
 
 import { Type } from "typebox";
 import type { ToolMeta } from "./_shared.js";
@@ -139,17 +160,36 @@ export const FINDER_META: ToolMeta = {
       replyCommentId, replyUsername, rootCommentId, scene, sessionBuffer,
     }),
   ],
-  /** /Finder/FinderSendText */
+  /**
+   * /Finder/FinderSendText — 向视频号用户发送私信文字.
+   * vendor Finder.FinderSendTextParamDoc: {FinderUsername string, Text string}, swagger 未声明 required.
+   * 两者均设为必填 (我的判断, 非 vendor 规定): 缺 FinderUsername 不知发给谁, 缺 Text 无内容可发.
+   * 旧的 sessionId/content 不是 vendor 字段 → 删除. (send 层 body 键本已正确, 是本层键名对不上,
+   *   实测旧 schema 下按 vendor 字段传参会发出一个只有 authcode 的空 body.)
+   */
   sendFinderDm: [
-    "发视频号私信.",
-    Type.Object({ sessionId: Type.String(), content: Type.String() }),
-    (sessionId: string, content: string) => getFinderApi().finderSendText(sessionId, content),
+    "发视频号私信. finderUsername=目标视频号 username (来自 Search 响应); text=要发送的文字.",
+    Type.Object({
+      finderUsername: Type.String({ description: "目标视频号 username (vendor FinderUsername, 来自 Search 响应)" }),
+      text: Type.String({ description: "要发送的文字 (vendor Text)" }),
+    }),
+    (finderUsername: string, text: string) => getFinderApi().finderSendText(finderUsername, text),
   ],
-  /** /Finder/TargetUserPage */
+  /**
+   * /Finder/TargetUserPage — 查看指定视频号用户首页.
+   * vendor Finder.TargetUserPageParamDoc: {LastBuffer string, Target string}, swagger 未声明 required.
+   * 必填只取 Target (我的判断, 非 vendor 规定): 缺它不知看谁的主页; LastBuffer「首页留空」→ 可选.
+   * 旧的 finderId 不是 vendor 字段 (vendor 用 Target); 且 LastBuffer 在 send 层恒硬编码 "" → 无法翻页 → 暴露.
+   */
   getFinderUserPage: [
-    "获取指定视频号用户主页数据.",
-    Type.Object({ finderId: Type.String() }),
-    (finderId: string) => getFinderApi().targetUserPage(finderId),
+    "获取指定视频号用户主页数据. target=目标视频号 username; lastBuffer=上一页返回的翻页凭据, 首页留空.",
+    Type.Object({
+      target: Type.String({ description: "目标视频号 username (vendor Target)" }),
+      lastBuffer: Type.Optional(
+        Type.String({ description: "上一页返回的翻页凭据; 首页留空 (vendor LastBuffer)" }),
+      ),
+    }),
+    (target: string, lastBuffer?: string) => getFinderApi().targetUserPage(target, lastBuffer),
   ],
   /** /Finder/UserPrepare */
   getFinderMine: [
@@ -209,15 +249,34 @@ export const FINDER_META: ToolMeta = {
     (topTitle?: string) => getFinderApi().finderGetTopicList(topTitle ?? ""),
   ],
   /**
-   * v1.3.20 P3-FINDER: /Finder/GetCommentList — 评论列表/详情.
+   * v1.3.20 P3-FINDER: /Finder/GetCommentList — 获取视频号内容评论列表.
+   * vendor Finder.GetCommentDetailParamDoc (与 GetCommentDetail 共用; 5 字段, swagger 未声明 required):
+   *   {FinderUsername string, Id integer int64, LastBuffer string, ObjectNonceId string, RootCommentId integer int64}.
+   * 必填取 FinderUsername + Id (我的判断, 非 vendor 规定, 与 like/comment 同款判据):
+   *   两者缺失时「看谁的内容 / 看哪条内容的评论」无法确定.
+   * 其余按 vendor 描述可选: LastBuffer「首页留空」, ObjectNonceId 是内容响应里的业务凭据
+   *   (与 like/comment 对同名字段的处理一致, 留空), RootCommentId「获取全部评论时传 0」→ 默认 0.
+   * 类型: Id / RootCommentId 在 vendor 明示 integer int64 —— 注意与 LikeParamDoc / CommentParamDoc
+   *   的 Id:string 不同 (同名字段在 vendor 各端点的 Go 类型不一致). 按上一轮 finderObjectId 的同款判据
+   *   用 Type.Number 对齐 (JSON 字符串会被 Go int64 unmarshal 拒绝); int64 精度风险见文件顶部注释.
+   * 旧的 objectId 不是 vendor 字段 (vendor 用 Id); FinderUsername/LastBuffer/ObjectNonceId 完全缺失;
+   *   RootCommentId 旧为可选 string 且 send 层默认 "" (vendor 是 integer) → 一并修正.
    */
   getFinderCommentList: [
-    "获取视频号评论列表 (rootCommentId 可选用于翻页).",
+    "获取视频号内容评论列表. 必填 finderUsername (作者 username) + id (内容 ID, 数字); " +
+      "lastBuffer=上一页返回的翻页凭据, 首页留空; objectNonceId=内容响应中的业务凭据; " +
+      "rootCommentId=根评论 ID, 获取全部评论时传 0 (默认 0).",
     Type.Object({
-      objectId: Type.String({ description: "视频号内容 Id" }),
-      rootCommentId: Type.Optional(Type.String()),
+      finderUsername: Type.String({ description: "作者视频号 username (vendor FinderUsername)" }),
+      id: Type.Number({ description: "内容 ID (vendor Id, integer int64, example 123456789)" }),
+      lastBuffer: Type.Optional(Type.String({ description: "上一页返回的翻页凭据; 首页留空 (vendor LastBuffer)" })),
+      objectNonceId: Type.Optional(Type.String({ description: "内容响应中的业务凭据 (vendor ObjectNonceId)" })),
+      rootCommentId: Type.Optional(
+        Type.Number({ description: "根评论 ID; 获取全部评论时传 0 (默认 0, vendor RootCommentId int64)" }),
+      ),
     }),
-    (objectId: string, rootCommentId?: string) => getFinderApi().getCommentList(objectId, rootCommentId ?? ""),
+    (finderUsername: string, id: number, lastBuffer?: string, objectNonceId?: string, rootCommentId?: number) =>
+      getFinderApi().getCommentList({ finderUsername, id, lastBuffer, objectNonceId, rootCommentId }),
   ],
   /**
    * v1.3.20 P3-FINDER: /Finder/GetCommentDetail — 评论详情.

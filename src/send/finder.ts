@@ -64,7 +64,12 @@ export function makeWppFinder(ctx: WppAccountCtx) {
     /** /Finder/FinderSearchList — 搜索列表 (EmptyObject, query in path?) */
     finderSearchList: () => dispatch("/Finder/FinderSearchList", {}),
 
-    /** /Finder/FinderSendText — 发送私信文字 (FinderUsername + Text) */
+    /**
+     * /Finder/FinderSendText — 向视频号用户发送私信文字.
+     * vendor Finder.FinderSendTextParamDoc (2 字段, swagger 未声明 required): {FinderUsername, Text}.
+     * v1.9.2 契约重写: 本层 body 键本已正确 (FinderUsername/Text), 错的是 meta 层 schema 键
+     *   (sessionId/content 不是 vendor 字段) → 调用方按 schema 传的值被错位喂入, 甚至整段丢失.
+     */
     finderSendText: (finderUsername: string, text: string) =>
       dispatch("/Finder/FinderSendText", { FinderUsername: finderUsername, Text: text }),
 
@@ -90,9 +95,26 @@ export function makeWppFinder(ctx: WppAccountCtx) {
         ObjectNonceId: "",
       }),
 
-    /** /Finder/GetCommentList — 评论列表/详情 */
-    getCommentList: (finderId: string, rootCommentId = "") =>
-      dispatch("/Finder/GetCommentList", { Id: finderId, RootCommentId: rootCommentId }),
+    /**
+     * /Finder/GetCommentList — 获取视频号内容评论列表.
+     * vendor Finder.GetCommentDetailParamDoc (与 GetCommentDetail 共用, 5 字段, swagger 未声明 required):
+     *   {FinderUsername string, Id integer int64, LastBuffer string, ObjectNonceId string, RootCommentId integer int64}.
+     * v1.9.2 契约重写: 原先只发 {Id, RootCommentId}, FinderUsername/LastBuffer/ObjectNonceId 从不透传;
+     *   Id/RootCommentId 类型对齐 vendor 的 integer (注意 Like/CommentParamDoc 的 Id 是 string, 本端点是 int64).
+     *   缺省按 vendor 描述取: LastBuffer「首页留空」→ ""; RootCommentId「获取全部评论时传 0」→ 0;
+     *   ObjectNonceId「内容响应中的业务凭据」→ 无合理缺省, 留空 "" (与 like/comment 对同名字段的处理一致).
+     */
+    getCommentList: (opt: {
+      finderUsername: string; id: number;
+      lastBuffer?: string; objectNonceId?: string; rootCommentId?: number;
+    }) =>
+      dispatch("/Finder/GetCommentList", {
+        FinderUsername: opt.finderUsername,
+        Id: opt.id,
+        LastBuffer: opt.lastBuffer ?? "",
+        ObjectNonceId: opt.objectNonceId ?? "",
+        RootCommentId: opt.rootCommentId ?? 0,
+      }),
 
     /**
      * /Finder/GetRecommend — 推荐流.
@@ -140,9 +162,14 @@ export function makeWppFinder(ctx: WppAccountCtx) {
     /** /Finder/Search — 用户搜索 */
     search: (keyword: string) => dispatch("/Finder/Search", { keyword }),
 
-    /** /Finder/TargetUserPage — 查看指定人首页 (v1.2.1 swagger-alignment: TargetUserPageParamDoc {LastBuffer, Target}) */
-    targetUserPage: (target: string) =>
-      dispatch("/Finder/TargetUserPage", { Target: target, LastBuffer: "" }),
+    /**
+     * /Finder/TargetUserPage — 查看指定视频号用户首页.
+     * vendor Finder.TargetUserPageParamDoc (2 字段, swagger 未声明 required): {LastBuffer, Target}.
+     * v1.9.2 契约重写: 原先 LastBuffer 恒硬编码 "" → 调用方无法翻页; 改为可传参.
+     *   缺省按 vendor 描述取: LastBuffer「首页留空」→ "".
+     */
+    targetUserPage: (target: string, lastBuffer = "") =>
+      dispatch("/Finder/TargetUserPage", { Target: target, LastBuffer: lastBuffer }),
 
     /** /Finder/UserPrepare — 用户中心 */
     userPrepare: () => dispatch("/Finder/UserPrepare", {}),
