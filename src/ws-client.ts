@@ -22,6 +22,8 @@ export interface WechatpadproWsClientOpts {
   accountId: string;
   /** 同步间隔兜底 (vendor WS 没推时也定时 SyncMessage 拉取, 防 vendor 推送漏通知) */
   fallbackSyncMs?: number;
+  /** 长连接心跳间隔 (调 /Login/HeartBeatLong 保活, 防 vendor idle 超时断连). 默认 60s, 必须 < vendor idle timeout (~10min). */
+  heartbeatMs?: number;
   /** v1.1.40 GLOBAL-CONFIG: WS 重连策略 (从 WppAccountConfig.sync.wsReconnect 读, 未设走默认值) */
   wsReconnect?: {
     initialDelayMs?: number;
@@ -51,6 +53,9 @@ export class WechatpadproWsClient implements WppWsClient {
   /** v1.1.11: 兜底定时 SyncMessage (vendor WS 漏推/重启场景). 默认 60s */
   private fallbackTimer: NodeJS.Timeout | null = null;
   private readonly fallbackSyncMs: number;
+  /** v1.9.3-fix: 长连接心跳定时器 (调 /Login/HeartBeatLong 保活, 防 vendor idle 超时断连) */
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private readonly heartbeatMs: number;
 
   constructor(
     private wsUrl: string,
@@ -58,6 +63,7 @@ export class WechatpadproWsClient implements WppWsClient {
     private opts: WechatpadproWsClientOpts,
   ) {
     this.fallbackSyncMs = opts.fallbackSyncMs ?? 60_000;
+    this.heartbeatMs = opts.heartbeatMs ?? 60_000;
     this.retryDelay = opts.wsReconnect?.initialDelayMs ?? 1_000;
     this.maxRetryDelay = opts.wsReconnect?.maxDelayMs ?? 30_000;
     this.retryMultiplier = opts.wsReconnect?.multiplier ?? 2;
@@ -72,6 +78,12 @@ export class WechatpadproWsClient implements WppWsClient {
       }, this.fallbackSyncMs);
       this.fallbackTimer.unref?.();
     }
+    if (this.heartbeatMs > 0) {
+      this.heartbeatTimer = setInterval(() => {
+        void this.sendHeartbeat();
+      }, this.heartbeatMs);
+      this.heartbeatTimer.unref?.();
+    }
   }
 
   async stop(): Promise<void> {
@@ -79,6 +91,10 @@ export class WechatpadproWsClient implements WppWsClient {
     if (this.fallbackTimer) {
       clearInterval(this.fallbackTimer);
       this.fallbackTimer = null;
+    }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
     if (this.ws) {
       try {
@@ -116,6 +132,11 @@ export class WechatpadproWsClient implements WppWsClient {
       this.consecutive502 = 0;
       log.info("ws connected");
       void this.triggerSync("ws-open");
+      // v1.9.3-fix: 开启 vendor 自动心跳 (防 idle 超时断连), 与周期 HeartBeatLong 双保险。
+      //   每次重连都重新开启 (新 ws 会话需要重新告知 vendor)。
+      void this.opts.apiClient.call("/Login/AutoHeartBeat", {}).catch((e) => {
+        log.warn(`ws auto-heartbeat enable failed: ${formatErr(e)}`);
+      });
     });
     this.ws.on("message", async (data) => {
       try {
@@ -214,6 +235,24 @@ export class WechatpadproWsClient implements WppWsClient {
       log.warn(`ws sync /Msg/Sync failed: ${formatErr(e)}`);
     } finally {
       this.syncInFlight = false;
+    }
+  }
+
+  /**
+   * v1.9.3-fix: 长连接心跳 (调 /Login/HeartBeatLong 保活 ws)。
+   * 根因: ws 层无 ping/pong 保活 → vendor /ws/sync idle timeout (~10min) 主动断开 →
+   *       openclaw health-monitor 判 disconnected → 每 10min 重启账号 (连累心流 sweep 被打断)。
+   * 只在 ws connected 时发; 失败仅 warn, 断连重连由 close/error handler 负责。
+   */
+  private async sendHeartbeat(): Promise<void> {
+    if (this.stopped || !this.connected) return;
+    try {
+      const r = await this.opts.apiClient.call("/Login/HeartBeatLong", {});
+      if (r.Code !== 0) {
+        log.warn(`ws heartbeat: /Login/HeartBeatLong non-zero Code=${r.Code} CodeValue=${r.CodeValue ?? "?"}`);
+      }
+    } catch (e) {
+      log.warn(`ws heartbeat failed: ${formatErr(e)}`);
     }
   }
 
