@@ -15,6 +15,8 @@
 #   tools/sanitize-source.sh --check <dir|file>      只扫描, 有残留 exit 1 (发布前的门)
 #   tools/sanitize-source.sh --check-history <repo> [ref]   逐提交校验整条历史 (每个提交树都用 --check 过一遍
 #                                                     + 提交信息; 用本执行器同一套规则 ⇒ 判据与生产门一致)
+#   tools/sanitize-source.sh --check-tags <repo>     逐 tag 校验 (每个 tag 的树 + tag 名; 2026-09-28 补:
+#                                                    2026-09-26 重写漏了 tag, 5 个公开 tag 仍含明文 key)
 #   tools/sanitize-source.sh --apply <dir>           就地脱敏 (调用方负责先排除不该发的目录)
 #   tools/sanitize-source.sh --emit-filter-repo <f>  生成 git-filter-repo --replace-text/--replace-message 用文件
 #
@@ -31,7 +33,7 @@ usage() { sed -n '2,21p' "$0"; exit 2; }
 
 MODE="${1:-}"
 case "$MODE" in
-  --check|--apply|--emit-filter-repo|--check-history) ;;
+  --check|--apply|--emit-filter-repo|--check-history|--check-tags) ;;
   -h|--help|'') usage ;;
   *) echo "unknown arg: $MODE" >&2; usage ;;
 esac
@@ -60,6 +62,41 @@ if [ "$MODE" = "--check-history" ]; then
   fi
   if [ "$bad" != 0 ]; then echo "✗ 历史校验失败: $bad 处命中 (ref=$REF)" >&2; exit 1; fi
   echo "  ✓ 历史校验通过: $n 个提交的树 + 提交信息/作者 全部 0 命中 (ref=$REF)" >&2
+  exit 0
+fi
+
+# ---- --check-tags: 校验所有 tag 指向的树 (2026-09-28 事故补丁) ----
+#   为什么需要: 2026-09-26 历史重写只重写了 master **分支**, tag 从未重写 ->
+#   5 个公开 tag (v1.4.0/v1.4.1/v1.4.2/v1.5.0/v1.5.4-complete) 仍指向含明文 API key
+#   的旧提交。而三层出口门 (pre-commit / sync-github / check-commit-metadata)
+#   **扫的都是工作树与分支, 没有任何一层扫 tag** —— 分支 tip 干净 != 历史干净。
+#   判据与生产门一致: 复用 --check 递归校验每个 tag 的树 + tag 名本身。
+if [ "$MODE" = "--check-tags" ]; then
+  [ -d "$TARGET" ] || { echo "✗ 仓库不存在: $TARGET" >&2; exit 1; }
+  [ -f "$RULES_FILE" ] || { echo "✗ 规则文件不存在: $RULES_FILE" >&2; exit 1; }
+  TMP="$(mktemp -d /tmp/wpp-tagcheck-XXXXXX)"; trap 'rm -rf "$TMP"' EXIT
+  n=0; bad=0
+  # 同时覆盖本地 tag 与远端 tag (远端用 ls-remote, 需网络; 失败不致命, 只告警)
+  TAGS="$(git -C "$TARGET" tag -l)"
+  if [ -z "$TAGS" ]; then
+    echo "  ℹ 无本地 tag, 跳过" >&2; exit 0
+  fi
+  while read -r t; do
+    [ -n "$t" ] || continue
+    n=$((n+1))
+    rm -rf "$TMP/tree"; mkdir -p "$TMP/tree"
+    git -C "$TARGET" archive "$t" 2>/dev/null | tar -x -C "$TMP/tree" 2>/dev/null || true
+    if ! out="$(WPP_SANITIZE_EXEMPT="$EXEMPT_FILE" bash "$0" --check "$TMP/tree" 2>&1)"; then
+      bad=$((bad+1)); echo "  ✗ tag $t:" >&2; echo "$out" | tail -n +2 | head -3 | sed 's/^/      /' >&2
+    fi
+  done <<< "$TAGS"
+  # tag 名本身也可能带敏感信息 (如内部项目名/日期)
+  printf '%s\n' "$TAGS" > "$TMP/tagnames.txt"
+  if ! out="$(bash "$0" --check "$TMP/tagnames.txt" 2>&1)"; then
+    bad=$((bad+1)); echo "  ✗ tag 名称:" >&2; echo "$out" | tail -n +2 | head -3 | sed 's/^/      /' >&2
+  fi
+  if [ "$bad" != 0 ]; then echo "✗ tag 校验失败: $bad 处命中" >&2; exit 1; fi
+  echo "  ✓ tag 校验通过: $n 个 tag 的树 + tag 名 全部 0 命中" >&2
   exit 0
 fi
 
