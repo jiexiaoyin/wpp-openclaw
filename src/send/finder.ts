@@ -12,20 +12,34 @@ export function makeWppFinder(ctx: WppAccountCtx) {
     postWppJson(ctx.baseUrl, ep, body, opts);
 
   return {
-    /** /Finder/Comment — 评论 (Username + Id + Content + CommentId + OpType + Scene + ...) */
-    comment: (username: string, finderId: string, content: string, opType = 1, rootCommentId = "", replyCommentId = "", replyUsername = "") =>
+    /**
+     * /Finder/Comment — 对视频号内容发表评论.
+     * vendor Finder.CommentParamDoc (11 字段, swagger 未声明 required):
+     *   {CommentId, Content, Id, ObjectNonceId, OpType, ReplyCommentId, ReplyUsername,
+     *    RootCommentId, Scene, SessionBuffer, Username}.
+     * v1.9.2 契约重写: 原先 CommentId/ObjectNonceId/Scene/SessionBuffer 被硬编码 (调用方无法传),
+     *   且 Username/Id 由 meta 层错位喂入 → 改为全 11 字段可传参, 缺省按 vendor 描述取:
+     *   CommentId「新建根评论时留空」→ ""; ObjectNonceId/SessionBuffer 是「内容响应中的凭据」, 无则 "" ;
+     *   OpType/Scene 未给默认以外语义 → 取 vendor example 1; Reply* 无回复对象时留空.
+     */
+    comment: (opt: {
+      username: string; id: string; content: string;
+      commentId?: string; objectNonceId?: string; opType?: number;
+      replyCommentId?: string; replyUsername?: string; rootCommentId?: string;
+      scene?: number; sessionBuffer?: string;
+    }) =>
       dispatch("/Finder/Comment", {
-        Username: username,
-        Id: finderId,
-        Content: content,
-        OpType: opType,
-        CommentId: "",
-        ObjectNonceId: "",
-        ReplyCommentId: replyCommentId,
-        ReplyUsername: replyUsername,
-        RootCommentId: rootCommentId,
-        Scene: 1,
-        SessionBuffer: "",
+        Username: opt.username,
+        Id: opt.id,
+        Content: opt.content,
+        CommentId: opt.commentId ?? "",
+        ObjectNonceId: opt.objectNonceId ?? "",
+        OpType: opt.opType ?? 1,
+        ReplyCommentId: opt.replyCommentId ?? "",
+        ReplyUsername: opt.replyUsername ?? "",
+        RootCommentId: opt.rootCommentId ?? "",
+        Scene: opt.scene ?? 1,
+        SessionBuffer: opt.sessionBuffer ?? "",
       }),
 
     /** /Finder/Decrypt — 评论(解密) (Content) */
@@ -36,8 +50,15 @@ export function makeWppFinder(ctx: WppAccountCtx) {
     finderGetMsgSessionId: (toFinderId: string) =>
       dispatch("/Finder/FinderGetMsgSessionId", { FinderUsername: toFinderId }),
 
-    /** /Finder/FinderLiveDetail — 直播详情 (FinderObjectID + FinderNonceID) */
-    finderLiveDetail: (finderObjectId: string, finderNonceId: string) =>
+    /**
+     * /Finder/FinderLiveDetail — 获取视频号直播详情.
+     * vendor Finder.FinderLiveDetailParamDoc (2 字段, swagger 未声明 required):
+     *   {FinderNonceID string, FinderObjectID integer int64}.
+     * v1.9.2 契约重写: meta 层曾把 FinderNonceID 硬编码为 "" (调用方传不了), 已改为必须传;
+     *   FinderObjectID 类型由 string 对齐 vendor 的 integer (JSON 字符串会被 Go int64 unmarshal 拒绝).
+     *   FinderNonceID「直播列表返回的业务凭据」→ 来自上游响应的业务链路, 无合理缺省, 故不设默认值.
+     */
+    finderLiveDetail: (finderObjectId: number, finderNonceId: string) =>
       dispatch("/Finder/FinderLiveDetail", { FinderObjectID: finderObjectId, FinderNonceID: finderNonceId }),
 
     /** /Finder/FinderSearchList — 搜索列表 (EmptyObject, query in path?) */

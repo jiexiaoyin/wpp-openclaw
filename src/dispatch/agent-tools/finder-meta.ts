@@ -1,7 +1,9 @@
 // src/dispatch/agent-tools/finder-meta.ts - Finder tag (15)
 // v1.3.18 P1-核心1 fix (2026-08-10): 改成 lazy-evaluate ctx 模式
-// 2026-09-28: getRecommend/follow/like 三处已按 vendor swagger 重写 schema (原先的 page/operation
-//   /objectId/finderId 不是 vendor 字段且从不透传); comment/finderLiveDetail 等其余差异仍在 (历史问题, 未动).
+// 2026-09-28: getRecommend/follow/like/comment/finderLiveDetail 五处已按 vendor swagger 重写 schema
+//   (原先的 page/operation/objectId/finderId/liveId 不是 vendor 字段且部分从不透传);
+//   comment 补齐 11 字段 (CommentId/ObjectNonceId/Scene/SessionBuffer 不再硬编码),
+//   finderLiveDetail 暴露 FinderNonceID (原先恒为空).
 
 import { Type } from "typebox";
 import type { ToolMeta } from "./_shared.js";
@@ -101,12 +103,41 @@ export const FINDER_META: ToolMeta = {
       likeUsername, objectNonceId, opType, scene, sessionBuffer,
     }),
   ],
-  /** /Finder/Comment */
+  /**
+   * /Finder/Comment — 对视频号内容发表评论.
+   * vendor Finder.CommentParamDoc: 11 字段, swagger 未声明 required.
+   * 必填取 Username + Id + Content (我的判断, 非 vendor 规定): 前两者是「定位内容」所必需
+   *   (与 like 同款判据), Content 是评论本体的文字, 缺了就不是一次发表评论.
+   * 其余按 vendor 描述可选 (CommentId「新建根评论时留空」, ObjectNonceId/SessionBuffer 是内容响应里的凭据,
+   *   OpType/Scene 取 example 1, Reply* 仅回复评论时才有值).
+   * 旧的 `objectId` 不是 vendor 字段 (且被错位喂进 Username) → 删除.
+   */
   commentFinderPost: [
-    "评论视频号内容.",
-    Type.Object({ objectId: Type.String(), content: Type.String() }),
-    // 原版 api.comment(objectId, content) (username=objectId 是历史 bug, 与 v1.3.18 修复无关 — 不优化)
-    (objectId: string, content: string) => getFinderApi().comment(objectId, "", content),
+    "评论视频号内容. 必填 username (内容作者 username) + id (内容 ID) + content (评论文字); " +
+      "objectNonceId/sessionBuffer=内容响应里的业务/会话凭据; opType=操作类型 (vendor example 1); " +
+      "回复某条评论时填 replyCommentId/replyUsername/rootCommentId, 新建根评论则 commentId 留空.",
+    Type.Object({
+      username: Type.String({ description: "内容作者 username (vendor Username, example 'finder_username_from_feed')" }),
+      id: Type.String({ description: "内容 ID (vendor Id, example '123456789')" }),
+      content: Type.String({ description: "评论文字 (vendor Content, example '内容很精彩')" }),
+      commentId: Type.Optional(Type.String({ description: "评论 ID; 新建根评论时留空" })),
+      objectNonceId: Type.Optional(Type.String({ description: "内容响应中的业务凭据" })),
+      opType: Type.Optional(Type.Number({ description: "操作类型 (vendor example 1)" })),
+      replyCommentId: Type.Optional(Type.String({ description: "要回复的评论 ID" })),
+      replyUsername: Type.Optional(Type.String({ description: "要回复的用户 username" })),
+      rootCommentId: Type.Optional(Type.String({ description: "根评论 ID" })),
+      scene: Type.Optional(Type.Number({ description: "内容来源场景 (vendor example 1)" })),
+      sessionBuffer: Type.Optional(Type.String({ description: "内容响应中的会话凭据" })),
+    }),
+    (
+      username: string, id: string, content: string,
+      commentId?: string, objectNonceId?: string, opType?: number,
+      replyCommentId?: string, replyUsername?: string, rootCommentId?: string,
+      scene?: number, sessionBuffer?: string,
+    ) => getFinderApi().comment({
+      username, id, content, commentId, objectNonceId, opType,
+      replyCommentId, replyUsername, rootCommentId, scene, sessionBuffer,
+    }),
   ],
   /** /Finder/FinderSendText */
   sendFinderDm: [
@@ -126,12 +157,22 @@ export const FINDER_META: ToolMeta = {
     Type.Object({}),
     () => getFinderApi().userPrepare(),
   ],
-  /** /Finder/FinderLiveDetail */
+  /**
+   * /Finder/FinderLiveDetail — 获取视频号直播详情.
+   * vendor Finder.FinderLiveDetailParamDoc: 2 字段, swagger 未声明 required.
+   * 两者均设为必填 (我的判断, 非 vendor 规定): FinderObjectID 是「直播内容 ID」(定位哪个直播间),
+   *   FinderNonceID 是「直播列表返回的业务凭据」(vendor 明示来自上游响应, 属必填的业务链路) — 缺一不可.
+   * 旧的 `liveId` 不是 vendor 字段, 且 finderNonceId 恒被硬编码为空 → 删除/暴露.
+   */
   getFinderLiveDetail: [
-    "获取视频号直播详情.",
-    Type.Object({ liveId: Type.String() }),
-    // 原版 api.finderLiveDetail(liveId) (finderNonceId 缺省, 是历史不一致, 不优化)
-    (liveId: string) => getFinderApi().finderLiveDetail(liveId, ""),
+    "获取视频号直播详情. finderObjectId=直播内容 ID (vendor FinderObjectID, int64); " +
+      "finderNonceId=直播列表返回的业务凭据 (vendor FinderNonceID, 来自上一响应, 必传).",
+    Type.Object({
+      finderObjectId: Type.Number({ description: "直播内容 ID (vendor FinderObjectID, int64, example 123456789)" }),
+      finderNonceId: Type.String({ description: "直播列表返回的业务凭据 (来自上游响应)" }),
+    }),
+    (finderObjectId: number, finderNonceId: string) =>
+      getFinderApi().finderLiveDetail(finderObjectId, finderNonceId),
   ],
   /**
    * v1.3.20 P3-FINDER: /Finder/Decrypt — 评论内容解密.
