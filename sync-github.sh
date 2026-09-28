@@ -37,8 +37,21 @@ SANITIZER="$DEV_DIR/tools/sanitize-source.sh"   # 绝对路径: 后面会 cd 到
 # master (源码分支) 发布快照的排除项 —— 只发**源码**, 不发依赖/产物/本机运行期配置
 #   node_modules/ coverage/ release/ dist-release/ : 依赖与构建产物 (历史里曾有 130M+, 已从 master 历史移除)
 #   accounts/default.json : 本机运行期账号配置 (真实 wxid / 管理员 / 群白名单); 公开仓只保留 .example
+#   dist/ 与 src/**/*.js (2026-09-28): tsc 编译产物与编译残留.
+#     为何必须显式列出 —— **rsync 不读 .gitignore**. 下面 L157 的 rsync 只认本数组,
+#     于是 .gitignore:15 (dist/) 与 :25 (src/**/*.js) 对发布路径完全失效:
+#       dev 仓 git 跟踪的 dist/*.js = 0 个, 而 master 快照实际含 147 个 dist/*.js
+#       + 35 个 src/*.js + 182 个 .map (共 364 个文件纯由 rsync 带上去).
+#     风险: 这些产物绕过脱敏 (sanitize-source.sh 的 SKIP_DIRS 亦未排除),
+#     而 dist/ 内联真实 URL/ID (见 .gitignore:15 注释). 且 src/*.js 是被误信的过期逻辑.
 SOURCE_EXCLUDES=(--exclude='.git/' --exclude='node_modules/' --exclude='coverage/'
-                 --exclude='release/' --exclude='dist-release/' --exclude='accounts/default.json')
+                 --exclude='release/' --exclude='dist-release/' --exclude='accounts/default.json'
+                 --exclude='dist/' --exclude='**/*.map'
+                 # src 下 35 个 .js 全部有对应 .ts (实测 0 孤儿) = 纯编译残留;
+                 #   两行都要: rsync 的 '**' 要求中间夹目录, 只写 src/**/*.js 会漏掉 src/ 根层 6 个
+                 #   (实测漏 config.js/llm-judge.js/db.js/api-client.js/account-state.js/types.js).
+                 #   scripts/setup.js 是手写脚本, 必须保留 -> 用 src/ 前缀限定, 不用 '*.js'.
+                 --exclude='src/*.js' --exclude='src/**/*.js')
 
 DRY_RUN=0
 NO_BUILD=0
