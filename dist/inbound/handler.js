@@ -18,11 +18,11 @@ import { payloadToAllInboundMessages } from "./parser.js";
 import { SeenTracker, buildDedupeKey } from "../webhook-receiver.js";
 import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1Cdn, enrichFileMessage, enrichFileMessageFromV1Binary, enrichVideoMessage, enrichVideoMessageFromV1, isV1SchemaVideo, enrichVoiceMessage, enrichVoiceMessageFromV1, isV1SchemaVoice, enrichFileMessageViaMcp, isV1SchemaImage, isV1SchemaFile } from "./media-enrich.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
-import { InboundMetrics } from "../monitor/metrics.js";
-import { judgeHeartflow, recordRawMessage, getChatState, buildChatContextSummary, getRawBuffer, formatRawMessages, lastBotReply, secondsSinceLastReply, recordActiveReply, recordPassiveMessage, markHeartflowJudged, } from "./heartflow.js";
-import { resolveThresholdOverride, persistHfJudged, persistHfJudgedBelowThreshold, markHfGroupEngaged, getOpenHfWindow, } from "./heartflow-learn.js";
+import { HeartflowMetrics, InboundMetrics } from "../monitor/metrics.js";
+import { judgeHeartflow, recordRawMessage, getChatState, buildChatContextSummary, getRawBuffer, formatRawMessages, lastBotReply, secondsSinceLastReply, recordActiveReply, recordPassiveMessage, markHeartflowJudged, isHfGroupAllowed, } from "./heartflow.js";
+import { resolveHfEffectiveThreshold, persistHfJudged, persistHfJudgedBelowThreshold, markHfGroupEngaged, getOpenHfWindow, } from "./heartflow-learn.js";
 import { noteHfHumanMessage } from "./heartflow-budget.js";
-import { getHfProfileBandFloor, getHfProfilePromptText } from "./heartflow-profile.js";
+import { resolveHfProfileCfg, getHfProfilePromptText } from "./heartflow-profile.js";
 import { updateJargonFromMessage, recordJargonMessage, shouldTriggerMine, mineJargonForGroup, getGroupMessageCount, } from "./jargon.js";
 import { processAffectionMessage, } from "./affection.js";
 // 问题: 群聊发文件/图 (enrich 慢, 下载大文件几秒) + @机器人, 触发消息 dispatch 时文件还没入库。
@@ -587,12 +587,41 @@ export function createWppInboundHandler(opts) {
                 const nowSec = Math.floor(Date.now() / 1000);
                 for (const g of byGroup.values()) {
                     void markHfGroupEngaged(g.accountId, g.groupId, nowSec, g.cands);
-                    // v1.6.9 发言预算: 顺手记"该群有人类消息" (零额外 IO; lastHumanAtSec 目前仅用于观测, 见 budget 模块注释)
-                    noteHfHumanMessage(g.accountId, g.groupId, nowSec);
+                }
+                // v1.10.0 发言预算: 记"该群有人类消息" —— 独立一层, 覆盖**白名单内所有群**。
+                //   旧码把它挂在"该群开窗中"的分支里 ⇒ 只有刚发过心流回复的那 10 分钟才会被记录,
+                //   于是"群里多久没人说话了"这个观测值几乎恒为 null (budget 模块注释说它可供画像参考,
+                //   实际不成立)。它不是闸 (不参与判定, 见 HfBudgetState.lastHumanAtSec 注释), 只是观测,
+                //   所以放宽到全量记录的代价只是一个 Map 写入, 换来一个**真的能用**的沉默时长指标。
+                for (const m of batch) {
+                    if (persistResults.get(m)?.via === "blocked")
+                        continue;
+                    if (m.peerKind !== "group")
+                        continue;
+                    if (m.msgType === MsgType.SYSTEM)
+                        continue;
+                    if (!!opts.triggerCtx.botWxid && m.fromWxid === opts.triggerCtx.botWxid)
+                        continue;
+                    const gid = m.chatroomId ?? m.peerId;
+                    if (!isHfGroupAllowed(gid, opts.heartflow))
+                        continue;
+                    noteHfHumanMessage(m.accountId, gid, nowSec);
                 }
             }
             const triggerResults = persistResults; // Step 2 已算 (same ctxForTrigger + shouldTrigger)
             const dispatched = [];
+            /**
+             * v1.10.0 批内预算闸 (每群一次 flush 至多一条心流回复)。
+             *
+             * 为什么需要: 门禁 (shouldTrigger → checkHeartflowGate → peekHfBudget) 在 Step 2 对**整批**
+             *   一次性算完, 而记账 (`noteHfReplySent`) 要等真正发出去才发生 —— 于是同一批里 N 条消息
+             *   都拿着"发之前"的预算状态过关, 全部被判、全部被 dispatch ⇒ `minGapSec` 在批内形同不存在
+             *   (生产 `minReplyIntervalSec=0` + `minJudgeIntervalSec=0` 时必然发生)。
+             * 为什么用批内去重而不是"预留额度再回滚": 批 = debounce 窗口里的一个消息突发 (几秒),
+             *   而 `minGapSec` 最小也是 180s —— "一批内只发一条"是比 minGap 更弱的下界, 绝不会误杀;
+             *   而预留/回滚要给预算模块加跨模块状态与超时回滚 (漏回滚就永久少一条额度), 复杂度不划算。
+             */
+            const hfBatchReplied = new Set();
             for (const [m, t] of triggerResults) {
                 // v1.3.72 红包消息不触发 AI (老板 2026-08-20): 收到红包静默入库, 不瞎回复 (415 行的 continue 只跳过 relay 循环, 这里必须再拦一次)
                 if (isRedPacketMessage(m))
@@ -645,15 +674,25 @@ export function createWppInboundHandler(opts) {
                         //   静默失败 (无 key/超时/坏 JSON) → 不 dispatch (保守, 不打扰群聊)
                         const chatId = m.chatroomId ?? m.peerId;
                         const hfCfg = opts.heartflow;
+                        // v1.10.0 批内预算闸: 本批已给该群发过一条 ⇒ 后面的同批心流候选直接出局 (见 hfBatchReplied 注释)
+                        const hfBatchKey = `${m.accountId}:${chatId}`;
+                        if (hfBatchReplied.has(hfBatchKey)) {
+                            debug(`[WPP HF] batch budget: 同批同群已回复, skip peer=${m.peerId} msgId=${m.msgId}`);
+                            continue;
+                        }
                         try {
                             const nowMs = Date.now();
                             // v1.6.x HEARTFLOW-FEEDBACK: 该群若有 learned 阈值且 ≠ 账号级 → shallow clone override (judge prompt 与判定同用 effCfg)
-                            const override = resolveThresholdOverride(m.accountId, chatId, hfCfg, Math.floor(nowMs / 1000));
-                            // v1.7.0 画像阈值下限: 画像说"这个群我该谨慎"时, 只把阈值**抬高**(取 max),
-                            //   绝不下压 —— 激进的后果是刷屏, 正是老板要治的病 (见 heartflow-profile.ts 文件头)
-                            const profileFloor = getHfProfileBandFloor(m.accountId, chatId);
-                            const baseThreshold = override ?? hfCfg.replyThreshold ?? 0.6;
-                            const effThreshold = profileFloor == null ? baseThreshold : Math.max(baseThreshold, profileFloor);
+                            const nowSec = Math.floor(nowMs / 1000);
+                            // v1.10.0: 生效阈值**只有一个算法**, 判定与 /heartflow status 共用 resolveHfEffectiveThreshold
+                            //   (旧码在这里内联三段, 状态页另算一份 ⇒ 停摆时状态页仍显示"正常 0.6")。
+                            //   链路: 学习/分层覆盖 → 画像 band **有界**抬升 (+maxRaise) → 可达性天花板 clamp。
+                            const eff = resolveHfEffectiveThreshold(m.accountId, chatId, hfCfg, nowSec);
+                            if (eff.bandCapped) {
+                                warn(`[WPP HF] profile band capped: peer=${m.peerId} 画像建议 ${eff.band?.toFixed(2)} → 生效 ${eff.threshold.toFixed(2)} ` +
+                                    `(上限 = 基线 +${resolveHfProfileCfg(hfCfg).maxRaise.toFixed(2)}; 画像不是重新定义及格线的地方)`);
+                            }
+                            const effThreshold = eff.threshold;
                             const effCfg = effThreshold === hfCfg.replyThreshold ? hfCfg : { ...hfCfg, replyThreshold: effThreshold };
                             const st = getChatState(chatId, hfCfg, nowMs);
                             const judgeResult = await judgeHeartflow({
@@ -697,6 +736,8 @@ export function createWppInboundHandler(opts) {
                                 : null;
                             if (judgeResult?.shouldReply) {
                                 m.trigger = "heartflow";
+                                HeartflowMetrics.incJudgePassed();
+                                hfBatchReplied.add(hfBatchKey); // v1.10.0 批内预算闸: 本批该群额度已用
                                 recordActiveReply(chatId, effCfg, nowMs);
                                 // judge 通过落 ledger 行 (失败仅 warn 不阻断 dispatch)
                                 if (hfRecord)
@@ -705,6 +746,7 @@ export function createWppInboundHandler(opts) {
                                 info(`[WPP HEARTFLOW] trigger: peer=${m.peerId} msgId=${m.msgId} score=${judgeResult.overallScore.toFixed(2)} reasoning=${judgeResult.reasoning.slice(0, 40) ?? ""}`);
                             }
                             else {
+                                HeartflowMetrics.incJudgeBelow();
                                 recordPassiveMessage(chatId, hfCfg, nowMs);
                                 // v1.6.1 留痕: judge 跑了但未过阈值 → 也落一行 (judged→suppressed/ below-threshold).
                                 //   否则"judge 跑了但没回"与"群里没消息"在日志/DB 里完全同形 (09-11 静默瘫就藏在这)。

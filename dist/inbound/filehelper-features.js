@@ -4,15 +4,16 @@
 //   ⚠️ runtimeHeartflow 必须经 getHeartflowRuntime() 取全局唯一实例 ——
 //      它同时被 index.ts 的 startAccountById 写入; 复制一份 Map 会让读写分属不同实例。
 import { loadAccountConfigAsync, setAccountField, updateHeartflowGroups } from "../config.js";
-import { listHfGroupStates, countHfLedgerByStatus, countHfEngageSignals, getHfLedgerLast, getHfGroupProfile, listHfLayerStats, listHfSentCountsRecent, markHfLedgerVeto, listHfClosedSince, listHfBotMsgShare, listHfOutboundTexts, } from "../db.js";
-import { defaultHeartflowConfig, resolveHfLearning } from "./heartflow.js";
-import { forgetHfOpenWindow, getLearnedThreshold, hfLayerAnchorFor, hfLayerStep, resolveHfThresholdDecision, } from "./heartflow-learn.js";
+import { listHfGroupStates, countHfLedgerByStatus, countHfEngageSignals, getHfLedgerLast, getHfGroupProfile, listHfLayerStats, listHfSentCountsRecent, markHfLedgerVeto, listHfClosedSince, listHfBotMsgShare, listHfOutboundTexts, getHfLastSentAtSec, } from "../db.js";
+import { defaultHeartflowConfig, isHfGroupAllowed, resolveHfLearning } from "./heartflow.js";
+import { forgetHfOpenWindow, getLearnedThreshold, hfLayerAnchorFor, hfLayerStep, resolveHfEffectiveThreshold, resolveHfThresholdDecision, } from "./heartflow-learn.js";
 import { ambientPFromHourCounts, HF_LAYER_DB_ROW_CAP, hfLayerKeyFor, loadHfGroupHourCounts, resolveHfLayeredCfg, } from "./heartflow-layer.js";
 import { getHfBudgetState, hfBudgetBlockedSnapshot, hfLocalHour, resolveHfBudget } from "./heartflow-budget.js";
 import { resolveHfDedupeCfg } from "./heartflow-dedupe.js";
 import { buildHfDigest, hfBotShare, hfEngagementSummary, hfRepeatRate, hfShareGuardSnapshot, resolveHfShareGuardCfg, } from "./heartflow-observe.js";
-import { getHfProfileBandFloor, getHfProfilePromptText, parseHfGroupProfileRow, resolveHfProfileCfg, } from "./heartflow-profile.js";
+import { getHfProfilePromptText, parseHfGroupProfileRow, resolveHfProfileCfg, } from "./heartflow-profile.js";
 import { getHeartflowRuntime } from "./heartflow-runtime.js";
+import { resolveHfEffectiveBudget } from "./triggers.js";
 /** v1.8.0: /heartflow status / layers 里群列表的显示上限 (超出折叠成 "…其余 N 群") */
 const HF_STATUS_MAX_GROUPS = 5;
 // v1.9.2: 取全局唯一实例 (勿复制, 见文件头注)
@@ -148,7 +149,69 @@ export async function handleFeatureCommand(feature, args, send, accountId) {
             catch {
                 v19Line = "\n重复闸/占比外环: (读取失败)";
             }
-            extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}${ledgerLine}${sigLine}${budgetLine}${layerLine}${v19Line}`;
+            // v1.10.0 可观测 (P0 停摆复盘的直接产物): **逐群生效阈值** + 上一次真发言距今多久。
+            //   为什么必须有这一行: 09-26 停摆 3 天, 而旧状态页打印的是账号级 replyThreshold (0.6) ——
+            //   看起来一切正常。真正决定"回不回"的是**逐群生效值**(学习值 + 画像抬升 + 可达性天花板),
+            //   不把它摊开, "阈值被抬到够不着"这种失效就永远是隐形的 (见 resolveHfEffectiveThreshold)。
+            let effLine = "";
+            try {
+                const hfCfg = runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig();
+                const groups = (Array.isArray(fc?.whitelistGroups) ? fc.whitelistGroups : [])
+                    .filter((g) => isHfGroupAllowed(g, hfCfg));
+                const nowSec = Math.floor(Date.now() / 1000);
+                const shownGroups = groups.slice(0, HF_STATUS_MAX_GROUPS);
+                const effs = shownGroups.map((g) => resolveHfEffectiveThreshold(accountId, g, hfCfg, nowSec));
+                // 生效预算与阈值同理: 展示的必须是**实际生效**的三层收紧结果 (账号档 → 画像 → 占比外环),
+                //   而不是账号档 —— 否则"这个群为什么一天只回一条"在运维面上没法解释。
+                const acctBudget = resolveHfBudget(hfCfg);
+                const shownBudgets = shownGroups.map((g) => resolveHfEffectiveBudget(accountId, g, hfCfg, nowSec));
+                const rows = shownGroups.map((g, i) => {
+                    const E = effs[i];
+                    const B = shownBudgets[i];
+                    const src = E.override != null ? `群级/分层 ${E.override.toFixed(2)}` : `账号级 ${E.base.toFixed(2)}`;
+                    const band = E.band != null ? `, 画像建议 ${E.band.toFixed(2)}${E.bandCapped ? " 已截断" : ""}` : "";
+                    const cap = E.reachInfo
+                        ? `, 天花板 ${E.reachCap?.toFixed(2)} (最高只 ${E.reachInfo.maxScore.toFixed(2)}/${E.reachInfo.n}条)`
+                        : "";
+                    const budget = B.minGapSec !== acctBudget.minGapSec ||
+                        B.maxPerHour !== acctBudget.maxPerHour ||
+                        B.maxPerDay !== acctBudget.maxPerDay
+                        ? `; 预算 ${B.minGapSec}s/${B.maxPerHour}条·时/${B.maxPerDay}条·天 (账号档 ${acctBudget.minGapSec}s/${acctBudget.maxPerHour}/${acctBudget.maxPerDay}, 已被收紧)`
+                        : "";
+                    return `- ${g}: 阈值 ${E.threshold.toFixed(2)} (${src}${band}${cap})${budget}`;
+                });
+                const maxEff = Math.max(...effs.map((e) => e.threshold), hfCfg.replyThreshold ?? 0.6);
+                effLine = `\n生效阈值(=判据, 与 judge 同源): 账号级 ${th.toFixed(2)} / 最高生效 ${maxEff.toFixed(2)}`;
+                effLine += rows.length
+                    ? `\n${rows.join("\n")}` +
+                        (groups.length > rows.length ? `\n…其余 ${groups.length - rows.length} 群` : "")
+                    : "\n(白名单无群 ⇒ 心流不会在任何群发言)";
+            }
+            catch {
+                effLine = "\n生效阈值: (读取失败)";
+            }
+            // 停摆金丝雀: 距上次**真**发言多久 (sent_at, 不含被拦下的占位符)。无记录 ⇒ 从未发过。
+            let lastSendLine = "";
+            try {
+                const last = await getHfLastSentAtSec(accountId);
+                if (last == null) {
+                    lastSendLine = "\n上次真发言: 从未 (检查群白名单 / 阈值 / 预算)";
+                }
+                else {
+                    const age = Math.floor(Date.now() / 1000) - last;
+                    const days = age / 86400;
+                    lastSendLine =
+                        `\n上次真发言: ${days >= 1 ? `${days.toFixed(1)} 天前` : `${Math.round(age / 60)} 分钟前`}` +
+                            ` (${new Date(last * 1000).toLocaleString("zh-CN")})` +
+                            (days >= 3 ? " ⚠️ 已超 3 天 —— 典型停摆, 查上面的生效阈值/天花板/预算" : "");
+                }
+            }
+            catch {
+                lastSendLine = "";
+            }
+            // v1.10.0: 删掉单独的 `阈值: 0.6` 一行 —— 它只报账号级值, 而"回不回"由逐群生效值决定。
+            //   停摆期间这行正是"看起来正常"的来源; 账号级值现在由 effLine 首行报告。
+            extra = `\n心流群白名单: ${wl} 个${effLine}${lastSendLine}${learnLine}${ledgerLine}${sigLine}${budgetLine}${layerLine}${v19Line}`;
         }
         await send(`${label} (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}${extra}\n用法: /${feature} on|off|status`);
         return true;
@@ -342,20 +405,28 @@ export async function handleFeatureCommand(feature, args, send, accountId) {
             // 缺省用 defaultHeartflowConfig() (enabled 默认 false): 这里只读字段做展示, 不改变行为
             const hfCfg = runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig();
             const learned = getLearnedThreshold(accountId, gid);
-            const floor = getHfProfileBandFloor(accountId, gid);
             // v1.8.0: 阈值决策改用统一入口 (与 handler 判定同源) —— 归因行才不会与实际判定脱节
             const d = resolveHfThresholdDecision(accountId, gid, hfCfg);
+            // v1.10.0: 生效值也改走**唯一入口**。旧码在这里写第三份算法 (`max(base, 画像下限)`) ⇒
+            //   judge 按 0.85 判、这里却显示 0.60, 静默停摆期间状态页看起来完全正常 (见 resolveHfEffectiveThreshold)。
+            const E = resolveHfEffectiveThreshold(accountId, gid, hfCfg);
             const anchor = hfLayerAnchorFor(accountId, gid, hfCfg);
-            const base = d.applied ?? hfCfg.replyThreshold ?? 0.6;
-            const eff = floor == null ? base : Math.max(base, floor);
+            const base = E.override ?? hfCfg.replyThreshold ?? 0.6;
+            const eff = E.threshold;
             const srcName = d.source === "layer"
                 ? `分层[${d.layerKey}]`
                 : d.source === "group"
                     ? `群级 learned ${learned?.toFixed(2) ?? "-"}`
                     : "账号级";
-            const attrLine = `当前有效阈值 ${eff.toFixed(2)} = ${srcName} ${base.toFixed(2)}` +
+            const attrLine = `生效阈值 ${eff.toFixed(2)} = ${srcName} ${base.toFixed(2)}` +
                 (d.layerKey ? ` [段 ${d.layerKey} n=${d.layerN} ${d.layerRate == null ? "无样本" : `rate=${d.layerRate.toFixed(3)}`}${d.apply ? " 生效" : " 未生效(影子)"}]` : "") +
-                ` ← 群级 ${learned?.toFixed(2) ?? `- (锚点 ${anchor.toFixed(2)})`} / 账号 ${hfCfg.replyThreshold ?? "-"}${floor != null ? ` / 画像下限 ${floor}` : ""}`;
+                ` ← 群级 ${learned?.toFixed(2) ?? `- (锚点 ${anchor.toFixed(2)})`} / 账号 ${hfCfg.replyThreshold ?? "-"}` +
+                (E.band == null
+                    ? ""
+                    : ` / 画像建议 ${E.band.toFixed(2)}${E.bandCapped ? ` ⇒ 抬到 ${(base + resolveHfProfileCfg(hfCfg).maxRaise).toFixed(2)} (上限截断)` : " (未抬高)"}`) +
+                (E.reachInfo
+                    ? `\n可达性天花板: 压到 ${E.reachCap?.toFixed(2)} (近 7 天 ${E.reachInfo.n} 条判定最高只 ${E.reachInfo.maxScore.toFixed(2)} —— 阈值够不着 ⇒ 心流等于停摆)`
+                    : "");
             const shadowLine = d.shadow
                 ? `影子建议: 分层[${d.shadow.layerKey}] n=${d.shadow.n} rate=${d.shadow.rate.toFixed(3)} ⇒ ${d.shadow.threshold.toFixed(2)} (layered.apply=false, 未生效)`
                 : d.layerKey && d.layerN > 0 && !d.apply

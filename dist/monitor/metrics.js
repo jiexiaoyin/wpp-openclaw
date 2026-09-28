@@ -37,6 +37,16 @@ export function setGauge(name, value) {
 export function getGauge(name) {
     return gauges.get(`${ns}_${name}`) ?? 0;
 }
+/**
+ * v1.10.0: 预声明 gauge (0 值), 理由同 declareCounter —— 未设过的 gauge 不出现在导出里,
+ *   于是"值为 0"与"埋点没接上"无法区分。心流的有效性指标尤其需要这个区分:
+ *   `hf_last_send_age_sec = 0` 与"这个指标根本不存在"必须能分开看。
+ */
+export function declareGauge(name) {
+    const k = `${ns}_${name}`;
+    if (!gauges.has(k))
+        gauges.set(k, 0);
+}
 /** 重置 gauge (测试/teardown 用) */
 export function resetAllGauges() {
     gauges.clear();
@@ -144,5 +154,42 @@ export const JudgeMetrics = {
 export const InboundMetrics = {
     /** 解析成功、进入流水线的入站消息条数 (计在去重之前, 故可能包含被去重丢弃的) */
     incMessagesIn: (n = 1) => incCounter("messages_in_total", n),
+};
+// ============================================================================
+// v1.10.0 (2026-09-28) 心流"有效性"指标
+// ----------------------------------------------------------------------------
+// 动因 (P0 事故复盘): 心流在 2026-09-26 起**彻底停摆 3 天**却无人发现, 因为原有埋点只覆盖
+//   "judge 有没有在跑" (judge_calls 照涨), 完全覆盖不到"跑了但一条都发不出去"。
+//   停摆的特征量是**结果侧**的三个数: 距上次真发言多久 / 生效阈值多高 / 有没有被护栏压过。
+//   有了这三个, "静默停摆"从"要靠人翻台账"变成"看图就知道"。
+// ============================================================================
+declareCounter("hf_judge_passed_total");
+declareCounter("hf_judge_below_total");
+declareCounter("hf_sends_total");
+declareCounter("hf_reach_cap_applied_total");
+declareGauge("hf_last_send_age_sec");
+declareGauge("hf_effective_threshold_max");
+declareGauge("hf_threshold_ceiling_groups");
+declareGauge("hf_reachable_groups");
+export const HeartflowMetrics = {
+    /** judge 判定通过 (准备 dispatch) */
+    incJudgePassed: () => incCounter("hf_judge_passed_total"),
+    /** judge 判定不过 (低于阈值) */
+    incJudgeBelow: () => incCounter("hf_judge_below_total"),
+    /** 真发出 (不含被 dedup/预算/重复闸拦下的占位符) */
+    incSent: () => incCounter("hf_sends_total"),
+    /** 可达性护栏生效 (阈值被压回可达范围) —— 非 0 即说明曾有"阈值够不着"的自锁 */
+    incReachCapApplied: () => incCounter("hf_reach_cap_applied_total"),
+    /**
+     * 距上次真发言的秒数 (**心流停摆的核心金丝雀**)。
+     * 从未发过 ⇒ 用 `-1` 而不是 0: 0 会被误读成"刚刚发过", 是最糟的误导方向。
+     */
+    setLastSendAgeSec: (sec) => setGauge("hf_last_send_age_sec", sec),
+    /** 各群生效阈值中的最大值 (与 hf_last_send_age_sec 一起看: 高阈值 + 高年龄 = 典型的阈值自锁) */
+    setEffectiveThresholdMax: (t) => setGauge("hf_effective_threshold_max", t),
+    /** 被可达性天花板压住的群数 */
+    setThresholdCeilingGroups: (n) => setGauge("hf_threshold_ceiling_groups", n),
+    /** 本轮有判定样本、且阈值可达 (最高分够得着) 的群数 */
+    setReachableGroups: (n) => setGauge("hf_reachable_groups", n),
 };
 //# sourceMappingURL=metrics.js.map

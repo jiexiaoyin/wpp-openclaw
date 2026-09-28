@@ -5,6 +5,29 @@ import { checkHeartflowGate } from "./heartflow.js";
 import { resolveHfBudget, tightenHfBudget } from "./heartflow-budget.js";
 import { getHfProfileBudget } from "./heartflow-profile.js";
 import { getHfShareTighten } from "./heartflow-observe.js";
+/**
+ * v1.10.0: 该群**实际生效**的发言预算 —— 账号档 → 画像收紧 → 占比外环收紧, 三层只许变严。
+ *
+ * 为什么收口成一个函数 (而不是继续内联在 shouldTrigger 里): `/heartflow status` 必须显示"生效值",
+ *   否则运维看到的永远是账号档 (600s/3条), 而实际生效的可能是画像压过后的 (1800s/1条) ——
+ *   于是"为什么这个群一天只回一条"在运维面上无解。与阈值同理: 一份算法, 两处调用 (判定 + 展示);
+ *   各写一份迟早漂移, 而漂移的那一刻恰是"看起来正常但已经不工作了"。
+ *
+ * 三层顺序 (与旧内联代码逐字等价): 账号级 → 画像 (只能收紧, 静默段默认不生效) → 占比外环 (只能收紧)。
+ * 纯内存查 (三个都是缓存), judge 热路径零 DB IO。
+ */
+export function resolveHfEffectiveBudget(accountId, groupId, hfCfg, nowSec = Math.floor(Date.now() / 1000)) {
+    // v1.7.0 画像收紧预算: 画像建议只能让约束更紧 (间隔更长/上限更小), 不许放宽.
+    //   画像文本本身走 handler 注入 prompt; 这里只用它的预算字段 (内存缓存查, 零 DB IO).
+    const budgetBase = tightenHfBudget(resolveHfBudget(hfCfg), getHfProfileBudget(accountId, groupId), {
+        applyQuietHours: hfCfg.profile?.applyQuietHours === true,
+    });
+    // v1.9.0 占比外环**再套一层**: 该群今日 bot 发言占比 > 目标 (默认 5%) ⇒ 收紧当日预算.
+    //   两层都走 tightenHfBudget ("只能收紧"), 复合安全 —— 取更严的一侧, 不可能被外环放宽.
+    //   占比状态由 sweep 每轮用一条 DB 聚合刷新, 这里是纯内存查 (judge 热路径零 DB IO).
+    const shareTighten = getHfShareTighten(accountId, groupId, budgetBase, hfCfg, nowSec);
+    return shareTighten ? tightenHfBudget(budgetBase, shareTighten) : budgetBase;
+}
 /** 决定 message 是否触发 OpenClaw AI 回复 */
 export function shouldTrigger(msg, cfg, ctx) {
     // 自回环过滤: bot 自己发的消息不回 (防 vendor 回推 self → 自问自答)
@@ -73,14 +96,7 @@ export function shouldTrigger(msg, cfg, ctx) {
     //   门禁不过 (disabled/白名单外/空/冷却/预算) → via:null (不触发)
     if (msg.peerKind === "group" && cfg.heartflow?.enabled) {
         const chatId = msg.chatroomId ?? msg.peerId;
-        // v1.7.0 画像收紧预算: 画像建议只能让约束更紧 (间隔更长/上限更小), 不许放宽.
-        //   画像文本本身走 handler 注入 prompt; 这里只用它的预算字段 (内存缓存查, 零 DB IO).
-        const budgetBase = tightenHfBudget(resolveHfBudget(cfg.heartflow), getHfProfileBudget(msg.accountId, chatId), { applyQuietHours: cfg.heartflow.profile?.applyQuietHours === true });
-        // v1.9.0 占比外环**再套一层**: 该群今日 bot 发言占比 > 目标 (默认 5%) ⇒ 收紧当日预算.
-        //   两层都走 tightenHfBudget ("只能收紧"), 复合安全 —— 取更严的一侧, 不可能被外环放宽.
-        //   占比状态由 sweep 每轮用一条 DB 聚合刷新, 这里是纯内存查 (judge 热路径零 DB IO).
-        const shareTighten = getHfShareTighten(msg.accountId, chatId, budgetBase, cfg.heartflow, Math.floor(Date.now() / 1000));
-        const effBudget = shareTighten ? tightenHfBudget(budgetBase, shareTighten) : budgetBase;
+        const effBudget = resolveHfEffectiveBudget(msg.accountId, chatId, cfg.heartflow, Math.floor(Date.now() / 1000));
         const gate = checkHeartflowGate(chatId, msg.content ?? "", cfg.heartflow, Date.now(), 
         // v1.6.9: 预算计数按账号分桶 + 用**消息自己的时刻**判陈旧触发 (msg.ts 是 unix 秒, 见 parser.ts)
         msg.accountId, msg.ts, effBudget);

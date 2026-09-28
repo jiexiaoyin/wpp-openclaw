@@ -23,8 +23,16 @@ export async function setHfLedgerSuppressed(accountId, inboundMsgId, reason, atS
     return getAdapter().setHfLedgerSuppressed(accountId, inboundMsgId, reason, atSec);
 }
 /** 按信号收敛开窗行 (close=false 只落弱信号并保持开窗, 见 types.ts markHfEngaged 注释) */
-export async function markHfEngaged(accountId, groupId, atSec, engaged, signal, close) {
-    return getAdapter().markHfEngaged(accountId, groupId, atSec, engaged, signal, close);
+export async function markHfEngaged(accountId, groupId, atSec, engaged, signal, close, inboundMsgId) {
+    return getAdapter().markHfEngaged(accountId, groupId, atSec, engaged, signal, close, inboundMsgId);
+}
+/** v1.10.0 可达性护栏素材: 该群近期判过的所有分 (含已发出的行) */
+export async function listHfRecentJudgedScores(accountId, sinceSec, rowCap) {
+    return getAdapter().listHfRecentJudgedScores(accountId, sinceSec, rowCap);
+}
+/** v1.10.0 静默金丝雀: 账号最后一次真发出心流回复的时刻 (无则 null) */
+export async function getHfLastSentAtSec(accountId) {
+    return getAdapter().getHfLastSentAtSec(accountId);
 }
 /** v1.6.8 反事实基线素材: 每群 × 每小时段的入站人类消息数 (hour 为本地小时) */
 export async function listHfGroupMsgHourBuckets(accountId, sinceSec, localOffsetSec) {

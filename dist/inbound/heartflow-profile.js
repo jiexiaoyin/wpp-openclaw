@@ -4,6 +4,14 @@
 //   使其更贴合一个真人身份角色"; 同时明确 "**不愿意设定固定的触发关键词**".
 // 本模块就是那句"自动理解群身份与特征"的落地: 每群每日一份画像, 注入 judge prompt 供"应景"参考。
 //
+// v1.10.0 (2026-09-28) 血的教训 —— 画像曾把心流**整体治死 3 天**:
+//   ① `bot_role` 里的"基本不该插话的旁观者/少插话"被 judge prompt 的三条维度当成**否决票**
+//      (relevance+willingness+social 合计权重 0.65) ⇒ 裁判给所有消息打 0.2-0.39, "该回"档整体消失;
+//   ② `band` 被当**无上界的硬地板**, 4/5 个群抬到 0.70-0.90, 高于裁判给"明显该回"消息的分数上限 (0.82);
+//   ③ 该 band 值还被印进 judge prompt 当及格线, 反过来压低裁判打分 (闭环自锁)。
+//   修法: 源头改措辞 (buildHfProfilePrompt 两条硬约束) + 注入前过滤 (stripHfMutePhrases) +
+//        band 改为**有界抬升** (resolveHfProfileBandEffect) + prompt 不再印阈值 (heartflow.ts)。
+//
 // 三条设计红线 (为什么这么写, 而不是"让 LLM 说什么就是什么"):
 //  1. **画像只能收紧, 不许放开**。画像产出的建议 band / 预算一律过代码侧硬上限 —— 只能让 bot 更克制,
 //     不能更激进。激进的后果正是老板要治的病 (刷屏); 而"更多参与"这件事由学习闭环 + 预算在安全边界内自己决定。
@@ -20,7 +28,7 @@
 import { debug, formatErr, info, warn } from "../core/logger.js";
 import { callJudge, resolveJudgeCreds } from "../llm-judge.js";
 import { getHfGroupMessageStats, listHfGroupMsgHourBuckets, listHfGroupProfiles, upsertHfGroupProfile, getMessages, } from "../storage/db/index.js";
-import { HF_LEARNING_DEFAULTS, isHfGroupAllowed } from "./heartflow.js";
+import { HF_LEARNING_DEFAULTS, isHfGroupAllowed, resolveHfLearning } from "./heartflow.js";
 import { resolveHfBudget } from "./heartflow-budget.js";
 /**
  * 阈值钳制 (本地实现而非 import heartflow-learn 的 clampHfThresholdToBand:
@@ -41,6 +49,7 @@ export const HF_PROFILE_DEFAULTS = {
     sampleMsgs: 40,
     timeoutMs: 20000,
     applyQuietHours: false,
+    maxRaise: 0.1,
 };
 export function resolveHfProfileCfg(cfg) {
     const p = cfg?.profile;
@@ -56,6 +65,7 @@ export function resolveHfProfileCfg(cfg) {
         sampleMsgs: p?.sampleMsgs ?? D.sampleMsgs,
         timeoutMs: p?.timeoutMs ?? D.timeoutMs,
         applyQuietHours: p?.applyQuietHours ?? D.applyQuietHours,
+        maxRaise: p?.maxRaise ?? D.maxRaise,
     };
 }
 /** 字段上限 (防 LLM 越写越长 ⇒ prompt 膨胀) */
@@ -103,15 +113,24 @@ ${input.samples.join("\n")}
 {
   "nature": "群性质, 一句话 (如: 某行业的客户售后群 / 家人群 / 同事闲聊群)",
   "style": "群里的语言风格, 一句话 (如: 短句口语 / 专业术语多 / 表情包多)",
-  "bot_role": "机器人在该群的合理角色, 一句话 (如: 答疑的客服 / 偶尔搭话的熟人 / 基本不该插话的旁观者)",
+  "bot_role": "机器人在该群的**身份与口吻**, 一句话 (如: 答疑的客服 / 偶尔搭话的熟人 / 懂业务的同事)",
   "engage": ["适合接话的话题, 最多5个短词"],
   "avoid": ["不适合接话/不该提的话题, 最多5个短词"],
   "active_hours": [消息最活跃的本地小时 0-23 数组, 最多6个],
   "quiet_hours": [[开始小时, 结束小时]],
   "band": 建议的回复阈值 0-1 的小数 (越谨慎越大; 拿不准给 null),
   "budget": {"min_gap_sec": 最小发言间隔秒, "max_per_hour": 每小时上限, "max_per_day": 每天上限},
-  "summary": "给机器人看的一句话提示 (30字内, 说清该群该怎么说话)"
+  "summary": "给机器人看的一句话提示 (30字内, 说清该群该用什么口吻说话)"
 }
+
+**两条硬约束 (写错会让机器人彻底不吭声, 比画像为空更糟):**
+1. bot_role 与 summary 只写"**以什么身份、用什么口吻**说话", **绝不要**写"不该插话/少说话/旁观/不主动/别闲聊"
+   这类**要不要说话**的结论 —— 说不说由系统的评分阈值与发言预算决定, 画像只决定"怎么说、聊什么"。
+   反例: "基本不该插话的旁观者, 仅在明确被@时回应" (❌ 会当成否决票, 让机器人再不开口)
+   正例: "懂手机业务的同事, 说话短、直给结论, 不客套" (✅)
+2. band 是"这个群我想多克制一点"的**微调**, 系统只允许它在基线阈值 0.6 上小幅上调 (最多 +0.10),
+   再往上写没有意义。请用 0.55-0.70 之间的小数表达"稍微谨慎", 拿不准就给 null。
+   **不要**用 0.85/0.9 这类数字表达"谨慎" —— 那会把阈值抬到任何消息都过不去的高度。
 
 只依据样本判断, 不要编造。数据不足以判断的字段给 null 或空数组。`;
 }
@@ -252,9 +271,82 @@ export function clampHfProfileBudget(suggested, cfg) {
     return out;
 }
 /**
+ * v1.10.0 画像"禁言令"过滤器 (纯函数): 命中 ⇒ 返回 "" (丢弃该字段), 未命中 ⇒ 原样返回。
+ *
+ * 为什么必须有 (2026-09-28 生产事故的**主**根因, 不是洁癖):
+ *   judge prompt 的三条评分维度都写着"结合机器人角色特点/角色定位"判断 —— 于是画像的
+ *   `我的角色定位: 基本不该插话的旁观者` 成了压在 relevance+willingness+social (合计权重 0.65)
+ *   上的**否决票**。2026-09-26 画像上线当天, 台账里"该回"档 (0.61-0.82) 整体消失, 38 次判定最高 0.39。
+ *   回溯验证 (23 条 09-22..25 曾得 ≥0.6 的真实消息, 同一 judge 模型):
+ *     注入现状画像 (含"不该插话/少插话") = 均分 0.322, 仅 2 条 ≥0.6
+ *     删掉这两行                      = 均分 0.581, 15 条 ≥0.6
+ *     换成**只讲身份与口吻**的同类文本  = 均分 0.669, 20 条 ≥0.6   ← 画像本身是好的, 只有"禁言令"有毒
+ *   即: 群性质/语言风格/宜接话题/忌接话题 这些**话题性**内容是资产, 必须留;
+ *   而"少说话/别插话/旁观"这类**元指令**是负债 —— "说还是不说"由代码侧的阈值与预算决定,
+ *   不是画像能投票的事。故这里对 `botRole`/`summary` 两个字段做过滤 (engage/avoid 是话题清单, 不扫)。
+ *
+ * 与 `buildHfProfilePrompt` 的措辞约束是**双保险**: 源头让它别这么写 (改措辞), 这里保证即使写了也进不去
+ *   judge prompt (改代码)。只靠源头措辞 = 一次模型抽风就重新自锁; 只靠这里 = 白丢一条本来有用的信息。
+ */
+const HF_MUTE_PATTERNS = [
+    /不该插话|不要插话|别插话|少插话|不插话/,
+    /不该说话|不要说话|别说话|少说话|不说话/,
+    /旁观者|围观者/,
+    /不主动(说|发|聊|参|插|搭|回)/,
+    /不闲聊|不聊闲|勿闲聊/,
+    /禁言|保持沉默|尽量沉默|闭嘴/,
+];
+export function stripHfMutePhrases(text) {
+    const s = (text ?? "").trim();
+    if (!s)
+        return "";
+    for (const re of HF_MUTE_PATTERNS) {
+        if (re.test(s))
+            return "";
+    }
+    return s;
+}
+/**
+ * 对画像做注入前过滤 (纯函数): 只过滤 `botRole` / `summary` 两个**可能变成否决票**的字段。
+ * 返回新对象, 不改原对象 (原始画像仍原样存库/展示 —— `/heartflow profile` 要看得到真相)。
+ */
+export function guardHfProfileForPrompt(p) {
+    return { ...p, botRole: stripHfMutePhrases(p.botRole), summary: stripHfMutePhrases(p.summary) };
+}
+/** 画像 band 对阈值的**有界**抬升幅度 (默认 +0.10) —— 见 resolveHfProfileBandEffect */
+export const HF_PROFILE_MAX_RAISE = 0.1;
+/**
+ * v1.10.0 画像 band 的生效规则 (纯函数): 从锚点值出发, **只抬不降, 且抬升有上限**。
+ *
+ * 修的是 09-26 那次自锁的**点火器**: 旧码 `Math.max(baseThreshold, profileFloor)` 让画像建议的
+ *   0.85/0.90 直接成为**无上界的硬地板** —— 而画像的 prompt 只让模型"越谨慎越大", 模型没有任何
+ *   关于裁判打分刻度 (实测"该回"档 0.61-0.82) 的信息, 于是给出 0.85/0.90 ⇒ 连裁判认为明显该回的
+ *   消息都永远越不过 ⇒ 零发言 (台账 09-26 起 38 次判定全部 below-threshold)。
+ *   同时该值还会被印进 judge prompt 当"及格线", 反过来把裁判的打分也压下去 (闭环自锁, 双重)。
+ *
+ * 现在的语义: band 是"这个群我想更克制一点"的**微调**, 不是"我重新定义及格线"。
+ *   - 只抬不降 (画像无权放宽约束), 且最多抬 `maxRaise` (默认 0.10);
+ *   - 再与阈值硬区间 [bandMin, bandMax] 取交 —— 与 evalHfThreshold / clampHfThresholdToBand 同一道保证。
+ * `capped=true` 表示画像想要的值被截住了 (调用方据此打一条 warn, 让"画像想说 0.9"这件事可见)。
+ */
+export function resolveHfProfileBandEffect(anchor, band, opts) {
+    const maxRaise = Math.max(0, opts?.maxRaise ?? HF_PROFILE_MAX_RAISE);
+    const bandMin = opts?.bandMin ?? HF_LEARNING_DEFAULTS.bandMin;
+    const bandMax = opts?.bandMax ?? HF_LEARNING_DEFAULTS.bandMax;
+    const a = Number.isFinite(anchor) ? anchor : 0.6;
+    if (band == null || !Number.isFinite(band)) {
+        return { threshold: clampBand(a, bandMin, bandMax), capped: false };
+    }
+    const want = Math.max(a, band);
+    const limited = Math.min(want, a + maxRaise);
+    return { threshold: clampBand(limited, bandMin, bandMax), capped: want - limited > 1e-9 };
+}
+/**
  * 渲染给 judge prompt 的画像文本 (≤ maxChars)。
  * 按行拼装, 超限时**整行丢弃**而不是硬切 —— 半句话比没有更误导。
  * 无内容 → "" (调用方据此不注入)。
+ * v1.10.0: `botRole`/`summary` 行先过 stripHfMutePhrases —— 这里的产物直接进 judge prompt,
+ *   是"禁言令"能造成伤害的唯一入口, 所以过滤点选在这一层的上游 (loadHfProfilesIntoCache 里做一次)。
  */
 export function renderHfProfileForPrompt(p, maxChars) {
     const lines = [];
@@ -331,6 +423,17 @@ export function getHfProfileBandFloor(accountId, groupId) {
 export function getHfProfileBudget(accountId, groupId) {
     return _profiles.get(_key(accountId, groupId))?.budget ?? null;
 }
+/**
+ * v1.10.0: 画像 band 的实际生效结果 (读取侧唯一入口) —— 有界抬升 + 硬区间钳制, 零 DB IO。
+ * 返回 `band` = 画像原始建议 (供展示/诊断, 让"画像想要 0.9 但只生效 0.70"这件事看得见)。
+ */
+export function resolveHfProfileBandEffectFor(accountId, groupId, anchor, cfg) {
+    const P = resolveHfProfileCfg(cfg);
+    const L = resolveHfLearning(cfg);
+    const band = getHfProfileBandFloor(accountId, groupId);
+    const r = resolveHfProfileBandEffect(anchor, band, { maxRaise: P.maxRaise, bandMin: L.bandMin, bandMax: L.bandMax });
+    return { threshold: r.threshold, capped: r.capped, band };
+}
 /** sweep 预热: 用一条 listHfGroupProfiles 的结果整体替换该账号的缓存 (含删除已消失的群) */
 export function loadHfProfilesIntoCache(accountId, rows, maxPromptChars) {
     const prefix = `${accountId}:`;
@@ -339,9 +442,18 @@ export function loadHfProfilesIntoCache(accountId, rows, maxPromptChars) {
             _profiles.delete(k);
     let n = 0;
     for (const r of rows) {
-        const p = parseHfGroupProfileRow(r);
-        if (!p)
+        const raw = parseHfGroupProfileRow(r);
+        if (!raw)
             continue;
+        // v1.10.0: 注入 judge prompt 的文本过一次"禁言令"过滤 —— 库里已有的坏画像 (如 09-26 那批
+        //   "基本不该插话的旁观者") 立刻失效, 不必等下一次重生成; 原始画像仍留在库里供 /heartflow profile 查看。
+        const p = guardHfProfileForPrompt(raw);
+        if (raw.botRole && !p.botRole) {
+            warn(`[WPP HF] profile mute-phrase stripped: account=${accountId} group=${r.group_id} field=bot_role`);
+        }
+        if (raw.summary && !p.summary) {
+            warn(`[WPP HF] profile mute-phrase stripped: account=${accountId} group=${r.group_id} field=summary`);
+        }
         _profiles.set(_key(accountId, r.group_id), {
             text: renderHfProfileForPrompt(p, maxPromptChars),
             band: p.band,
