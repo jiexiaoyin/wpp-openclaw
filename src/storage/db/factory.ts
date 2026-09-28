@@ -27,6 +27,13 @@ export function setBackend(cfg: ResolvedDbConfig): DbAdapter {
       `setBackend: DB already initialized, call resetAdapter() first (current=${resolvedCfg?.mysql.host}/${resolvedCfg?.mysql.database})`,
     );
   }
+  // v1.9.3-fix: sqlite 后端在类型里声明了但从未实现 (setBackend 无条件 createMysqlAdapter)。
+  //   配 backend=sqlite 会静默拿到 mysql adapter 且日志谎报 backend=sqlite。这里明确拒绝。
+  if (cfg.backend === "sqlite") {
+    throw new Error(
+      "db factory: backend=sqlite is declared but not implemented — only mysql/mariadb are supported",
+    );
+  }
   resolvedCfg = cfg;
   current = createMysqlAdapter(cfg);
   info(`db factory: backend=${cfg.backend} host=${cfg.mysql.host}/${cfg.mysql.database}`);

@@ -659,7 +659,12 @@ export async function setAccountField(
   }
 
   // 点路径: "heartflow.enabled" → raw.heartflow.enabled = value (中间对象自动创建)
+  // 原型污染防护: 拒绝 __proto__/constructor/prototype 路径段 (防把值写进 Object.prototype)
   const parts = fieldPath.split(".");
+  if (parts.some((p) => p === "__proto__" || p === "constructor" || p === "prototype")) {
+    log.warn(`setAccountField: reject prototype-pollution path: ${fieldPath}`);
+    return { ok: false, filePath, reason: "invalid-path" };
+  }
   let node: Record<string, unknown> = raw;
   for (let i = 0; i < parts.length - 1; i++) {
     const key = parts[i]!;
