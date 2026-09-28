@@ -1129,7 +1129,9 @@ export const wppChannelPlugin = {
   //   - 不用 accountScopedRestart: extractAccountIdFromPath 对 accountId="default" 返回 null
   //     (特判整 channel 重启), default 账号无法被账号级重启隔离。
   // 2026-09-27 OPENCLAW-STATUS: 接入 OpenClaw 2026.9.6 的 status 契约
-  //   背景: 审阅发现插件仅实现 ChannelPlugin 必填字段 + 8 个可选项 (共 34 可选),
+  //   背景: 审阅发现插件仅实现 ChannelPlugin 必填 4 项 + 8 个可选项 (共 35 可选;
+  //         数字实测自 openclaw 2026.9.6 的 types.plugin-*.d.ts。已实现的 8 项:
+  //         reload/outbound/status/gateway/doctor/messaging/directory/agentTools),
   //         status 缺失 -> openclaw status 看不到本 channel 的账号健康度。
   //   数据源: AccountRegistry (get/listIds) + WppAccountState (vendorAuthed/selfWxid/ws/webhook)。
   //   字段语义对齐 ChannelAccountSnapshot (见 OpenClaw types.core)。
@@ -1225,7 +1227,9 @@ export const wppChannelPlugin = {
     },
   },
   // 2026-09-27 OPENCLAW-DOCTOR: 接入 OpenClaw 2026.9.6 的 doctor 契约
-  //   背景: 审阅发现插件只实现 ChannelPlugin 必填 4 项 + 9 个可选项 (共 34 可选)。
+  //   背景: 审阅发现插件只实现 ChannelPlugin 必填 4 项 + 8 个可选项 (共 35 可选;
+  //         数字实测自 openclaw 2026.9.6 的 types.plugin-*.d.ts。已实现的 8 项:
+  //         reload/outbound/status/gateway/doctor/messaging/directory/agentTools)。
   //         doctor 缺失 -> openclaw doctor 无法诊断本 channel 的配置问题,
   //         运维只能手写 ps/curl/grep 排查 (本会话调试时即如此)。
   //   本适配器是纯声明式的: 告诉框架「本 channel 的配置长什么样、边界在哪」,
