@@ -248,7 +248,7 @@ CREATE TABLE IF NOT EXISTS wpp_svrid_mapping (
   PRIMARY KEY (id),
   UNIQUE KEY uk_svrid_acct (account_id, svrid),
   KEY idx_md5 (msg_md5)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ⚠️ 与 src/storage/db/mysql.ts 的行内 DDL 必须同步 (改一处必改另一处)
 CREATE TABLE IF NOT EXISTS wpp_sync_state (
@@ -256,4 +256,4 @@ CREATE TABLE IF NOT EXISTS wpp_sync_state (
   synckey VARCHAR(1024) NOT NULL,
   updated_at INT UNSIGNED NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

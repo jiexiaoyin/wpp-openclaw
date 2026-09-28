@@ -331,7 +331,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
       PRIMARY KEY (id),
       UNIQUE KEY uk_svrid_acct (account_id, svrid),
       KEY idx_md5 (msg_md5)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
   // Synckey 增量游标持久化: 保存 Sync 返回的 KeyBuf.buffer, 重启后用增量游标只拉新消息 (防全量重放风暴)
@@ -343,7 +343,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
       synckey VARCHAR(1024) NOT NULL,
       updated_at INT UNSIGNED NOT NULL DEFAULT 0,
       PRIMARY KEY (account_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
   // ====== v1.6.x HEARTFLOW-FEEDBACK (心流反馈闭环) ======
@@ -382,7 +382,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
       UNIQUE KEY uk_hf_acct_msg (account_id, inbound_msg_id),
       KEY idx_hf_group_status (account_id, group_id, status),
       KEY idx_hf_open (account_id, status, window_expires_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   // 每群 learned 阈值状态 (learned 落 DB, 不回写 accounts JSON 防 fs.watch 抖动)
   await pool.query(`
@@ -396,7 +396,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
       last_change_reason VARCHAR(128) NULL,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (account_id, group_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   // 阈值变更审计 (每次变更插一行, 满足「变更留痕」护栏)
   await pool.query(`
@@ -412,7 +412,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
       KEY idx_hf_audit (account_id, group_id, created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   // v1.7.0 群画像 (1 行/群): 每日一次 LLM 生成的结构化画像 + 生成时的统计快照.
   //   用途 = 给 judge prompt 注入"这个群是什么群、bot 在这里该怎么说话"(老板 2026-09-26 要的"应景").
@@ -431,7 +431,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (account_id, group_id),
       KEY idx_hf_profile_gen (account_id, generated_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
   // v1.8.0 分层统计 (群 × 时段, 1 行/群/段): **每轮 sweep 全量重算后的快照**, 不是累加器.
@@ -451,7 +451,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (account_id, group_id, layer_kind, layer_key),
       KEY idx_hf_layer_acct (account_id, layer_kind, updated_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
   // v1.6.8 心流标签改造: 生产上 wpp_hf_ledger 早已存在, 上面的 CREATE ... IF NOT EXISTS 不会给它加列
