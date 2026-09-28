@@ -65,10 +65,12 @@ test('2. 边界: 行注释/行尾注释/空块/一行多句/纯注释文件', ()
   assert.ok(multi[0].includes('b INT') && multi[0].includes('ENGINE=InnoDB'));
 });
 
-test('3. 与文件真实内容一致: 30 行注释全被剥掉, 无残留', () => {
+test('3. 与文件真实内容一致: 32 行注释全被剥掉, 无残留', () => {
   // ⚠️ 这个数字是**绊索**: 新增/删除一行注释必须同步改这里, 逼作者回来看一眼切分是否仍正确
-  //    (v1.6.x 曾因注释处理不当把注释当 SQL 发出去). 2026-09-26 v1.7.0 加群画像表: 22 → 26; v1.8.0 加分层表: 26 → 30.
-  assert.equal((schema.match(/^\s*--/gm) ?? []).length, 30, 'schema.sql 里 30 行注释');
+  //    (v1.6.x 曾因注释处理不当把注释当 SQL 发出去). 2026-09-26 v1.7.0 加群画像表: 22 → 26; v1.8.0 加分层表: 26 → 30;
+  //    2026-09-28 v1.9.2 把 wpp_svrid_mapping / wpp_sync_state 补进本文件 (此前只在 mysql.ts 行内 DDL):
+  //    30 → 32, 且两表各补一行独立注释 (原写法把说明放在行尾, 会让旧实现切出新语句, 绊索已拦下).
+  assert.equal((schema.match(/^\s*--/gm) ?? []).length, 32, 'schema.sql 里 32 行注释');
   const stmts = splitSchemaStatements(schema);
   assert.equal(stmts.join('\n').includes('--'), false);
   assert.equal(stmts.join('\n').includes('IF NOT EXISTS'), true);
