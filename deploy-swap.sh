@@ -192,9 +192,18 @@ step "[6/7] restart gateway (服务: $GATEWAY_SERVICE)"
 if [ "$DRY_RUN" = "1" ]; then
   echo "    [dry-run] 跳过 restart"
 elif systemctl --user list-unit-files 2>/dev/null | grep -q "^${GATEWAY_SERVICE}\."; then
+  # 抓重启前 PID, 用于步骤7 验证「进程确实换了」(防 restart 静默失败)
+  OLD_GATEWAY_PID="$(systemctl --user show -p MainPID --value "$GATEWAY_SERVICE" 2>/dev/null || echo unknown)"
   systemctl --user restart "$GATEWAY_SERVICE"
   sleep 5
   systemctl --user is-active "$GATEWAY_SERVICE" > /dev/null || fail "gateway 重启失败 (服务: $GATEWAY_SERVICE)"
+  NEW_GATEWAY_PID="$(systemctl --user show -p MainPID --value "$GATEWAY_SERVICE" 2>/dev/null || echo unknown)"
+  export OLD_GATEWAY_PID NEW_GATEWAY_PID
+  if [ "$OLD_GATEWAY_PID" = "$NEW_GATEWAY_PID" ] && [ "$OLD_GATEWAY_PID" != "unknown" ]; then
+    warn "gateway MainPID 未变 (仍为 $OLD_GATEWAY_PID) — restart 可能未生效, 请手动验证"
+  else
+    echo "    ✓ gateway 已重启: ${OLD_GATEWAY_PID} → ${NEW_GATEWAY_PID}"
+  fi
 else
   warn "未找到 systemd user 服务 $GATEWAY_SERVICE — 请手动重启你的 OpenClaw gateway"
   echo "    (可用 GATEWAY_SERVICE env 指定服务名; docker/systemctl/直接进程重启由你自行处理)"

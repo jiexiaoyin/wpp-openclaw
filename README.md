@@ -210,6 +210,43 @@ bash deploy-swap.sh --force  # 真实部署
 - 群策略门禁 (open/disabled/allowlist/closed)
 - ReDoS 防护 (所有用户输入 regex 安全处理)
 
+## 已知风险
+
+**v1.9.2 (2026-09-28) 汇总，按重要度排序：**
+
+### 1. int64 精度风险（vendor 对齐引发的）
+
+部分 finder 端点（如 `GetCommentList` / `GetCommentDetail` / `FindLiveDetail`）的 ID 字段 vendor 声明为 `integer int64`，我们用 `Type.Number` 对齐（Go int64 拒收 JSON 字符串）。
+
+**问题**：JS number 是 IEEE754 double，仅精确表示到 2^53-1（16 位）。微信真实内容 ID 常为 19 位。
+
+**实测**：
+```
+1426183783175864217 → 1426183783175864300   ← 19 位静默四舍五入
+1234567890123456    → 原样                  ← 16 位正常
+```
+
+**取舍**：不漂移优先（引号化为字符串，由 `stringifyLargeInts` 在传输前完成）。**根治需 vendor 侧接受字符串**。
+
+**影响面**：`getFinderRecommend` / `followFinderUser` / `likeFinderPost` / `commentFinderPost` / `getFinderLiveDetail` / `getFinderCommentList` / `getFinderCommentDetail` / `playVideo` 等端点涉及大 ID 时。
+
+### 2. 部署脚本 `deploy-swap.sh` 仅识别 systemd user 服务
+
+`deploy-swap.sh` 步骤 6/7 通过 `systemctl --user list-unit-files` 检测服务。若你的 OpenClaw gateway **未通过 systemd user service 启动**（例如 docker、PM2、裸进程），脚本会跳过重启+verify，并 warn 让你手动重启。
+
+**如何检查**：本机 OpenClaw 服务的部署方式。
+```bash
+systemctl --user list-unit-files | grep openclaw
+# 有输出 → 是 systemd user 服务，脚本会处理
+# 无输出 → 不是，脚本会 warn
+```
+
+### 3. `decryptWeComSession` / `decryptFinderComment` 的语义
+
+工具名 `decryptFinderComment` 是历史误名（实际能力是企微会话记录解密，与视频号评论无关）。v1.9.2 已**新增正确命名的 `decryptWeComSession`**，旧 `decryptFinderComment` 保留为 deprecation alias 直至 v2.0。
+
+**当前 LLM 选型**：新代码请用 `decryptWeComSession`。旧名仍可用，但描述已明确告知其非视频号能力。
+
 ## 目录结构
 
 ```
