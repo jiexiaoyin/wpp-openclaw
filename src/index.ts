@@ -1372,6 +1372,10 @@ const wppChannelContract = {
       account?: unknown;
       channelRuntime?: unknown;
       cfg?: unknown;
+      /** OpenClaw runtime 状态上报: 调 setStatus({accountId, connected:true}) 让 health-monitor 知道账号已就绪.
+       *  缺省恒不报 → runtime connected 恒 false → health-monitor 每 ~10min 误判 disconnected 重启账号.
+       *  accountId 为 ChannelAccountSnapshot 必填, 故用交集类型 (其余字段 optional). */
+      setStatus?: (next: { accountId: string } & Record<string, unknown>) => void;
     }): Promise<{ ok: boolean; error?: string }> {
       log.info(`gateway.startAccount: accountId=${ctx.accountId}`);
       // 注入 channel runtime (否则 getChannelRuntime 返 NOOP → AI reply 链路断裂)
@@ -1390,6 +1394,9 @@ const wppChannelContract = {
       }
       try {
         await startAccountById(ctx.accountId);
+        // 上报 connected=true 给 OpenClaw runtime (否则 health-monitor 判 disconnected → 每 ~10min 重启账号).
+        // ws-client 自带断线重连 (scheduleRetry), 断线无需 health-monitor 介入; 故就绪即报 true.
+        ctx.setStatus?.({ accountId: ctx.accountId, connected: true, lastError: null });
         log.info(`gateway.startAccount: started ${ctx.accountId}`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

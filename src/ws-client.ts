@@ -162,6 +162,10 @@ export class WechatpadproWsClient implements WppWsClient {
         log.warn(`ws message parse error: ${formatErr(e)}`);
       }
     });
+    this.ws.on("pong", () => {
+      // vendor 对 ws.ping() 的 RFC6455 响应; 仅 debug, 用于确认 vendor 是否回 pong
+      log.debug("ws recv: pong (keepalive ack)");
+    });
     this.ws.on("close", (code, reason) => {
       this.connected = false;
       log.warn(`ws closed: code=${code} reason=${reason.toString() || "<none>"}`);
@@ -245,7 +249,17 @@ export class WechatpadproWsClient implements WppWsClient {
    * 只在 ws connected 时发; 失败仅 warn, 断连重连由 close/error handler 负责。
    */
   private async sendHeartbeat(): Promise<void> {
-    if (this.stopped || !this.connected) return;
+    if (this.stopped || !this.connected || !this.ws) return;
+    // v1.9.3-fix(2): 用 ws 层原生 ping 帧保活。
+    //   根因修正: 之前只调 HTTP /Login/HeartBeatLong 保活, 但 vendor idle timeout 挂在
+    //   vendor 的 /ws/sync 长连接本身 (ws 层 traffic), HTTP 调用不产生 ws 流量 → 仍每 10min
+    //   被 code=1005 断连。ping 帧才是 ws 层的真流量, 能重置 idle 计时。
+    try {
+      this.ws.ping();
+    } catch (e) {
+      log.warn(`ws ping failed: ${formatErr(e)}`);
+    }
+    // 双保险: 保留 vendor HTTP 心跳 (AutoHeartBeat 已在 open 开启, 这里周期调 HeartBeatLong)
     try {
       const r = await this.opts.apiClient.call("/Login/HeartBeatLong", {});
       if (r.Code !== 0) {
