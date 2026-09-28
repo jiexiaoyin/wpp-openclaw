@@ -423,7 +423,7 @@ export async function appendAllowFrom(
     raw = JSON.parse(text) as Record<string, unknown>;
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    log.warn(`appendAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    log.error(`appendAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { ok: false, allowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
   }
 
@@ -441,7 +441,7 @@ export async function appendAllowFrom(
     await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
     await rename(tmpPath, filePath);
   } catch (e) {
-    log.warn(`appendAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
+    log.error(`appendAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
     return { ok: false, allowFrom, filePath, reason: "write-failed" };
   }
   // 清 LRU cache → 下次 loadAccountConfig 读到新 allowFrom (热重载 watcher 也会触发)
@@ -466,7 +466,7 @@ export async function appendGroupAllowFrom(
     raw = JSON.parse(text) as Record<string, unknown>;
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    log.warn(`appendGroupAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    log.error(`appendGroupAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { ok: false, groupAllowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
   }
 
@@ -484,7 +484,7 @@ export async function appendGroupAllowFrom(
     await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
     await rename(tmpPath, filePath);
   } catch (e) {
-    log.warn(`appendGroupAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
+    log.error(`appendGroupAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
     return { ok: false, groupAllowFrom, filePath, reason: "write-failed" };
   }
   // 清 LRU cache → 热重载生效
@@ -508,7 +508,7 @@ export async function removeAllowFrom(
     raw = JSON.parse(text) as Record<string, unknown>;
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    log.warn(`removeAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    log.error(`removeAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { ok: false, allowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
   }
   const allowFrom: string[] = Array.isArray(raw.allowFrom) ? (raw.allowFrom as string[]) : [];
@@ -523,7 +523,7 @@ export async function removeAllowFrom(
     await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
     await rename(tmpPath, filePath);
   } catch (e) {
-    log.warn(`removeAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
+    log.error(`removeAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
     return { ok: false, allowFrom, filePath, reason: "write-failed" };
   }
   invalidateConfigCache(accountId);
@@ -546,7 +546,7 @@ export async function removeGroupAllowFrom(
     raw = JSON.parse(text) as Record<string, unknown>;
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    log.warn(`removeGroupAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    log.error(`removeGroupAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { ok: false, groupAllowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
   }
   const groupAllowFrom: string[] = Array.isArray(raw.groupAllowFrom) ? (raw.groupAllowFrom as string[]) : [];
@@ -561,7 +561,7 @@ export async function removeGroupAllowFrom(
     await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
     await rename(tmpPath, filePath);
   } catch (e) {
-    log.warn(`removeGroupAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
+    log.error(`removeGroupAllowFrom: write ${accountId}.json failed: ${(e as Error).message}`);
     return { ok: false, groupAllowFrom, filePath, reason: "write-failed" };
   }
   invalidateConfigCache(accountId);
@@ -586,7 +586,7 @@ export async function setAccountFlag(
     raw = JSON.parse(text) as Record<string, unknown>;
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    log.warn(`setAccountFlag: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    log.error(`setAccountFlag: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { ok: false, current: false, filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
   }
   raw[field] = value;
@@ -595,7 +595,7 @@ export async function setAccountFlag(
     await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
     await rename(tmpPath, filePath);
   } catch (e) {
-    log.warn(`setAccountFlag: write ${accountId}.json failed: ${(e as Error).message}`);
+    log.error(`setAccountFlag: write ${accountId}.json failed: ${(e as Error).message}`);
     return { ok: false, current: false, filePath, reason: "write-failed" };
   }
   invalidateConfigCache(accountId);
@@ -619,7 +619,7 @@ export async function ensureWebhookPathToken(
     raw = JSON.parse(text) as Record<string, unknown>;
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    log.warn(`ensureWebhookPathToken: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    log.error(`ensureWebhookPathToken: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { token: "", ok: false, reason: "read-failed" };
   }
 
@@ -638,7 +638,7 @@ export async function ensureWebhookPathToken(
     await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
     await rename(tmpPath, filePath);
   } catch (e) {
-    log.warn(`ensureWebhookPathToken: write ${accountId}.json failed: ${(e as Error).message}`);
+    log.error(`ensureWebhookPathToken: write ${accountId}.json failed: ${(e as Error).message}`);
     return { token, ok: false, reason: "write-failed" };
   }
   invalidateConfigCache(accountId);
@@ -663,7 +663,7 @@ export async function setAccountField(
     raw = JSON.parse(text) as Record<string, unknown>;
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    log.warn(`setAccountField: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    log.error(`setAccountField: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { ok: false, filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
   }
 
@@ -687,7 +687,7 @@ export async function setAccountField(
     await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
     await rename(tmpPath, filePath);
   } catch (e) {
-    log.warn(`setAccountField: write ${accountId}.json failed: ${(e as Error).message}`);
+    log.error(`setAccountField: write ${accountId}.json failed: ${(e as Error).message}`);
     return { ok: false, filePath, reason: "write-failed" };
   }
   invalidateConfigCache(accountId);
@@ -717,7 +717,7 @@ export async function updateHeartflowGroups(
     raw = JSON.parse(text) as Record<string, unknown>;
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    log.warn(`updateHeartflowGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    log.error(`updateHeartflowGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { ok: false, whitelistGroups: [], groupAllowFrom: [], reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
   }
 
@@ -744,7 +744,7 @@ export async function updateHeartflowGroups(
     await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
     await rename(tmpPath, filePath);
   } catch (e) {
-    log.warn(`updateHeartflowGroups: write ${accountId}.json failed: ${(e as Error).message}`);
+    log.error(`updateHeartflowGroups: write ${accountId}.json failed: ${(e as Error).message}`);
     return { ok: false, whitelistGroups: wl, groupAllowFrom: gal, reason: "write-failed" };
   }
   invalidateConfigCache(accountId);
@@ -769,7 +769,7 @@ export async function updateBlacklistGroups(
     raw = JSON.parse(text) as Record<string, unknown>;
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    log.warn(`updateBlacklistGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+    log.error(`updateBlacklistGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { ok: false, blacklist: [], reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
   }
   let bl: string[] = Array.isArray(raw.blacklistGroups) ? (raw.blacklistGroups as string[]) : [];
@@ -784,7 +784,7 @@ export async function updateBlacklistGroups(
     await writeFile(tmpPath, stringifyLargeInts(JSON.stringify(raw, null, 2)) + "\n", "utf8");
     await rename(tmpPath, filePath);
   } catch (e) {
-    log.warn(`updateBlacklistGroups: write ${accountId}.json failed: ${(e as Error).message}`);
+    log.error(`updateBlacklistGroups: write ${accountId}.json failed: ${(e as Error).message}`);
     return { ok: false, blacklist: bl, reason: "write-failed" };
   }
   invalidateConfigCache(accountId);
