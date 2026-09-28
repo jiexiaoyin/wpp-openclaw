@@ -10,6 +10,7 @@ import WebSocket from "ws";
 import { logObj as log, formatErr } from "./core/logger.js";
 import { getSynckey, saveSynckey } from "./db.js";
 import { parseJsonText } from "./api/client.js";
+import { WsMetrics } from "./monitor/metrics.js";
 import type {
   WppWsClient,
   WppApiClient,
@@ -105,6 +106,7 @@ export class WechatpadproWsClient implements WppWsClient {
       this.ws = null;
     }
     this.connected = false;
+    WsMetrics.setConnected(false); // v1.9.2 观测: 主动 stop 也归零, 防 gauge 卡在 1
     log.info("ws client stopped");
   }
 
@@ -125,6 +127,7 @@ export class WechatpadproWsClient implements WppWsClient {
     }
     this.ws.on("open", () => {
       this.connected = true;
+      WsMetrics.setConnected(true); // v1.9.2 观测: 当前连接态 gauge
       this.retryDelay = this.opts.wsReconnect?.initialDelayMs ?? 1_000;
       if (this.consecutive502 > 0) {
         log.info(`ws reset 502 counter: prev=${this.consecutive502} (vendor recovered)`);
@@ -138,29 +141,35 @@ export class WechatpadproWsClient implements WppWsClient {
         log.warn(`ws auto-heartbeat enable failed: ${formatErr(e)}`);
       });
     });
-    this.ws.on("message", async (data) => {
-      try {
-        const text = data.toString();
-        // v1.3.18 F6 fix: 用 parseJsonText 预引号化 16+ 位大整数 (vendor 推送 new_msg_id 防丢精度)
-        const json = parseJsonText(text) as Record<string, unknown>;
-        const dataField = json["Data"] as Record<string, unknown> | undefined;
-        const type = dataField?.["type"];
+    // 注: void 箭头 + async IIFE (而非 ws.on("message", async () => {...}))。
+    //   本回调内目前无 await, 但解析失败要用 try/catch, 且后续加 await 的可能性高
+    //   (例如把 triggerSync 改成 await) —— 保持 void 返回签名, 避免将来引入
+    //   "隐式丢弃 Promise" 的路径。
+    this.ws.on("message", (data) => {
+      void (async () => {
+        try {
+          const text = data.toString();
+          // v1.3.18 F6 fix: 用 parseJsonText 预引号化 16+ 位大整数 (vendor 推送 new_msg_id 防丢精度)
+          const json = parseJsonText(text) as Record<string, unknown>;
+          const dataField = json["Data"] as Record<string, unknown> | undefined;
+          const type = dataField?.["type"];
 
-        // 握手帧: {"Code":0,"Success":true,"Message":"实时消息通道已就绪","Data":{"timestamp":...,"type":"connection_ready"}}
-        //         跳过 — 不是真消息推送
-        if (type === "connection_ready") {
-          // 与 "ws connected" 重复, 降 debug
-          log.debug("ws recv: connection_ready (handshake ack)");
-          return;
+          // 握手帧: {"Code":0,"Success":true,"Message":"实时消息通道已就绪","Data":{"timestamp":...,"type":"connection_ready"}}
+          //         跳过 — 不是真消息推送
+          if (type === "connection_ready") {
+            // 与 "ws connected" 重复, 降 debug
+            log.debug("ws recv: connection_ready (handshake ack)");
+            return;
+          }
+
+          // 其他帧 (有 newMsgId / Wxid / MessageType 等) → 触发 SyncMessage 拉取
+          // 即使 type 未知也走 (vendor 推送类型可能在加新事件)
+          log.debug(`ws recv: trigger sync (kind=${String(type ?? "unknown")})`);
+          void this.triggerSync("ws-push");
+        } catch (e) {
+          log.warn(`ws message parse error: ${formatErr(e)}`);
         }
-
-        // 其他帧 (有 newMsgId / Wxid / MessageType 等) → 触发 SyncMessage 拉取
-        // 即使 type 未知也走 (vendor 推送类型可能在加新事件)
-        log.debug(`ws recv: trigger sync (kind=${String(type ?? "unknown")})`);
-        void this.triggerSync("ws-push");
-      } catch (e) {
-        log.warn(`ws message parse error: ${formatErr(e)}`);
-      }
+      })();
     });
     this.ws.on("pong", () => {
       // vendor 对 ws.ping() 的 RFC6455 响应; 仅 debug, 用于确认 vendor 是否回 pong
@@ -168,6 +177,8 @@ export class WechatpadproWsClient implements WppWsClient {
     });
     this.ws.on("close", (code, reason) => {
       this.connected = false;
+      WsMetrics.setConnected(false); // v1.9.2 观测: 当前连接态 gauge
+      WsMetrics.incDisconnect(); // v1.9.2 观测: 断连计数 (与下方 warn 同一事件)
       log.warn(`ws closed: code=${code} reason=${reason.toString() || "<none>"}`);
       if (!this.stopped) this.scheduleRetry();
     });
@@ -272,6 +283,7 @@ export class WechatpadproWsClient implements WppWsClient {
 
   private scheduleRetry(): void {
     if (this.stopped) return;
+    WsMetrics.incReconnect(); // v1.9.2 观测: 重连排期计数 (stop 后的调用不算, 故置于 guard 之后)
     // P1 (2026-08-23): 长退避 (LONG_BACKOFF_MS) 不被 maxRetryDelay 截断 —
     //   之前 Math.min 把 5 分钟长退避压到 30s, 智能退避从未生效。
     const delay = this.retryDelay >= WechatpadproWsClient.LONG_BACKOFF_MS

@@ -60,7 +60,6 @@ function emit(level: Level, msg: string, fields?: Fields): void {
   const line = `${new Date().toISOString()} ${level} ${LOG_TAG} ${msg}${fmtFields(fields)}`;
   if (level === "ERROR") console.error(line);
   else if (level === "WARN") console.warn(line);
-  // eslint-disable-next-line no-console -- 中心 logger INFO/DEBUG 必需
   else console.log(line);
 }
 

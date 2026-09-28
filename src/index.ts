@@ -696,27 +696,32 @@ export async function startAccountById(
       SetWebhookMetrics.incSetWebhookFail(); // 最后一次失败也 count
       // 启动失败后的后台周期性重试: 每 5 分钟 (匹配 vendor 心跳间隔), 成功即停
       const PERIODIC_RETRY_MS = 5 * 60 * 1000;
-      const timer = setInterval(async () => {
-        try {
-          const r = await state.apiClient.setWebhook(url, cfg.authcode);
-          if (r.Code === 0) {
-            log.info(
-              `periodic setWebhook OK: account=${accountId} url=${url} authcode=${maskSecret(cfg.authcode)} (timer stopped)`,
-            );
-            SetWebhookMetrics.incPeriodicOk();
-            state.clearRetryTimer(timer);
-          } else {
+      // 注: void 箭头 + async IIFE (而非 setInterval(async () => {...}))。
+      //   回调内已 try/catch 全包, Promise 不会 reject; 但 setInterval 签名期望 void 返回,
+      //   传 async 函数等于隐式丢弃 Promise。改后 "无需等待" 成为代码事实。
+      const timer = setInterval(() => {
+        void (async () => {
+          try {
+            const r = await state.apiClient.setWebhook(url, cfg.authcode);
+            if (r.Code === 0) {
+              log.info(
+                `periodic setWebhook OK: account=${accountId} url=${url} authcode=${maskSecret(cfg.authcode)} (timer stopped)`,
+              );
+              SetWebhookMetrics.incPeriodicOk();
+              state.clearRetryTimer(timer);
+            } else {
+              log.warn(
+                `periodic setWebhook failed: account=${accountId} Code=${r.Code} CodeValue=${r.CodeValue ?? "?"} (will retry in ${PERIODIC_RETRY_MS / 1000}s)`,
+              );
+              SetWebhookMetrics.incPeriodicFail();
+            }
+          } catch (e) {
             log.warn(
-              `periodic setWebhook failed: account=${accountId} Code=${r.Code} CodeValue=${r.CodeValue ?? "?"} (will retry in ${PERIODIC_RETRY_MS / 1000}s)`,
+              `periodic setWebhook threw: account=${accountId} err=${formatErr(e)} (will retry in ${PERIODIC_RETRY_MS / 1000}s)`,
             );
             SetWebhookMetrics.incPeriodicFail();
           }
-        } catch (e) {
-          log.warn(
-            `periodic setWebhook threw: account=${accountId} err=${formatErr(e)} (will retry in ${PERIODIC_RETRY_MS / 1000}s)`,
-          );
-          SetWebhookMetrics.incPeriodicFail();
-        }
+        })();
       }, PERIODIC_RETRY_MS);
       // NodeJS.Timeout.unref() 防止 timer 阻止 process exit (shutdown 时 clear 仍然有效)
       timer.unref();

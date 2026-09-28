@@ -9,9 +9,18 @@ import {
   signatureRequired,
   extractSignatureHeader,
 } from "./core/signature.js";
-import { WebhookMetrics } from "./monitor/metrics.js";
+import { WebhookMetrics, renderJson } from "./monitor/metrics.js";
 import { parseJsonText } from "./api/client.js";
 import type { WppWebhookPayload, WppWebhookServer } from "./types.js";
+
+/**
+ * v1.9.2: 判定来源是否为 loopback。
+ * 只认字面回环地址, 不认 "localhost" 之外的解析结果 —— 这里不能用 DNS, 否则一个被污染的
+ * hosts 就能把 /metrics 暴露到非本机。
+ */
+function isLoopbackAddr(addr: string | undefined): boolean {
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
 
 export class WechatpadproWebhookServer implements WppWebhookServer {
   private server: Server | null = null;
@@ -57,6 +66,24 @@ export class WechatpadproWebhookServer implements WppWebhookServer {
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((req, res) => {
+        // v1.9.2 只读观测端点 —— 必须在 incReceived 之前拦截, 否则每次抓取都会污染
+        //   "收到消息" 计数 (运维抓一次 = 假消息 +1)。
+        // 暴露面控制: 复用现有 server (不开新端口, 不改现有 host/port 绑定), 但只对
+        //   loopback 来源响应; 其余一律 404 —— 与"未知路径"同响应, 不泄露该端点的存在。
+        //   注: 走 nginx 反代的本机场景, vendor 推送到 /webhook 的 remoteAddress 同样是
+        //   127.0.0.1, 但那走 POST 分支, 不受影响。
+        if (req.method === "GET" && req.url === "/metrics") {
+          if (!isLoopbackAddr(req.socket.remoteAddress)) {
+            res.statusCode = 404;
+            res.end("not found");
+            return;
+          }
+          res.statusCode = 200;
+          res.setHeader("content-type", "application/json; charset=utf-8");
+          res.end(renderJson());
+          return;
+        }
+
         WebhookMetrics.incReceived();
 
         // 请求级 timeout 防 slow client DoS
@@ -111,7 +138,11 @@ export class WechatpadproWebhookServer implements WppWebhookServer {
           bodyAborted = true;
         });
 
-        req.on("end", async () => {
+        // 注: void 箭头 + async IIFE (而非 req.on("end", async () => {...}))。
+        //   EventEmitter 的 on() 期望 void 返回; 回调内 await 已全部 try/catch 覆盖,
+        //   但传 async 函数等于把 Promise 交给无人处理的路径。
+        req.on("end", () => {
+          void (async () => {
           if (bodyAborted) {
             if (!res.headersSent) {
               res.statusCode = 400;
@@ -170,6 +201,7 @@ export class WechatpadproWebhookServer implements WppWebhookServer {
               res.end("server error");
             }
           }
+          })();
         });
 
         req.on("error", (e) => {

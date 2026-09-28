@@ -9,6 +9,7 @@
     "test": "node --test tests/unit/*.test.mjs",
     "test:single": "node --test",
     "build": "tsc && node scripts/build-setup-wizard.mjs",
+    "lint": "eslint src --max-warnings 0",
     "build:setup-wizard": "node scripts/build-setup-wizard.mjs",
     "test:cov": "node --test --experimental-test-coverage tests/unit/*.test.mjs"
   },
@@ -29,7 +30,9 @@
   "devDependencies": {
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.1",
+    "eslint": "^9.39.4",
     "openclaw": "^2026.9.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.1"
   }
 }

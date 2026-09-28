@@ -293,15 +293,21 @@ export async function watchAccountConfigs(
     if (!filename || !filename.endsWith(".json") || filename.startsWith(".")) return;
     const accountId = filename.replace(/\.json$/, "");
     if (watchTimer) clearTimeout(watchTimer);
-    watchTimer = setTimeout(async () => {
-      try {
-        invalidateConfigCache(accountId);
-        const cfg = await loadAccountConfig(accountId);
-        log.info(`config hot-reload detected: ${accountId} (${eventType})`);
-        await onChange(accountId, cfg);
-      } catch (e) {
-        const err = e as NodeJS.ErrnoException; log.warn(`config hot-reload failed: ${accountId}: ${err.message ?? String(e)}`);
-      }
+    // 注: 用 void 箭头 + 立即执行 async IIFE, 而非 setTimeout(async () => {...}).
+    //   两者行为等价 (回调内已 try/catch 全包, Promise 不会 reject), 但前者让
+    //   "这个 Promise 无需等待"成为代码事实, 而非注释承诺 —— setTimeout 的签名
+    //   期望 void 返回, 传 async 函数等于隐式丢弃一个可能 reject 的 Promise。
+    watchTimer = setTimeout(() => {
+      void (async () => {
+        try {
+          invalidateConfigCache(accountId);
+          const cfg = await loadAccountConfig(accountId);
+          log.info(`config hot-reload detected: ${accountId} (${eventType})`);
+          await onChange(accountId, cfg);
+        } catch (e) {
+          const err = e as NodeJS.ErrnoException; log.warn(`config hot-reload failed: ${accountId}: ${err.message ?? String(e)}`);
+        }
+      })();
     }, watchDebounceMs);
   };
 
@@ -352,15 +358,18 @@ export async function watchGlobalConfig(
 
   const handleChange = (): void => {
     if (globalWatchTimer) clearTimeout(globalWatchTimer);
-    globalWatchTimer = setTimeout(async () => {
-      try {
-        invalidateConfigCache("__global__");
-        const cfg = await loadGlobalConfig();
-        log.info(`config.json hot-reload detected`);
-        await onChange(cfg);
-      } catch (e) {
-        log.warn(`config.json hot-reload failed: ${(e as Error).message ?? String(e)}`);
-      }
+    // 同上: void 箭头 + async IIFE, 避免向期望 void 的 setTimeout 传 async 回调。
+    globalWatchTimer = setTimeout(() => {
+      void (async () => {
+        try {
+          invalidateConfigCache("__global__");
+          const cfg = await loadGlobalConfig();
+          log.info(`config.json hot-reload detected`);
+          await onChange(cfg);
+        } catch (e) {
+          log.warn(`config.json hot-reload failed: ${(e as Error).message ?? String(e)}`);
+        }
+      })();
     }, watchDebounceMs);
   };
 

@@ -10,6 +10,24 @@
 //     同 src/dispatch/intent-llm.ts 既有写法
 //   - 空正文/被截断 → throw 带 finish_reason + reasoning_tokens, 替代原先静默返回 ""
 import { safeFetch } from "./util/safe-fetch.js";
+import { JudgeMetrics } from "./monitor/metrics.js";
+
+/**
+ * v1.9.2 观测包装: callJudge 是 heartflow/jargon/affection/enrich 四机制的公共调用入口,
+ * 在这里计"调用/失败"最省埋点且不会漏 — 各机制自己 catch 掉的错误也已被计入。
+ * 行为与原实现完全一致 (同样的参数、同样的返回值、同样的异常原样抛出)。
+ */
+export async function callJudge(
+  params: Parameters<typeof callJudgeInner>[0],
+): Promise<string> {
+  JudgeMetrics.incCall();
+  try {
+    return await callJudgeInner(params);
+  } catch (e) {
+    JudgeMetrics.incFailure();
+    throw e;
+  }
+}
 
 export const DEFAULT_JUDGE_ENDPOINTS = {
   deepseek: "https://api.deepseek.com",
@@ -62,7 +80,7 @@ export function resolveJudgeCreds(overrides?: {
  * @param p.creds resolveJudgeCreds() 产出
  * @returns 模型返回文本; 失败抛错
  */
-export async function callJudge({
+async function callJudgeInner({
   model,
   userPrompt,
   systemPrompt = null,

@@ -100,7 +100,7 @@ export async function handleFeatureCommand(
         } else {
           learnLine += " (暂无已学阈值 — 样本收集中, 满 10 条才自动调)";
         }
-      } catch (e) {
+      } catch {
         learnLine += " (读学习状态失败)";
       }
       // v1.6.1 可观测: 近 24h 台账摘要 —— 「judge 跑了但没回」不再是盲区 (09-11 静默瘫教训)
@@ -122,7 +122,7 @@ export async function handleFeatureCommand(
             (pending ? ` / 待发送 ${pending}` : "") +
             (reasons ? `\n  沉默原因: ${reasons}` : "");
         }
-      } catch (e) {
+      } catch {
         ledgerLine = "\n近24h台账: (读台账失败)";
       }
       // v1.6.8 可观测: 近 24h 已收敛样本的**命中信号分布** —— 老板要看的"标签是不是锚在我那条上",
@@ -135,7 +135,7 @@ export async function handleFeatureCommand(
         sigLine = entries.length
           ? `\n信号分布(24h): ${entries.map(([k, v]) => `${k} ${v}`).join(" / ")}\n  (quote/@=强正, negative=强负, short-window=窄窗有人说话, silence=无人接; 强信号恒采信, 弱信号按本底过滤)`
           : "\n信号分布(24h): 0 (还没攒到已收敛样本)";
-      } catch (e) {
+      } catch {
         sigLine = "\n信号分布(24h): (读取失败)";
       }
       // v1.6.9 可观测: 发言预算档位 + 进程内拦截计数 (计数**重启归零**, 故标注"本次运行")
@@ -151,7 +151,7 @@ export async function handleFeatureCommand(
           `\n发言预算: ${b.enabled ? "开" : "关"} (每群 ≥${b.minGapSec}s / ≤${b.maxPerHour}条·小时 / ≤${b.maxPerDay}条·天` +
           `${b.quietHours.length ? ` / 静默段 ${b.quietHours.map(([s, e]) => `${s}-${e}时`).join(",")}` : " / 静默段 关"})` +
           `\n本次运行拦截: ${blockedStr}`;
-      } catch (e) {
+      } catch {
         budgetLine = "\n发言预算: (读取失败)";
       }
       // v1.8.0 可观测: 分层模式 + 已达门槛的段 (老板要看"到底有没有在分层学", 否则影子态像"什么都没发生")
@@ -170,7 +170,7 @@ export async function handleFeatureCommand(
           `\n  已达标段 ${qualified.length} 个` +
           (detail ? `: ${detail}` : " (样本仍在攒)") +
           (qualified.length > HF_STATUS_MAX_GROUPS ? ` …其余 ${qualified.length - HF_STATUS_MAX_GROUPS} 个` : "");
-      } catch (e) {
+      } catch {
         layerLine = "\n分层(群×时段): (读取失败)";
       }
       // v1.9.0 可观测: 重复闸 + 占比外环 —— 老板要能一眼看到"重复闸拦了多少"(误杀信号) 与"外环收紧了谁"
@@ -190,7 +190,7 @@ export async function handleFeatureCommand(
                 .map((h) => `${h.groupId} ${(h.share * 100).toFixed(1)}%`)
                 .join(" / ")
             : "\n  今日未收紧 (无群超目标占比)");
-      } catch (e) {
+      } catch {
         v19Line = "\n重复闸/占比外环: (读取失败)";
       }
       extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}${ledgerLine}${sigLine}${budgetLine}${layerLine}${v19Line}`;
