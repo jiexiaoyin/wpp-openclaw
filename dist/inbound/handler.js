@@ -18,6 +18,7 @@ import { payloadToAllInboundMessages } from "./parser.js";
 import { SeenTracker, buildDedupeKey } from "../webhook-receiver.js";
 import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1Cdn, enrichFileMessage, enrichFileMessageFromV1Binary, enrichVideoMessage, enrichVideoMessageFromV1, isV1SchemaVideo, enrichVoiceMessage, enrichVoiceMessageFromV1, isV1SchemaVoice, enrichFileMessageViaMcp, isV1SchemaImage, isV1SchemaFile } from "./media-enrich.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
+import { InboundMetrics } from "../monitor/metrics.js";
 import { judgeHeartflow, recordRawMessage, getChatState, buildChatContextSummary, getRawBuffer, formatRawMessages, lastBotReply, secondsSinceLastReply, recordActiveReply, recordPassiveMessage, markHeartflowJudged, } from "./heartflow.js";
 import { resolveThresholdOverride, persistHfJudged, persistHfJudgedBelowThreshold, markHfGroupEngaged, getOpenHfWindow, } from "./heartflow-learn.js";
 import { noteHfHumanMessage } from "./heartflow-budget.js";
@@ -806,6 +807,9 @@ export function createWppInboundHandler(opts) {
                 warn(`inbound parse dropped: account=${opts.accountId} payloadKeys=${Object.keys((payload ?? {})).join(",")} dataKeys=${Object.keys(payloadData ?? {}).join(",")} messagesLen=${msgCount ?? "n/a"}`);
                 return;
             }
+            // v1.9.2 观测: 入站消息计数 (ws 直推 + webhook 的 4 个调用点全部汇聚到本函数)。
+            //   计在去重之前 —— 本指标要回答的是"vendor 到底推了多少", 去重是下游的事。
+            InboundMetrics.incMessagesIn(msgs.length);
             for (const m of msgs) {
                 // 双重去重: SeenTracker 内存态 + DB 持久化 (vendor 重放消息 / gateway 重启后防重复 dispatch)
                 // P0-4: 去重 key 并入 accountId — 多账号同群消息 (相同 newMsgId) 不再互判重复

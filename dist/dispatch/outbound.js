@@ -129,14 +129,12 @@ export async function sendText(accountId, toWxid, text, ats) {
     if (!state)
         return { ok: false, error: `account not found: ${accountId}` };
     const peerKind = inferPeerKind(toWxid);
-    let accumulated = "";
     let lastMsgId;
     let lastNewId;
     let lastCreateTime;
     // chunk long texts (Markdown-aware 简化版: 按 \n\n 切)
     const chunks = text.length <= TEXT_CHUNK_LIMIT ? [text] : chunkMarkdown(text, TEXT_CHUNK_LIMIT);
     for (const chunk of chunks) {
-        accumulated += chunk;
         const r = await state.apiClient.sendText(toWxid, chunk, ats);
         if (!isSendOk(r)) {
             const baseRet = r.Data?.BaseResponse?.ret;

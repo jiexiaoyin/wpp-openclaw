@@ -74,7 +74,6 @@ function loadJieba() {
         return;
     _jiebaTried = true;
     try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const mod = require("@node-rs/jieba");
         const jb = mod.default ?? mod;
         _jieba = {

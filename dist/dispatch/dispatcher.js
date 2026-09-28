@@ -724,10 +724,13 @@ async function dispatchOne(msg, ctx = {}) {
     }
     const runtime = ctx.channelRuntime ?? getChannelRuntime();
     const isNoop = runtime === NOOP_RUNTIME;
-    // 仿 GeWe 解析 storePath (漏传会导致 gateway 崩溃): resolveStorePath("", { accountId }) → session storage path
+    // 仿 GeWe 解析 storePath (漏传会导致 gateway 崩溃): resolveStorePath("", { agentId }) → session storage path
+    //   v1.9.3-fix: SDK 只认 agentId (空 agentId 直接 throw), 原实现传 accountId 被静默 catch 成 "" → 多账号会话隔离失效。
+    //   agentId 取 account.config.agent, 缺省兜底 "main" (与 buildSessionKeyForMsg 一致)。
     let storePath = "";
     try {
-        storePath = runtime.session.resolveStorePath?.("", { accountId: msg.accountId }) ?? "";
+        const agentId = getDefaultAccountRegistry().get(msg.accountId)?.config.agent ?? "main";
+        storePath = runtime.session.resolveStorePath?.("", { accountId: msg.accountId, agentId }) ?? "";
     }
     catch (e) {
         warn(`dispatch: resolveStorePath failed: ${formatErr(e)}`);
@@ -774,12 +777,18 @@ async function dispatchOne(msg, ctx = {}) {
     // Step 1: 记录入站消息 (AI 上下文), ctx 必填
     const ctxPayload = buildCtxPayload(msg, sessionKey, injectedGroupContext ?? undefined, heartflowNote ?? undefined, moodNote ?? undefined, relayNote ?? undefined);
     try {
-        await runtime.session.recordInboundSession({ storePath, sessionKey, ctx: ctxPayload });
+        await runtime.session.recordInboundSession({
+            storePath,
+            sessionKey,
+            ctx: ctxPayload,
+            // v1.9.3-fix: 传 onRecordError 让 SDK 记录失败走回调不抛; 入站消息不能因 session 记录失败而丢
+            //   (AI 少一条历史上下文 vs 整条消息丢失/进程崩 — 后者代价大得多)。
+            onRecordError: (err) => warn(`dispatch: recordInboundSession record error: ${formatErr(err)}`),
+        });
     }
     catch (e) {
+        // 降级不重抛: 记录失败不该拖垮入站消息处理 (原 if(!isNoop) throw 配合 0 全局兜底会冒泡成未捕获 rejection)
         warn(`dispatch: recordInboundSession failed: ${formatErr(e)}`);
-        if (!isNoop)
-            throw e;
     }
     // 文件消息 (v1 schema, handler 已注入 [文件] + [系统提示-文件限制]) → 绕过 AI 直接回固定模板:
     // 文件内容读不了, AI 自由发挥无价值; 固定模板 100% 不出错、零模型调用、响应最快

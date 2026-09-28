@@ -293,17 +293,23 @@ export async function watchAccountConfigs(onChange) {
         const accountId = filename.replace(/\.json$/, "");
         if (watchTimer)
             clearTimeout(watchTimer);
-        watchTimer = setTimeout(async () => {
-            try {
-                invalidateConfigCache(accountId);
-                const cfg = await loadAccountConfig(accountId);
-                log.info(`config hot-reload detected: ${accountId} (${eventType})`);
-                await onChange(accountId, cfg);
-            }
-            catch (e) {
-                const err = e;
-                log.warn(`config hot-reload failed: ${accountId}: ${err.message ?? String(e)}`);
-            }
+        // 注: 用 void 箭头 + 立即执行 async IIFE, 而非 setTimeout(async () => {...}).
+        //   两者行为等价 (回调内已 try/catch 全包, Promise 不会 reject), 但前者让
+        //   "这个 Promise 无需等待"成为代码事实, 而非注释承诺 —— setTimeout 的签名
+        //   期望 void 返回, 传 async 函数等于隐式丢弃一个可能 reject 的 Promise。
+        watchTimer = setTimeout(() => {
+            void (async () => {
+                try {
+                    invalidateConfigCache(accountId);
+                    const cfg = await loadAccountConfig(accountId);
+                    log.info(`config hot-reload detected: ${accountId} (${eventType})`);
+                    await onChange(accountId, cfg);
+                }
+                catch (e) {
+                    const err = e;
+                    log.warn(`config hot-reload failed: ${accountId}: ${err.message ?? String(e)}`);
+                }
+            })();
         }, watchDebounceMs);
     };
     if (watchActive) {
@@ -352,16 +358,19 @@ export async function watchGlobalConfig(onChange) {
     const handleChange = () => {
         if (globalWatchTimer)
             clearTimeout(globalWatchTimer);
-        globalWatchTimer = setTimeout(async () => {
-            try {
-                invalidateConfigCache("__global__");
-                const cfg = await loadGlobalConfig();
-                log.info(`config.json hot-reload detected`);
-                await onChange(cfg);
-            }
-            catch (e) {
-                log.warn(`config.json hot-reload failed: ${e.message ?? String(e)}`);
-            }
+        // 同上: void 箭头 + async IIFE, 避免向期望 void 的 setTimeout 传 async 回调。
+        globalWatchTimer = setTimeout(() => {
+            void (async () => {
+                try {
+                    invalidateConfigCache("__global__");
+                    const cfg = await loadGlobalConfig();
+                    log.info(`config.json hot-reload detected`);
+                    await onChange(cfg);
+                }
+                catch (e) {
+                    log.warn(`config.json hot-reload failed: ${e.message ?? String(e)}`);
+                }
+            })();
         }, watchDebounceMs);
     };
     if (globalWatchActive) {
@@ -412,7 +421,7 @@ export async function appendAllowFrom(accountId, wxid) {
     }
     catch (e) {
         const err = e;
-        log.warn(`appendAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        log.error(`appendAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
         return { ok: false, allowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
     }
     // 合并 allowFrom (缺省 [], 已包含则 no-op)
@@ -429,7 +438,7 @@ export async function appendAllowFrom(accountId, wxid) {
         await rename(tmpPath, filePath);
     }
     catch (e) {
-        log.warn(`appendAllowFrom: write ${accountId}.json failed: ${e.message}`);
+        log.error(`appendAllowFrom: write ${accountId}.json failed: ${e.message}`);
         return { ok: false, allowFrom, filePath, reason: "write-failed" };
     }
     // 清 LRU cache → 下次 loadAccountConfig 读到新 allowFrom (热重载 watcher 也会触发)
@@ -451,7 +460,7 @@ export async function appendGroupAllowFrom(accountId, chatroomId) {
     }
     catch (e) {
         const err = e;
-        log.warn(`appendGroupAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        log.error(`appendGroupAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
         return { ok: false, groupAllowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
     }
     // 合并 groupAllowFrom (缺省 [], 已包含则 no-op)
@@ -468,7 +477,7 @@ export async function appendGroupAllowFrom(accountId, chatroomId) {
         await rename(tmpPath, filePath);
     }
     catch (e) {
-        log.warn(`appendGroupAllowFrom: write ${accountId}.json failed: ${e.message}`);
+        log.error(`appendGroupAllowFrom: write ${accountId}.json failed: ${e.message}`);
         return { ok: false, groupAllowFrom, filePath, reason: "write-failed" };
     }
     // 清 LRU cache → 热重载生效
@@ -489,7 +498,7 @@ export async function removeAllowFrom(accountId, wxid) {
     }
     catch (e) {
         const err = e;
-        log.warn(`removeAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        log.error(`removeAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
         return { ok: false, allowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
     }
     const allowFrom = Array.isArray(raw.allowFrom) ? raw.allowFrom : [];
@@ -505,7 +514,7 @@ export async function removeAllowFrom(accountId, wxid) {
         await rename(tmpPath, filePath);
     }
     catch (e) {
-        log.warn(`removeAllowFrom: write ${accountId}.json failed: ${e.message}`);
+        log.error(`removeAllowFrom: write ${accountId}.json failed: ${e.message}`);
         return { ok: false, allowFrom, filePath, reason: "write-failed" };
     }
     invalidateConfigCache(accountId);
@@ -525,7 +534,7 @@ export async function removeGroupAllowFrom(accountId, chatroomId) {
     }
     catch (e) {
         const err = e;
-        log.warn(`removeGroupAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        log.error(`removeGroupAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
         return { ok: false, groupAllowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
     }
     const groupAllowFrom = Array.isArray(raw.groupAllowFrom) ? raw.groupAllowFrom : [];
@@ -541,7 +550,7 @@ export async function removeGroupAllowFrom(accountId, chatroomId) {
         await rename(tmpPath, filePath);
     }
     catch (e) {
-        log.warn(`removeGroupAllowFrom: write ${accountId}.json failed: ${e.message}`);
+        log.error(`removeGroupAllowFrom: write ${accountId}.json failed: ${e.message}`);
         return { ok: false, groupAllowFrom, filePath, reason: "write-failed" };
     }
     invalidateConfigCache(accountId);
@@ -562,7 +571,7 @@ export async function setAccountFlag(accountId, field, value) {
     }
     catch (e) {
         const err = e;
-        log.warn(`setAccountFlag: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        log.error(`setAccountFlag: read ${accountId}.json failed: ${err.code ?? String(e)}`);
         return { ok: false, current: false, filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
     }
     raw[field] = value;
@@ -572,7 +581,7 @@ export async function setAccountFlag(accountId, field, value) {
         await rename(tmpPath, filePath);
     }
     catch (e) {
-        log.warn(`setAccountFlag: write ${accountId}.json failed: ${e.message}`);
+        log.error(`setAccountFlag: write ${accountId}.json failed: ${e.message}`);
         return { ok: false, current: false, filePath, reason: "write-failed" };
     }
     invalidateConfigCache(accountId);
@@ -594,7 +603,7 @@ export async function ensureWebhookPathToken(accountId) {
     }
     catch (e) {
         const err = e;
-        log.warn(`ensureWebhookPathToken: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        log.error(`ensureWebhookPathToken: read ${accountId}.json failed: ${err.code ?? String(e)}`);
         return { token: "", ok: false, reason: "read-failed" };
     }
     const existing = typeof raw.webhookPathToken === "string" && raw.webhookPathToken.trim()
@@ -612,7 +621,7 @@ export async function ensureWebhookPathToken(accountId) {
         await rename(tmpPath, filePath);
     }
     catch (e) {
-        log.warn(`ensureWebhookPathToken: write ${accountId}.json failed: ${e.message}`);
+        log.error(`ensureWebhookPathToken: write ${accountId}.json failed: ${e.message}`);
         return { token, ok: false, reason: "write-failed" };
     }
     invalidateConfigCache(accountId);
@@ -633,11 +642,16 @@ export async function setAccountField(accountId, fieldPath, value) {
     }
     catch (e) {
         const err = e;
-        log.warn(`setAccountField: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        log.error(`setAccountField: read ${accountId}.json failed: ${err.code ?? String(e)}`);
         return { ok: false, filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
     }
     // 点路径: "heartflow.enabled" → raw.heartflow.enabled = value (中间对象自动创建)
+    // 原型污染防护: 拒绝 __proto__/constructor/prototype 路径段 (防把值写进 Object.prototype)
     const parts = fieldPath.split(".");
+    if (parts.some((p) => p === "__proto__" || p === "constructor" || p === "prototype")) {
+        log.warn(`setAccountField: reject prototype-pollution path: ${fieldPath}`);
+        return { ok: false, filePath, reason: "invalid-path" };
+    }
     let node = raw;
     for (let i = 0; i < parts.length - 1; i++) {
         const key = parts[i];
@@ -652,7 +666,7 @@ export async function setAccountField(accountId, fieldPath, value) {
         await rename(tmpPath, filePath);
     }
     catch (e) {
-        log.warn(`setAccountField: write ${accountId}.json failed: ${e.message}`);
+        log.error(`setAccountField: write ${accountId}.json failed: ${e.message}`);
         return { ok: false, filePath, reason: "write-failed" };
     }
     invalidateConfigCache(accountId);
@@ -678,7 +692,7 @@ export async function updateHeartflowGroups(accountId, action, chatroomId) {
     }
     catch (e) {
         const err = e;
-        log.warn(`updateHeartflowGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        log.error(`updateHeartflowGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
         return { ok: false, whitelistGroups: [], groupAllowFrom: [], reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
     }
     // heartflow 对象 (不存在则默认 {enabled:false})
@@ -705,7 +719,7 @@ export async function updateHeartflowGroups(accountId, action, chatroomId) {
         await rename(tmpPath, filePath);
     }
     catch (e) {
-        log.warn(`updateHeartflowGroups: write ${accountId}.json failed: ${e.message}`);
+        log.error(`updateHeartflowGroups: write ${accountId}.json failed: ${e.message}`);
         return { ok: false, whitelistGroups: wl, groupAllowFrom: gal, reason: "write-failed" };
     }
     invalidateConfigCache(accountId);
@@ -726,7 +740,7 @@ export async function updateBlacklistGroups(accountId, action, targets) {
     }
     catch (e) {
         const err = e;
-        log.warn(`updateBlacklistGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
+        log.error(`updateBlacklistGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
         return { ok: false, blacklist: [], reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
     }
     let bl = Array.isArray(raw.blacklistGroups) ? raw.blacklistGroups : [];
@@ -745,7 +759,7 @@ export async function updateBlacklistGroups(accountId, action, targets) {
         await rename(tmpPath, filePath);
     }
     catch (e) {
-        log.warn(`updateBlacklistGroups: write ${accountId}.json failed: ${e.message}`);
+        log.error(`updateBlacklistGroups: write ${accountId}.json failed: ${e.message}`);
         return { ok: false, blacklist: bl, reason: "write-failed" };
     }
     invalidateConfigCache(accountId);

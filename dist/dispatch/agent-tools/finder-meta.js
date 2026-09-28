@@ -27,12 +27,9 @@
 //   实测了真实发出的 POST body (本地 HTTP server 抓包), 键名与 vendor 逐字一致.
 //   ⇒ 若后续再出现「同 doc 类型分叉」, 用同一比对脚本即可回归.
 //
-// 【仍存在的、非「同类差异」的三点 (如实列出, 均非本轮可单方面消除)】
-//   A. decryptFinderComment 的**语义误用** (不是键名问题): vendor summary 为
-//      「解密企业微信会话记录（非视频号/小微）」, Content 描述亦明示「不用于视频号或小微内容」——
-//      该端点解密的是**企业微信会话记录**, 与「解密视频号评论」无关. 工具名 decryptFinderComment
-//      与旧描述属误名/误导 (会误导 LLM 选型). 本轮只改了键名与描述, **未改名** —— 工具名是
-//      对外可见标识, 改名属破坏性变更, 需单独决策. 详见该工具条目注释.
+// 【仍存在的、非「同类差异」的两点 (如实列出)】
+//   A. decryptWeComSession / decryptFinderComment: v1.9.2 已**新增**正确命名 decryptWeComSession;
+//      旧 decryptFinderComment 保留为 deprecation alias (LLM 仍可用), 计划在 v2.0 移除. 详见该工具条目注释.
 //   B. playVideo 的命名与 body 缺省策略为本层自行裁定 (vendor 该 doc 无 required、15 个 description 全空,
 //      无 vendor 语义可依据). 裁定与理由见该工具条目; 这是**判断**, 不是与 vendor 的差异.
 //   C. int64 精度风险 (前两轮引入, 本轮新增 getFinderCommentDetail 同受): vendor 对
@@ -239,9 +236,19 @@ export const FINDER_META = {
      *   **保留工具名 decryptFinderComment 不变** —— 工具名是 LLM 可见的对外标识, 改名属破坏性变更,
      *   超出「清差异」范围, 需单独决策 (见文件顶部注释).
      */
+    /**
+     * v1.9.2 (改名): 新增正确命名的 `decryptWeComSession`, 语义清晰; 同时保留
+     * `decryptFinderComment` 作向后兼容 (deprecation alias), 旧调用不破. 详见工具条目注释.
+     */
+    decryptWeComSession: [
+        "解密企业微信会话记录 (vendor /Finder/Decrypt, 十六进制串). 摘要: 该端点能力面是**企业微信**, 不用于视频号/小微内容.",
+        Type.Object({ content: Type.String({ description: "十六进制企业微信会话记录 (vendor Content, example '0123456789abcdef')" }) }),
+        (content) => getFinderApi().decrypt(content),
+    ],
+    /** @deprecated 历史命名, 实际能力是企微而非视频号. 新代码请用 `decryptWeComSession`. 保留此名仅为向后兼容, 计划在 v2.0 移除. */
     decryptFinderComment: [
-        "解密企业微信会话记录 (vendor Content, 十六进制串). 注意: 本端点**不用于视频号/小微内容** —— " +
-            "工具名沿用历史命名, 实际能力面是企业微信会话记录, 不是视频号评论.",
+        "[deprecated → decryptWeComSession] 解密企业微信会话记录 (vendor Content, 十六进制串). " +
+            "注意: 本端点**不用于视频号/小微内容** —— 工具名沿用历史命名, 实际能力面是企业微信会话记录, 不是视频号评论.",
         Type.Object({ content: Type.String({ description: "十六进制企业微信会话记录 (vendor Content, example '0123456789abcdef')" }) }),
         (content) => getFinderApi().decrypt(content),
     ],

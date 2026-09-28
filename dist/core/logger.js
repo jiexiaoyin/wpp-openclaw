@@ -63,7 +63,6 @@ function emit(level, msg, fields) {
         console.error(line);
     else if (level === "WARN")
         console.warn(line);
-    // eslint-disable-next-line no-console -- 中心 logger INFO/DEBUG 必需
     else
         console.log(line);
 }

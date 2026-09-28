@@ -443,7 +443,7 @@ export function makeWppMsg(ctx) {
             await persistOutboundMsg(ctx, { toWxid, msgType: "file", content: `[文件] ${fileName} ${fileUrl}`, resp: r });
             return r;
         }
-        catch (e) {
+        catch {
             return { Code: -2, CodeValue: "SEND_FAIL", Data: null, raw: null };
         }
     };

@@ -20,7 +20,10 @@ export function isCatastrophicRegex(pattern) {
     if (/\([^)]*\|[^)]*\)[+*]/.test(src))
         return true;
     // 多个连续量词: a++ / a*+ / a{1,}+
-    if (/[+*]\+|[+*]\*|[+*]\{[0-9,]+\}\+/.test(src))
+    //   注: 第 3 分支原为 [+*]\{[0-9,]+\}\+ — 要求 { 前面还有个 +/*, 于是 a{1,}+ 这种
+    //   "花括号量词再叠一个+" 的形态漏判 (与注释声明的 3 个样本不符)。去掉多余的 [+*] 前缀,
+    //   覆盖 {n,}+ / {n,m}+ 本身; 旧写法能命中的 a+{1,}+ 是新写法的子集, 不丢检测面。
+    if (/[+*]\+|[+*]\*|\{[0-9,]+\}\+/.test(src))
         return true;
     // \w+\w+\w+ 等多连接 + 整体 + 灾难
     if (/\\[wWsSdD]\+.*\\?[wWsSdD]\+.*[+*]\)?\+/.test(src))
@@ -51,9 +54,14 @@ export function guardedRegex(pattern, fallback = null) {
     if (isCatastrophicRegex(pattern)) {
         if (fallback)
             return fallback;
-        throw new Error(`catastrophic regex detected: ${pattern.source.slice(0, 80)} (嵌套量词/灾难 alternation). ` +
+        // 收窄方式与 isCatastrophicRegex 保持一致: string 没有 .source, 直接取会得到
+        // undefined.slice() → 抛无意义的 TypeError, 反而掩盖了 "这是灾难 regex" 这个真因。
+        const src = typeof pattern === "string" ? pattern : pattern.source;
+        throw new Error(`catastrophic regex detected: ${src.slice(0, 80)} (嵌套量词/灾难 alternation). ` +
             `fix: 用非嵌套结构 (a+ → a*?) 或拆 regex`);
     }
-    return pattern;
+    // RegExp 原样返回 (保引用同一性 → 保住 g/y 标志的 lastIndex 语义);
+    // string 在此编译: 既兑现 : RegExp 返回类型, 又与 String.match(str) 的原生语义一致。
+    return typeof pattern === "string" ? new RegExp(pattern) : pattern;
 }
 //# sourceMappingURL=safe-regex.js.map

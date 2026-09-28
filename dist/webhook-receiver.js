@@ -4,8 +4,16 @@ import { createServer } from "node:http";
 import { logObj as log, formatErr } from "./core/logger.js";
 import { WEBHOOK_BODY_LIMIT_BYTES, REQUEST_TIMEOUT_MS } from "./core/constants.js";
 import { verifyHmacSha256, signatureRequired, extractSignatureHeader, } from "./core/signature.js";
-import { WebhookMetrics } from "./monitor/metrics.js";
+import { WebhookMetrics, renderJson } from "./monitor/metrics.js";
 import { parseJsonText } from "./api/client.js";
+/**
+ * v1.9.2: 判定来源是否为 loopback。
+ * 只认字面回环地址, 不认 "localhost" 之外的解析结果 —— 这里不能用 DNS, 否则一个被污染的
+ * hosts 就能把 /metrics 暴露到非本机。
+ */
+function isLoopbackAddr(addr) {
+    return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
 export class WechatpadproWebhookServer {
     host;
     port;
@@ -51,6 +59,23 @@ export class WechatpadproWebhookServer {
     async start() {
         return new Promise((resolve, reject) => {
             this.server = createServer((req, res) => {
+                // v1.9.2 只读观测端点 —— 必须在 incReceived 之前拦截, 否则每次抓取都会污染
+                //   "收到消息" 计数 (运维抓一次 = 假消息 +1)。
+                // 暴露面控制: 复用现有 server (不开新端口, 不改现有 host/port 绑定), 但只对
+                //   loopback 来源响应; 其余一律 404 —— 与"未知路径"同响应, 不泄露该端点的存在。
+                //   注: 走 nginx 反代的本机场景, vendor 推送到 /webhook 的 remoteAddress 同样是
+                //   127.0.0.1, 但那走 POST 分支, 不受影响。
+                if (req.method === "GET" && req.url === "/metrics") {
+                    if (!isLoopbackAddr(req.socket.remoteAddress)) {
+                        res.statusCode = 404;
+                        res.end("not found");
+                        return;
+                    }
+                    res.statusCode = 200;
+                    res.setHeader("content-type", "application/json; charset=utf-8");
+                    res.end(renderJson());
+                    return;
+                }
                 WebhookMetrics.incReceived();
                 // 请求级 timeout 防 slow client DoS
                 req.setTimeout(REQUEST_TIMEOUT_MS, () => {
@@ -102,65 +127,70 @@ export class WechatpadproWebhookServer {
                 req.on("aborted", () => {
                     bodyAborted = true;
                 });
-                req.on("end", async () => {
-                    if (bodyAborted) {
-                        if (!res.headersSent) {
-                            res.statusCode = 400;
-                            res.end("request aborted");
-                        }
-                        return;
-                    }
-                    if (bodyTooLarge)
-                        return; // 已在 data handler 返 413
-                    const rawBody = Buffer.concat(chunks);
-                    // signature 验证: HMAC-SHA256 (等 vendor 公开算法)
-                    // v1.5.1 P2-fix (2026-08-25 21:30 老板拍 A): 加固防再犯
-                    //   vendor 侧当前不发 signature header
-                    //   secret 配了 → 强制 verify → vendor 不发 signature → 401 → 0 入库 (P0 bug)
-                    //   secret 不配 → 跳过 verify → webhook 正常入库 (按 v1.1.10 permissive 设计)
-                    //   启用 HMAC 条件: vendor 公开签名算法 + env WECHATPRO_WEBHOOK_SECRET=真值
-                    if (signatureRequired(this.secret)) {
-                        const sig = extractSignatureHeader(req.headers);
-                        if (!verifyHmacSha256(rawBody, sig, this.secret)) {
-                            log.warn(`webhook signature verify failed: account=${matchPath} ` +
-                                `(signature=${sig ? "present" : "missing"})`);
-                            WebhookMetrics.incRejectedSignature?.();
-                            res.statusCode = 401;
-                            res.end("unauthorized");
+                // 注: void 箭头 + async IIFE (而非 req.on("end", async () => {...}))。
+                //   EventEmitter 的 on() 期望 void 返回; 回调内 await 已全部 try/catch 覆盖,
+                //   但传 async 函数等于把 Promise 交给无人处理的路径。
+                req.on("end", () => {
+                    void (async () => {
+                        if (bodyAborted) {
+                            if (!res.headersSent) {
+                                res.statusCode = 400;
+                                res.end("request aborted");
+                            }
                             return;
                         }
-                        log.debug(`webhook signature ok: path=${matchPath}`);
-                    }
-                    // secret 没配 → 接受 (vendor 当前不签, 按 v1.1.10 permissive 设计)
-                    // Parse + dispatch
-                    // v1.3.18 F6 fix: 用 parseJsonText 预引号化 16+ 位大整数 (msg_id/new_msg_id 防丢精度)
-                    let payload;
-                    try {
-                        payload = parseJsonText(rawBody.toString("utf8"));
-                        if (!payload)
-                            throw new Error("parseJsonText returned null");
-                    }
-                    catch (e) {
-                        // formatErr 保留 stack
-                        log.warn(`webhook parse error: ${formatErr(e)}`);
-                        WebhookMetrics.incRejectedParse?.();
-                        res.statusCode = 400;
-                        res.end("bad request");
-                        return;
-                    }
-                    try {
-                        await onMessage(payload);
-                        WebhookMetrics.incProcessed();
-                        res.statusCode = 200;
-                        res.end("ok");
-                    }
-                    catch (e) {
-                        log.warn(`webhook onMessage error: ${formatErr(e)}`);
-                        if (!res.headersSent) {
-                            res.statusCode = 500;
-                            res.end("server error");
+                        if (bodyTooLarge)
+                            return; // 已在 data handler 返 413
+                        const rawBody = Buffer.concat(chunks);
+                        // signature 验证: HMAC-SHA256 (等 vendor 公开算法)
+                        // v1.5.1 P2-fix (2026-08-25 21:30 老板拍 A): 加固防再犯
+                        //   vendor 侧当前不发 signature header
+                        //   secret 配了 → 强制 verify → vendor 不发 signature → 401 → 0 入库 (P0 bug)
+                        //   secret 不配 → 跳过 verify → webhook 正常入库 (按 v1.1.10 permissive 设计)
+                        //   启用 HMAC 条件: vendor 公开签名算法 + env WECHATPRO_WEBHOOK_SECRET=真值
+                        if (signatureRequired(this.secret)) {
+                            const sig = extractSignatureHeader(req.headers);
+                            if (!verifyHmacSha256(rawBody, sig, this.secret)) {
+                                log.warn(`webhook signature verify failed: account=${matchPath} ` +
+                                    `(signature=${sig ? "present" : "missing"})`);
+                                WebhookMetrics.incRejectedSignature?.();
+                                res.statusCode = 401;
+                                res.end("unauthorized");
+                                return;
+                            }
+                            log.debug(`webhook signature ok: path=${matchPath}`);
                         }
-                    }
+                        // secret 没配 → 接受 (vendor 当前不签, 按 v1.1.10 permissive 设计)
+                        // Parse + dispatch
+                        // v1.3.18 F6 fix: 用 parseJsonText 预引号化 16+ 位大整数 (msg_id/new_msg_id 防丢精度)
+                        let payload;
+                        try {
+                            payload = parseJsonText(rawBody.toString("utf8"));
+                            if (!payload)
+                                throw new Error("parseJsonText returned null");
+                        }
+                        catch (e) {
+                            // formatErr 保留 stack
+                            log.warn(`webhook parse error: ${formatErr(e)}`);
+                            WebhookMetrics.incRejectedParse?.();
+                            res.statusCode = 400;
+                            res.end("bad request");
+                            return;
+                        }
+                        try {
+                            await onMessage(payload);
+                            WebhookMetrics.incProcessed();
+                            res.statusCode = 200;
+                            res.end("ok");
+                        }
+                        catch (e) {
+                            log.warn(`webhook onMessage error: ${formatErr(e)}`);
+                            if (!res.headersSent) {
+                                res.statusCode = 500;
+                                res.end("server error");
+                            }
+                        }
+                    })();
                 });
                 req.on("error", (e) => {
                     log.warn(`webhook req error: ${formatErr(e)}`);

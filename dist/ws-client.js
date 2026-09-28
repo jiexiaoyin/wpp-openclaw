@@ -9,6 +9,7 @@ import WebSocket from "ws";
 import { logObj as log, formatErr } from "./core/logger.js";
 import { getSynckey, saveSynckey } from "./db.js";
 import { parseJsonText } from "./api/client.js";
+import { WsMetrics } from "./monitor/metrics.js";
 export class WechatpadproWsClient {
     wsUrl;
     authcode;
@@ -30,11 +31,15 @@ export class WechatpadproWsClient {
     /** v1.1.11: 兜底定时 SyncMessage (vendor WS 漏推/重启场景). 默认 60s */
     fallbackTimer = null;
     fallbackSyncMs;
+    /** v1.9.3-fix: 长连接心跳定时器 (调 /Login/HeartBeatLong 保活, 防 vendor idle 超时断连) */
+    heartbeatTimer = null;
+    heartbeatMs;
     constructor(wsUrl, authcode, opts) {
         this.wsUrl = wsUrl;
         this.authcode = authcode;
         this.opts = opts;
         this.fallbackSyncMs = opts.fallbackSyncMs ?? 60_000;
+        this.heartbeatMs = opts.heartbeatMs ?? 60_000;
         this.retryDelay = opts.wsReconnect?.initialDelayMs ?? 1_000;
         this.maxRetryDelay = opts.wsReconnect?.maxDelayMs ?? 30_000;
         this.retryMultiplier = opts.wsReconnect?.multiplier ?? 2;
@@ -48,12 +53,22 @@ export class WechatpadproWsClient {
             }, this.fallbackSyncMs);
             this.fallbackTimer.unref?.();
         }
+        if (this.heartbeatMs > 0) {
+            this.heartbeatTimer = setInterval(() => {
+                void this.sendHeartbeat();
+            }, this.heartbeatMs);
+            this.heartbeatTimer.unref?.();
+        }
     }
     async stop() {
         this.stopped = true;
         if (this.fallbackTimer) {
             clearInterval(this.fallbackTimer);
             this.fallbackTimer = null;
+        }
+        if (this.heartbeatTimer) {
+            clearInterval(this.heartbeatTimer);
+            this.heartbeatTimer = null;
         }
         if (this.ws) {
             try {
@@ -65,6 +80,7 @@ export class WechatpadproWsClient {
             this.ws = null;
         }
         this.connected = false;
+        WsMetrics.setConnected(false); // v1.9.2 观测: 主动 stop 也归零, 防 gauge 卡在 1
         log.info("ws client stopped");
     }
     isConnected() {
@@ -85,6 +101,7 @@ export class WechatpadproWsClient {
         }
         this.ws.on("open", () => {
             this.connected = true;
+            WsMetrics.setConnected(true); // v1.9.2 观测: 当前连接态 gauge
             this.retryDelay = this.opts.wsReconnect?.initialDelayMs ?? 1_000;
             if (this.consecutive502 > 0) {
                 log.info(`ws reset 502 counter: prev=${this.consecutive502} (vendor recovered)`);
@@ -92,32 +109,49 @@ export class WechatpadproWsClient {
             this.consecutive502 = 0;
             log.info("ws connected");
             void this.triggerSync("ws-open");
+            // v1.9.3-fix: 开启 vendor 自动心跳 (防 idle 超时断连), 与周期 HeartBeatLong 双保险。
+            //   每次重连都重新开启 (新 ws 会话需要重新告知 vendor)。
+            void this.opts.apiClient.call("/Login/AutoHeartBeat", {}).catch((e) => {
+                log.warn(`ws auto-heartbeat enable failed: ${formatErr(e)}`);
+            });
         });
-        this.ws.on("message", async (data) => {
-            try {
-                const text = data.toString();
-                // v1.3.18 F6 fix: 用 parseJsonText 预引号化 16+ 位大整数 (vendor 推送 new_msg_id 防丢精度)
-                const json = parseJsonText(text);
-                const dataField = json["Data"];
-                const type = dataField?.["type"];
-                // 握手帧: {"Code":0,"Success":true,"Message":"实时消息通道已就绪","Data":{"timestamp":...,"type":"connection_ready"}}
-                //         跳过 — 不是真消息推送
-                if (type === "connection_ready") {
-                    // 与 "ws connected" 重复, 降 debug
-                    log.debug("ws recv: connection_ready (handshake ack)");
-                    return;
+        // 注: void 箭头 + async IIFE (而非 ws.on("message", async () => {...}))。
+        //   本回调内目前无 await, 但解析失败要用 try/catch, 且后续加 await 的可能性高
+        //   (例如把 triggerSync 改成 await) —— 保持 void 返回签名, 避免将来引入
+        //   "隐式丢弃 Promise" 的路径。
+        this.ws.on("message", (data) => {
+            void (async () => {
+                try {
+                    const text = data.toString();
+                    // v1.3.18 F6 fix: 用 parseJsonText 预引号化 16+ 位大整数 (vendor 推送 new_msg_id 防丢精度)
+                    const json = parseJsonText(text);
+                    const dataField = json["Data"];
+                    const type = dataField?.["type"];
+                    // 握手帧: {"Code":0,"Success":true,"Message":"实时消息通道已就绪","Data":{"timestamp":...,"type":"connection_ready"}}
+                    //         跳过 — 不是真消息推送
+                    if (type === "connection_ready") {
+                        // 与 "ws connected" 重复, 降 debug
+                        log.debug("ws recv: connection_ready (handshake ack)");
+                        return;
+                    }
+                    // 其他帧 (有 newMsgId / Wxid / MessageType 等) → 触发 SyncMessage 拉取
+                    // 即使 type 未知也走 (vendor 推送类型可能在加新事件)
+                    log.debug(`ws recv: trigger sync (kind=${String(type ?? "unknown")})`);
+                    void this.triggerSync("ws-push");
                 }
-                // 其他帧 (有 newMsgId / Wxid / MessageType 等) → 触发 SyncMessage 拉取
-                // 即使 type 未知也走 (vendor 推送类型可能在加新事件)
-                log.debug(`ws recv: trigger sync (kind=${String(type ?? "unknown")})`);
-                void this.triggerSync("ws-push");
-            }
-            catch (e) {
-                log.warn(`ws message parse error: ${formatErr(e)}`);
-            }
+                catch (e) {
+                    log.warn(`ws message parse error: ${formatErr(e)}`);
+                }
+            })();
+        });
+        this.ws.on("pong", () => {
+            // vendor 对 ws.ping() 的 RFC6455 响应; 仅 debug, 用于确认 vendor 是否回 pong
+            log.debug("ws recv: pong (keepalive ack)");
         });
         this.ws.on("close", (code, reason) => {
             this.connected = false;
+            WsMetrics.setConnected(false); // v1.9.2 观测: 当前连接态 gauge
+            WsMetrics.incDisconnect(); // v1.9.2 观测: 断连计数 (与下方 warn 同一事件)
             log.warn(`ws closed: code=${code} reason=${reason.toString() || "<none>"}`);
             if (!this.stopped)
                 this.scheduleRetry();
@@ -190,9 +224,40 @@ export class WechatpadproWsClient {
             this.syncInFlight = false;
         }
     }
+    /**
+     * v1.9.3-fix: 长连接心跳 (调 /Login/HeartBeatLong 保活 ws)。
+     * 根因: ws 层无 ping/pong 保活 → vendor /ws/sync idle timeout (~10min) 主动断开 →
+     *       openclaw health-monitor 判 disconnected → 每 10min 重启账号 (连累心流 sweep 被打断)。
+     * 只在 ws connected 时发; 失败仅 warn, 断连重连由 close/error handler 负责。
+     */
+    async sendHeartbeat() {
+        if (this.stopped || !this.connected || !this.ws)
+            return;
+        // v1.9.3-fix(2): 用 ws 层原生 ping 帧保活。
+        //   根因修正: 之前只调 HTTP /Login/HeartBeatLong 保活, 但 vendor idle timeout 挂在
+        //   vendor 的 /ws/sync 长连接本身 (ws 层 traffic), HTTP 调用不产生 ws 流量 → 仍每 10min
+        //   被 code=1005 断连。ping 帧才是 ws 层的真流量, 能重置 idle 计时。
+        try {
+            this.ws.ping();
+        }
+        catch (e) {
+            log.warn(`ws ping failed: ${formatErr(e)}`);
+        }
+        // 双保险: 保留 vendor HTTP 心跳 (AutoHeartBeat 已在 open 开启, 这里周期调 HeartBeatLong)
+        try {
+            const r = await this.opts.apiClient.call("/Login/HeartBeatLong", {});
+            if (r.Code !== 0) {
+                log.warn(`ws heartbeat: /Login/HeartBeatLong non-zero Code=${r.Code} CodeValue=${r.CodeValue ?? "?"}`);
+            }
+        }
+        catch (e) {
+            log.warn(`ws heartbeat failed: ${formatErr(e)}`);
+        }
+    }
     scheduleRetry() {
         if (this.stopped)
             return;
+        WsMetrics.incReconnect(); // v1.9.2 观测: 重连排期计数 (stop 后的调用不算, 故置于 guard 之后)
         // P1 (2026-08-23): 长退避 (LONG_BACKOFF_MS) 不被 maxRetryDelay 截断 —
         //   之前 Math.min 把 5 分钟长退避压到 30s, 智能退避从未生效。
         const delay = this.retryDelay >= WechatpadproWsClient.LONG_BACKOFF_MS
