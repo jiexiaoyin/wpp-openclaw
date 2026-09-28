@@ -405,7 +405,10 @@ test('接线: **真发出去**才占额度 (persistHfSendOutcome 的 sent 分支
 
 test('接线: handler 记人类消息 (与接话判定同一处, 零额外 IO)', (t) => {
   const h = src('src/inbound/handler.ts');
-  assert.match(h, /noteHfHumanMessage\(g\.accountId, g\.groupId, nowSec\)/, 'handler 必须记人类消息时刻');
+  // v1.10.0: 记录点从"开窗群"放宽到**白名单内所有群** —— 旧码挂在 `if (!win) continue` 之后,
+  //   于是只有刚被心流回过的群才有 lastHumanAtSec, "群里多久没人说话"这个观测量几乎恒为 null。
+  assert.match(h, /noteHfHumanMessage\(m\.accountId, gid, nowSec\)/, 'handler 必须记人类消息时刻 (白名单全量)');
+  assert.match(h, /if \(!isHfGroupAllowed\(gid, opts\.heartflow\)\) continue;/, '仍只对白名单群记 (控内存)');
   assert.match(h, /void markHfGroupEngaged\(/, '既有点位不许动 (部署门断言字面量)');
   assert.match(h, /atSec: m\.ts,/, '候选时刻必须用消息自己的 ts (不是 flush 墙上时间)');
 });

@@ -111,8 +111,13 @@ test('7. 唯一 judge 入口仍是 handler.ts 的 via="heartflow" 分支 (别误
   const h = read(`${ROOT}/src/inbound/handler.ts`);
   assert.match(h, /else if \(t\.via === "heartflow" && opts\.heartflow\?\.enabled\)/, 'handler.ts 必须保留 via=heartflow 分支');
   assert.match(h, /await judgeHeartflow\(/, 'handler.ts 必须仍调 judgeHeartflow');
-  // v1.8.0 保名加第 4 参 nowSec (分层按当前时段取值) ⇒ 正则放宽为"hfCfg 后跟逗号或右括号"
-  assert.match(h, /resolveThresholdOverride\(m\.accountId, chatId, hfCfg(,|\))/, 'learned per-群阈值 override 必须仍在');
+  // v1.10.0: per-群 learned 覆盖 + 画像抬升 + 可达性天花板收口为**唯一入口**
+  //   (旧断言钉的是 handler 内联调用 resolveThresholdOverride; 改钉新契约, 意图不变:
+  //    "该群学到的阈值必须真的参与判定")
+  assert.match(h, /resolveHfEffectiveThreshold\(m\.accountId, chatId, hfCfg, nowSec\)/,
+    'learned per-群阈值 override 必须仍在 (经统一入口)');
+  assert.match(read(`${ROOT}/src/inbound/heartflow-learn.ts`), /export function resolveHfEffectiveThreshold\(/,
+    '统一入口必须由 heartflow-learn 导出 (judge 与状态页同源)');
 });
 
 test('8. heartflow.ts 仍保留 judge 主体 (删除只针对独立入口)', () => {

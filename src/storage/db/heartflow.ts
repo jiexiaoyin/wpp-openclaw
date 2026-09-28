@@ -10,6 +10,7 @@ import type {
   HfGroupProfileRecord,
   HfGroupShareRow,
   HfGroupStateRecord,
+  HfJudgedScoreRow,
   HfLayerSampleRow,
   HfLayerStatRecord,
   HfLedgerRecord,
@@ -70,8 +71,23 @@ export async function markHfEngaged(
   engaged: 0 | 1,
   signal: string,
   close: boolean,
+  inboundMsgId?: string | null,
 ): Promise<void> {
-  return getAdapter().markHfEngaged(accountId, groupId, atSec, engaged, signal, close);
+  return getAdapter().markHfEngaged(accountId, groupId, atSec, engaged, signal, close, inboundMsgId);
+}
+
+/** v1.10.0 可达性护栏素材: 该群近期判过的所有分 (含已发出的行) */
+export async function listHfRecentJudgedScores(
+  accountId: string,
+  sinceSec: number,
+  rowCap: number,
+): Promise<HfJudgedScoreRow[]> {
+  return getAdapter().listHfRecentJudgedScores(accountId, sinceSec, rowCap);
+}
+
+/** v1.10.0 静默金丝雀: 账号最后一次真发出心流回复的时刻 (无则 null) */
+export async function getHfLastSentAtSec(accountId: string): Promise<number | null> {
+  return getAdapter().getHfLastSentAtSec(accountId);
 }
 
 /** v1.6.8 反事实基线素材: 每群 × 每小时段的入站人类消息数 (hour 为本地小时) */

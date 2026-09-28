@@ -4,6 +4,63 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.10.0] 心流阈值自锁修复 + 停摆可观测 (2026-09-28)
+
+> **事故**: 心流自 2026-09-26 起**彻底停摆 3 天** (生产台账 38 次判定全部 below-threshold,
+> 09-20~25 的基准是 527 条里 50 条 ≥0.6)。所有既有埋点都是绿的 —— judge 照跑、台账照写、
+> 状态页照显示"阈值 0.6"。根因是**三重自锁叠加**, 且它们都通过了当时的全部测试。
+
+### Fixed / 心流 (三重自锁)
+- **画像禁用令污染裁判** (占权重 65%): 画像生成的 `bot_role`/`summary` 写成"基本不该插话的旁观者"/
+  "不主动闲聊"这类**元指令**, 被喂进五维裁判当证据 ⇒ 离线 A/B 复放 (23 条生产消息, 原均分 0.72)
+  实测均分 **0.322**, 仅 2 条 ≥0.6。修法三处: ①生成 prompt 把 `bot_role` 的语义改为"身份与口吻"
+  并给出硬约束 (不得写否决结论); ②`stripHfMutePhrases` 在**注入前**过滤 `botRole`/`summary`
+  (话题清单 engage/avoid 不扫 —— 那是资产); ③同样文本改写成身份+口吻后复放均分 **0.669**、
+  20 条 ≥0.6, 证明画像本身是好的, 有毒的只是"禁言令"。
+- **阈值被印进裁判 prompt**: `buildHeartflowPrompt` 里 `**回复阈值**: 0.6 (综合评分达到此分数才回复)`
+  会自我锚定 (裁判向阈值靠拢, 阈值再涨)。删除该行 (A/B: 0.322→0.374; 与①叠加后 0.669)。
+- **画像 band 是无上界硬地板**: 旧码 `Math.max(base, band)` 让画像建议的 0.70/0.85/0.85/0.90
+  直接成为及格线, 高于裁判给"明显该回"档的实测上限 0.82 ⇒ 几何上不可能过阈。
+  改为 `resolveHfProfileBandEffect`: **只抬不降 + 抬升有上限** (默认 +0.10), 并在截断时打 warn。
+
+### Added / 兜底与可观测
+- **可达性天花板** (`hfReachabilityCap` + `clampHfThresholdToReachability`): sweep 每轮逐群算
+  "近 7 天判定过的最高分 + 一步", 若生效阈值高于它 ⇒ 压回 (不低于 `bandMin` 0.5)。
+  `n < minSample` 或最高分已够得着 ⇒ 不设 (冷清群本就该少说话, 不是故障)。采样不足的群不误判。
+  天花板用与 judge **完全同源**的算法算 (学习值 → 画像抬升), 告警节流 (首现/值变/每小时)。
+- **停摆金丝雀**: 新 gauge `hf_last_send_age_sec` (从未发过用 **-1** 而非 0 —— 0 会被读成"刚发过",
+  是最糟的误导方向) + counters `hf_judge_passed_total` / `hf_judge_below_total` / `hf_sends_total`
+  / `hf_reach_cap_applied_total` + gauges `hf_effective_threshold_max` / `hf_threshold_ceiling_groups`
+  / `hf_reachable_groups`, **全部预声明** (未自增的指标不出现在导出里 ⇒ "值为 0"与"埋点没接上"分不开)。
+- `/heartflow status` 改为显示**逐群生效阈值与生效预算** (含画像建议/是否被截断/天花板依据/被收紧的预算)
+  + 上次真发言距今 (≥3 天打 ⚠️), 并删掉只报账号级值的 `阈值: 0.6` 一行 (停摆期间"看起来正常"的来源)。
+  `/heartflow why` 的归因行同源。
+- **生效预算收口为唯一入口** `resolveHfEffectiveBudget` (账号档 → 画像收紧 → 占比外环, 触发门禁与状态页共用):
+  此前状态页只显示账号档 (600s/3条), 而实际生效的可能是画像压过后的 (1800s/1条) ⇒
+  "这个群为什么一天只回一条"在运维面上无法解释。
+
+### Fixed / 正确性
+- **生效阈值收口为唯一入口** `resolveHfEffectiveThreshold` (学习覆盖 → 画像有界抬升 → 可达性天花板):
+  此前 judge / 状态页 / sweep 各算一份 ⇒ 停摆期间状态页仍显示"正常 0.6"。三处各自演化迟早漂移,
+  而漂移那一刻恰好就是"看起来正常但已经死了"。
+- **批内预算闸**: 同一次 flush 内同群至多一条心流回复 (此前 `minGapSec` 只按**已落库**的发言算,
+  同批多条候选可同时通过 ⇒ 一次刷屏)。
+- **收敛标记精确到台账行**: `markHfEngaged` 加 `inbound_msg_id` 收窄。此前同群两条 `sent` 行重叠时
+  (生产 `minReplyIntervalSec=0` + `minGapSec=180` 即可满足), 一个"有人引用了我"会给**两条**都记
+  engaged=1、一句"别刷了"会**罚两条** ⇒ 样本量凭空翻倍, 学习被喂脏数据。
+- **人类消息时刻全量记录**: `noteHfHumanMessage` 从"该群有开窗"的分支里移出, 覆盖白名单内所有群
+  (旧码只有刚被回过话的 10 分钟才会记录 ⇒ "群里多久没人说话"这个观测量几乎恒为 null)。
+- **台账状态跃迁放宽**: `setHfLedgerSent` 允许 `suppressed(未发送) → sent` 补记 (去重/预算拦下的
+  占位符行此前永远停在 suppressed ⇒ 样本缺口)。
+
+### 测试状态
+- **609 tests / 607 pass / 0 fail / 2 skip** (2 skip 为显式 `# SKIP` 的 HMAC 凭据保留 test);
+  ⚠️ 另有一条 `P2-4.2 deploy openclaw.plugin.json.version = dev` 在**部署前**必红 ——
+  那是刻意留的"部署没掉队"绊索, 部署本版后自动转绿。
+- 新增 `tests/unit/heartflow-v1100-antilock.test.mjs` (26 条): 纯函数行为 / 源级接线 / **反回归不变量**
+  (无上界硬地板不得回归、阈值不得回流 prompt、阈值与预算各只有单一算法入口)。4 条旧断言钉的是被修的旧写法
+  (`Math.max(baseThreshold, profileFloor)` 等), 已按新契约改写而**不降低要求**。
+
 ## [Unreleased]
 
 > 2026-09-28 批 (接 v1.9.2, 未打 tag)。核心是**泄密事故后的脱敏闭环** + **vendor 契约全面对齐**。

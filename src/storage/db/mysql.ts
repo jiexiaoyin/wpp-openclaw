@@ -35,6 +35,7 @@ import type {
   HfSentCountRow,
   HfVetoResult,
   HfGroupStateRecord,
+  HfJudgedScoreRow,
   HfLedgerRecord,
   HfThresholdAuditRecord,
   JargonTermRecord,
@@ -1071,10 +1072,15 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       botMsgId?: string | null,
     ): Promise<void> {
       const p = getPool();
+      // v1.10.0: 允许从 'suppressed' 推进到 'sent'。原守卫只认 status='judged' ⇒ 同一条消息若先判"不过"
+      //   (落 below-threshold) 后被重判为"过"并**真的发出去**, 那次真发就落不了账 —— 不占发言预算、
+      //   不开观察窗、不进重复闸历史, 台账与实际发言不一致 (低频但会让"已发"统计偏低)。
+      //   仍然只认这两种前置状态 (且 suppressed 必须在通知后没有真发过), 不会把已 closed 的样本改回 sent。
       await queryWithTimeout(
         p,
         `UPDATE wpp_hf_ledger SET status = 'sent', sent_at = ?, window_expires_at = ?, bot_msg_id = ?
-         WHERE account_id = ? AND inbound_msg_id = ? AND status = 'judged'`,
+         WHERE account_id = ? AND inbound_msg_id = ?
+           AND (status = 'judged' OR (status = 'suppressed' AND sent_at IS NULL))`,
         [sentAtSec, windowExpiresAtSec, botMsgId ?? null, accountId, inboundMsgId],
       );
     },
@@ -1091,16 +1097,29 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
     //   close=false (弱信号 short-window) → 只记 engaged=1 + 信号, **保持** status='sent' 继续开窗,
     //     这样晚到的引用/@ 还能把它升级成强信号 (旧码一旦 engaged 就关窗, 升级无从谈起)
     //   close=true  → 落结论并关窗; WHERE 里允许覆盖 'short-window' (弱→强升级), 但不许覆盖已有强信号
-    async markHfEngaged(accountId, groupId, atSec, engaged: 0 | 1, signal: string, close: boolean): Promise<void> {
+    async markHfEngaged(
+      accountId,
+      groupId,
+      atSec,
+      engaged: 0 | 1,
+      signal: string,
+      close: boolean,
+      inboundMsgId?: string | null,
+    ): Promise<void> {
       const p = getPool();
+      // v1.10.0: 收敛**精确到行** (可选 inboundMsgId)。不传 = 保持旧的"该群所有 sent 行"语义 (兼容既有调用)。
+      //   为什么必须能精确: 同群两条 sent 行重叠时 (minGapSec < observeWindowSec 可达), 一条"有人引用了我"
+      //   会给两行都记 engaged=1, 一句负评会罚两行 —— 一条信号被算两遍, 学习样本被污染。见 HfOpenWindow 注释。
+      const rowScope = inboundMsgId ? " AND inbound_msg_id = ?" : "";
+      const rowArg: string[] = inboundMsgId ? [inboundMsgId] : [];
       if (!close) {
         await queryWithTimeout(
           p,
           `UPDATE wpp_hf_ledger SET engaged = 1, engage_signal = ?
            WHERE account_id = ? AND group_id = ? AND status = 'sent'
-             AND engage_signal IS NULL
+             AND engage_signal IS NULL${rowScope}
              AND window_expires_at IS NOT NULL AND window_expires_at > ?`,
-          [signal, accountId, groupId, atSec],
+          [signal, accountId, groupId, ...rowArg, atSec],
         );
         return;
       }
@@ -1108,9 +1127,9 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
         p,
         `UPDATE wpp_hf_ledger SET engaged = ?, engage_signal = ?, status = 'closed', closed_at = ?
          WHERE account_id = ? AND group_id = ? AND status = 'sent'
-           AND (engage_signal IS NULL OR engage_signal = 'short-window')
+           AND (engage_signal IS NULL OR engage_signal = 'short-window')${rowScope}
            AND window_expires_at IS NOT NULL AND window_expires_at > ?`,
-        [engaged, signal, atSec, accountId, groupId, atSec],
+        [engaged, signal, atSec, accountId, groupId, ...rowArg, atSec],
       );
     },
     async closeHfExpiredWindows(accountId, atSec): Promise<void> {
@@ -1219,6 +1238,45 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
         day_count: Number(r.day_count) || 0,
         last_sent_at: r.last_sent_at == null ? null : Number(r.last_sent_at),
       }));
+    },
+    // v1.10.0 可达性护栏素材: 该群近期**判过的所有分** (含已发出/已收敛, 不只 suppressed)。
+    //   为什么必须含 sent/closed 行: "发的出去"本身就是"阈值可达"的证据 —— 只取 suppressed 行的话
+    //   最高分必然低于阈值, 护栏会把每一轮都判成"不可达"而长期误压阈值。
+    //   上限 rowCap 由调用方给 (取最近 N 行): sweep 每 300s 跑一次, 不能把台账整表拉进内存。
+    async listHfRecentJudgedScores(
+      accountId,
+      sinceSec,
+      rowCap,
+    ): Promise<HfJudgedScoreRow[]> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT group_id, judge_overall
+         FROM wpp_hf_ledger
+         WHERE account_id = ? AND judged_at >= ? AND judge_overall IS NOT NULL
+         ORDER BY judged_at DESC, id DESC
+         LIMIT ?`,
+        [accountId, sinceSec, rowCap],
+      );
+      return rows.map((r) => ({
+        group_id: String(r.group_id),
+        judge_overall: Number(r.judge_overall),
+      }));
+    },
+    // v1.10.0 静默金丝雀: 账号级"最后一次真发言"时刻 (没有任何 sent/closed 行 ⇒ null)。
+    //   为什么单列一个查询: 心流的失效模式是**彻底不吭声**, 而这个事实在原来的所有指标里都看不见
+    //   (judge_calls 照涨、日志照打), 只有"距上次发言多久"能一眼看出停摆。
+    async getHfLastSentAtSec(accountId): Promise<number | null> {
+      const p = getPool();
+      const rows = await queryWithTimeout<RowDataPacket[]>(
+        p,
+        `SELECT MAX(sent_at) AS last_sent_at
+         FROM wpp_hf_ledger
+         WHERE account_id = ? AND sent_at IS NOT NULL`,
+        [accountId],
+      );
+      const v = rows[0]?.last_sent_at;
+      return v == null ? null : Number(v);
     },
     // v1.7.0 /heartflow why: 该群最近一条台账行 (只读; 判不出原因时运维就只能靠猜 —— 老板要的"为什么"落这里)
     async getHfLedgerLast(accountId, groupId): Promise<HfLedgerTrace | null> {
