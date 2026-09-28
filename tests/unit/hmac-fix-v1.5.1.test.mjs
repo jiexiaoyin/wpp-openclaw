@@ -14,6 +14,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const ROOT = '/root/dev/wechatpadpro-openclaw';
 const DEPLOY = '/root/.openclaw/extensions/wechatpadpro';
@@ -81,4 +83,73 @@ test('HMAC-fix 8: dev 端源码完整性', () => {
   assert.ok(fs.existsSync(`${ROOT}/src/core/signature.ts`), 'signature.ts 存在');
   assert.ok(fs.existsSync(`${ROOT}/src/webhook-receiver.ts`), 'webhook-receiver.ts 存在');
   assert.ok(fs.existsSync(`${ROOT}/tests/unit/hmac-fix-v1.5.1.test.mjs`), '本测试文件自身存在');
+});
+
+// ===== 2026-09-28 M5: webhookSecret 改 env-wins (与 tokenKey/authcode 对齐) =====
+// 行为级验证 (非源码文本断言): 真调 dist/config.js 的 loadAccountConfig, 走 accounts/<id>.json 读盘路径。
+// 用临时账号文件 (测试结束 finally 删除), 不碰真实 default 账号。
+const CFG = await import(pathToFileURL(join(ROOT, 'dist/config.js')).href);
+const TMP_ACCOUNT_ID = `whtest${process.pid}`; // 满足 /^[a-zA-Z0-9_-]{1,64}$/
+const TMP_ACCOUNT_FILE = join(ROOT, 'accounts', `${TMP_ACCOUNT_ID}.json`);
+const TMP_ENV_NAME = `WPP_TEST_WEBHOOK_SECRET_${process.pid}`;
+
+/** 写临时账号文件 + 清缓存; 返回清理函数。nickname 必须存在, 否则 loadAccountConfig 的
+ *  cache 分支判据 `"nickname" in cached` 不成立 → 会重走读盘路径 (测不到 cache 层)。 */
+function withTmpAccount(overrides) {
+  fs.writeFileSync(
+    TMP_ACCOUNT_FILE,
+    JSON.stringify({
+      apiBaseUrl: 'http://127.0.0.1:1',
+      wsUrl: 'ws://127.0.0.1:1',
+      nickname: 'whtest',
+      webhookSecretEnv: TMP_ENV_NAME,
+      ...overrides,
+    }),
+  );
+  CFG.invalidateConfigCache(TMP_ACCOUNT_ID);
+  return () => {
+    try {
+      fs.rmSync(TMP_ACCOUNT_FILE, { force: true });
+    } catch {
+      /* ignore */
+    }
+    delete process.env[TMP_ENV_NAME];
+    CFG.invalidateConfigCache(TMP_ACCOUNT_ID);
+  };
+}
+
+test('webhookSecret env-wins 1: env 与 raw 同时存在时 env 胜出', async () => {
+  const cleanup = withTmpAccount({ webhookSecret: 'raw-secret' });
+  try {
+    process.env[TMP_ENV_NAME] = 'env-secret';
+    const cfg = await CFG.loadAccountConfig(TMP_ACCOUNT_ID);
+    assert.strictEqual(cfg.webhookSecret, 'env-secret', '同时存在时 env 必须胜出 (M5 env-wins)');
+  } finally {
+    cleanup();
+  }
+});
+
+test('webhookSecret env-wins 2: 只有 raw 时取 raw', async () => {
+  const cleanup = withTmpAccount({ webhookSecret: 'raw-only' });
+  try {
+    delete process.env[TMP_ENV_NAME]; // env 不存在
+    const cfg = await CFG.loadAccountConfig(TMP_ACCOUNT_ID);
+    assert.strictEqual(cfg.webhookSecret, 'raw-only', 'env 缺失时必须取 raw');
+  } finally {
+    cleanup();
+  }
+});
+
+test('webhookSecret env-wins 3: cache 层同样 env-wins (与读取层不分叉)', async () => {
+  const cleanup = withTmpAccount({ webhookSecret: 'raw-secret' });
+  try {
+    delete process.env[TMP_ENV_NAME];
+    const first = await CFG.loadAccountConfig(TMP_ACCOUNT_ID); // 首次读盘 → 填 cache, raw 生效
+    assert.strictEqual(first.webhookSecret, 'raw-secret', '首次 (读盘路径) 应为 raw');
+    process.env[TMP_ENV_NAME] = 'env-secret';
+    const second = await CFG.loadAccountConfig(TMP_ACCOUNT_ID); // 命中 cache 分支
+    assert.strictEqual(second.webhookSecret, 'env-secret', 'cache 层必须同样 env-wins (config.ts:134)');
+  } finally {
+    cleanup();
+  }
 });

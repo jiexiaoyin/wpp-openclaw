@@ -117,7 +117,8 @@ export function resolveAccount(_cfg: unknown, accountId?: string | null): WppRes
     if (envAuth) raw.authcode = envAuth;
   }
   // v1.3.18 B-8 fix: webhookSecretEnv 真接入 (OpenClaw resolveAccount 是它取 secret 的路径)
-  if (typeof raw.webhookSecretEnv === "string" && raw.webhookSecretEnv && !raw.webhookSecret) {
+  // 2026-09-28 M5 fix: env-wins (去掉 `&& !raw.webhookSecret`), 与 config.ts disk/cache 两层一致
+  if (typeof raw.webhookSecretEnv === "string" && raw.webhookSecretEnv) {
     const envSecret = process.env[raw.webhookSecretEnv];
     if (envSecret) raw.webhookSecret = envSecret;
   }

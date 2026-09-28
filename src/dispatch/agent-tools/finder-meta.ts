@@ -1,6 +1,7 @@
 // src/dispatch/agent-tools/finder-meta.ts - Finder tag (15)
 // v1.3.18 P1-核心1 fix (2026-08-10): 改成 lazy-evaluate ctx 模式
-// 注: follow/like/comment/finderLiveDetail 等与 api 签名差异保留 — 跟原版一样 (meta schema 描述与 api 实际参数不一致是历史问题)
+// 2026-09-28: getRecommend/follow/like 三处已按 vendor swagger 重写 schema (原先的 page/operation
+//   /objectId/finderId 不是 vendor 字段且从不透传); comment/finderLiveDetail 等其余差异仍在 (历史问题, 未动).
 
 import { Type } from "typebox";
 import type { ToolMeta } from "./_shared.js";
@@ -26,29 +27,79 @@ export const FINDER_META: ToolMeta = {
     Type.Object({ keyword: Type.String() }),
     (keyword: string) => getFinderApi().search(keyword),
   ],
-  /** /Finder/GetRecommend */
+  /**
+   * /Finder/GetRecommend — 视频号推荐流.
+   * vendor Finder.GetRecommendParamDoc: {FinderEnt, FinderUsername, Latitude, Longitude,
+   *   PullType, SpecialRequestScene, TabTipsObjectId} (无 required).
+   * 旧的 `page` 不是 vendor 字段 (从不透传) → 删除.
+   */
   getFinderRecommend: [
-    "获取视频号推荐流.",
-    Type.Object({ page: Type.Optional(Type.Number()) }),
-    () => getFinderApi().getRecommend(),
+    "获取视频号推荐流. 无位置信息时 latitude/longitude 传 0; 无企业号/当前号时对应字段留空.",
+    Type.Object({
+      finderEnt: Type.Optional(Type.String({ description: "企业视频号标识; 无时留空" })),
+      finderUsername: Type.Optional(Type.String({ description: "当前视频号 username; 无时留空" })),
+      latitude: Type.Optional(Type.Number({ description: "纬度整数值; 无位置时传 0" })),
+      longitude: Type.Optional(Type.Number({ description: "经度整数值; 无位置时传 0" })),
+      pullType: Type.Optional(Type.Number({ description: "拉取类型 (vendor example 1)" })),
+      specialRequestScene: Type.Optional(Type.Number({ description: "特殊请求场景; 默认 0" })),
+      tabTipsObjectId: Type.Optional(Type.Number({ description: "标签页内容 ID; 默认 0" })),
+    }),
+    (
+      finderEnt?: string, finderUsername?: string, latitude?: number, longitude?: number,
+      pullType?: number, specialRequestScene?: number, tabTipsObjectId?: number,
+    ) => getFinderApi().getRecommend({
+      finderEnt, finderUsername, latitude, longitude,
+      pullType, specialRequestScene, tabTipsObjectId,
+    }),
   ],
-  /** /Finder/Follow */
+  /**
+   * /Finder/Follow — 关注/取消关注视频号用户.
+   * vendor Finder.FollowParamDoc: {FinderUsername, OpType, Userver} (无 required).
+   * 旧的 `operation: follow|unfollow` 不是 vendor 字段 (从不透传) → 删除;
+   *   关注/取关改由 opType (vendor「关注操作类型」) 表达.
+   */
   followFinderUser: [
-    "关注视频号用户. operation: follow|unfollow.",
+    "关注/取消关注视频号用户. finderUsername=视频号 username; opType=关注操作类型 (vendor example 1); " +
+      "userver=对方版本标识, 优先填上一响应返回的值.",
     Type.Object({
-      finderId: Type.String(),
-      operation: Type.Union([Type.Literal("follow"), Type.Literal("unfollow")]),
+      finderUsername: Type.String({ description: "视频号 username (来自 Search/上一响应)" }),
+      opType: Type.Optional(Type.Number({ description: "关注操作类型 (vendor example 1)" })),
+      userver: Type.Optional(Type.Number({ description: "对方版本标识; 优先使用上一响应的值 (vendor example 1)" })),
     }),
-    (finderId: string) => getFinderApi().follow(finderId),
+    (finderUsername: string, opType?: number, userver?: number) =>
+      getFinderApi().follow(finderUsername, opType, userver),
   ],
-  /** /Finder/Like */
+  /**
+   * /Finder/Like — 点赞/取消点赞视频号内容.
+   * vendor Finder.LikeParamDoc: 10 字段, swagger 未声明 required.
+   * 必填取 Id + FinderUsername (定位内容所必需): 两者缺失时「赞哪条内容/赞谁的内容」无法确定.
+   * 其余按 vendor 描述可选 (CommentId/LikeId「留空」, LikeUsername「默认当前账号」, 计数/场景默认 0/example).
+   * 旧的 `objectId` / `operation` 不是 vendor 字段 (从不透传) → 删除.
+   */
   likeFinderPost: [
-    "点赞视频号内容. operation: like|unlike.",
+    "点赞/取消点赞视频号内容. 必填 id (内容 ID) + finderUsername (内容作者 username); " +
+      "objectNonceId=内容响应里的业务凭据; opType=操作类型 (vendor example 1); " +
+      "commentId/likeId 留空 (点赞内容/首次点赞时), likeUsername 留空=默认当前账号.",
     Type.Object({
-      objectId: Type.String(),
-      operation: Type.Union([Type.Literal("like"), Type.Literal("unlike")]),
+      id: Type.String({ description: "内容 ID (vendor Id, example '123456789')" }),
+      finderUsername: Type.String({ description: "内容作者 username" }),
+      commentId: Type.Optional(Type.String({ description: "评论 ID; 点赞内容时留空" })),
+      curLikeCount: Type.Optional(Type.Number({ description: "当前点赞数 (vendor example 0)" })),
+      likeId: Type.Optional(Type.String({ description: "已有点赞 ID; 首次点赞留空" })),
+      likeUsername: Type.Optional(Type.String({ description: "点赞用户 username; 留空=默认当前账号" })),
+      objectNonceId: Type.Optional(Type.String({ description: "内容响应中的业务凭据" })),
+      opType: Type.Optional(Type.Number({ description: "操作类型 (vendor example 1)" })),
+      scene: Type.Optional(Type.Number({ description: "内容来源场景 (vendor example 1)" })),
+      sessionBuffer: Type.Optional(Type.String({ description: "内容响应中的会话凭据" })),
     }),
-    (objectId: string) => getFinderApi().like(objectId),
+    (
+      id: string, finderUsername: string, commentId?: string, curLikeCount?: number,
+      likeId?: string, likeUsername?: string, objectNonceId?: string,
+      opType?: number, scene?: number, sessionBuffer?: string,
+    ) => getFinderApi().like({
+      id, finderUsername, commentId, curLikeCount, likeId,
+      likeUsername, objectNonceId, opType, scene, sessionBuffer,
+    }),
   ],
   /** /Finder/Comment */
   commentFinderPost: [

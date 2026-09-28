@@ -51,9 +51,13 @@ export function makeWppFinder(ctx: WppAccountCtx) {
     finderGetTopicList: (topTitle = "", lastBuffer = "") =>
       dispatch("/Finder/Findergettopiclist", { TopTitle: topTitle, LastBuffer: lastBuffer }),
 
-    /** /Finder/Follow — 关注 (DefaultParamDoc, 通过 query/header 携带 finderId) */
-    follow: (finderId: string) =>
-      dispatch("/Finder/Follow", { finderId }),
+    /**
+     * /Finder/Follow — 关注/取消关注视频号用户.
+     * vendor Finder.FollowParamDoc (v09102): {FinderUsername, OpType, Userver}.
+     * OpType/Userver 未给默认以外的语义, 缺省取 vendor example 值 1 (调用方应尽量传上一响应的 userver).
+     */
+    follow: (finderUsername: string, opType = 1, userver = 1) =>
+      dispatch("/Finder/Follow", { FinderUsername: finderUsername, OpType: opType, Userver: userver }),
 
     /** /Finder/GetCommentDetail — 评论详情 (v1.2.1 swagger-alignment: GetCommentDetailParamDoc {FinderUsername, Id, LastBuffer, ObjectNonceId, RootCommentId}) */
     getCommentDetail: (finderUsername: string, id: string, rootCommentId = "") =>
@@ -69,12 +73,48 @@ export function makeWppFinder(ctx: WppAccountCtx) {
     getCommentList: (finderId: string, rootCommentId = "") =>
       dispatch("/Finder/GetCommentList", { Id: finderId, RootCommentId: rootCommentId }),
 
-    /** /Finder/GetRecommend — 推荐 */
-    getRecommend: () => dispatch("/Finder/GetRecommend", {}),
+    /**
+     * /Finder/GetRecommend — 推荐流.
+     * vendor Finder.GetRecommendParamDoc (v09102): {FinderEnt, FinderUsername, Latitude, Longitude,
+     *   PullType, SpecialRequestScene, TabTipsObjectId}; 无位置时 Lat/Long 传 0, 企业号/当前号无则留空.
+     * 全字段随 body 发出 (与 comment/getCommentDetail 同风格), 缺省取 vendor 描述值.
+     */
+    getRecommend: (opt?: {
+      finderEnt?: string; finderUsername?: string; latitude?: number; longitude?: number;
+      pullType?: number; specialRequestScene?: number; tabTipsObjectId?: number;
+    }) =>
+      dispatch("/Finder/GetRecommend", {
+        FinderEnt: opt?.finderEnt ?? "",
+        FinderUsername: opt?.finderUsername ?? "",
+        Latitude: opt?.latitude ?? 0,
+        Longitude: opt?.longitude ?? 0,
+        PullType: opt?.pullType ?? 1,
+        SpecialRequestScene: opt?.specialRequestScene ?? 0,
+        TabTipsObjectId: opt?.tabTipsObjectId ?? 0,
+      }),
 
-    /** /Finder/Like — 点赞 */
-    like: (finderId: string) =>
-      dispatch("/Finder/Like", { Id: finderId }),
+    /**
+     * /Finder/Like — 点赞/取消点赞内容.
+     * vendor Finder.LikeParamDoc (v09102) 10 字段 (swagger 未声明 required).
+     * 必填 Id + FinderUsername (定位内容所必需); 其余「留空/默认」按 vendor 描述取空串或 example 值.
+     */
+    like: (opt: {
+      id: string; finderUsername: string;
+      commentId?: string; curLikeCount?: number; likeId?: string; likeUsername?: string;
+      objectNonceId?: string; opType?: number; scene?: number; sessionBuffer?: string;
+    }) =>
+      dispatch("/Finder/Like", {
+        Id: opt.id,
+        FinderUsername: opt.finderUsername,
+        CommentId: opt.commentId ?? "",
+        CurLikeCount: opt.curLikeCount ?? 0,
+        LikeId: opt.likeId ?? "",
+        LikeUsername: opt.likeUsername ?? "",
+        ObjectNonceId: opt.objectNonceId ?? "",
+        OpType: opt.opType ?? 1,
+        Scene: opt.scene ?? 1,
+        SessionBuffer: opt.sessionBuffer ?? "",
+      }),
 
     /** /Finder/Search — 用户搜索 */
     search: (keyword: string) => dispatch("/Finder/Search", { keyword }),
