@@ -234,6 +234,19 @@ async function applyMigrations(pool: Pool): Promise<void> {
     "ts",
   ]);
 
+  // ---- 心流台账 (wpp_hf_ledger) 时间列索引 (2026-09-28 审阅发现) ----
+  //   该表的 5 处热查询全部按 (account_id + 时间列) 过滤/排序, 而 judged_at/sent_at/
+  //   closed_at 上此前**没有任何索引** -> 每条都走 filesort/全扫段:
+  //     mysql.ts:930  WHERE account_id=? AND judged_at >= ? GROUP BY status
+  //     mysql.ts:954  WHERE account_id=? AND status='closed' AND judged_at >= ?
+  //     mysql.ts:1039 WHERE account_id=? AND status='judged' AND judged_at <= ?
+  //     mysql.ts:1049 ORDER BY closed_at DESC LIMIT ?
+  //     mysql.ts:1110 WHERE account_id=? AND sent_at IS NOT NULL AND sent_at >= ?
+  //   复合前缀与查询一致 (account_id 先, 时间列后), 纯增量无数据风险。
+  await ensureIndex(pool, "wpp_hf_ledger", "idx_hf_judged", ["account_id", "judged_at"]);
+  await ensureIndex(pool, "wpp_hf_ledger", "idx_hf_sent", ["account_id", "sent_at"]);
+  await ensureIndex(pool, "wpp_hf_ledger", "idx_hf_closed", ["account_id", "closed_at"]);
+
   // 引用消息 svrid 映射表: 微信 svrid 无法主动获取, 只能从"别人引用该消息"的 refermsg.svrid 被动捕获
   await pool.query(`
     CREATE TABLE IF NOT EXISTS wpp_svrid_mapping (
