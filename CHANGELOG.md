@@ -4,6 +4,33 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [Unreleased]
+
+> 2026-09-28 批 (接 v1.9.2, 未打 tag)。核心是**泄密事故后的脱敏闭环** + **vendor 契约全面对齐**。
+
+### Security / 脱敏闭环
+- node_modules 脱离 git 跟踪 (`16def9e`, 12,570 文件) + 补 `.gitignore` 规则。
+- 补 tag 扫描门 (`9db61fa`) — 修 2026-09-26 重写的检测盲区; master 快照补排除 dist/ 与 src/*.js (`be4689b`)。
+- 修 `.gitignore` 9 条规则行尾注释被当成模式一部分而失效 (`2d10ac5`)。
+
+### Fixed / vendor-contract 对齐
+- 按 swagger 重写 19 个 finder 工具 schema + body (`24dd49c`/`97ce9d4`/`55c8d44`/`6a5b4a3`), webhookSecret 改 env-wins。
+- 修 22 处 tool 参数错位 + MCP transport 泄漏 (`cc88a4a`)。
+
+### Fixed / DB
+- 9 处 DDL 补显式 COLLATE 止血 collation 漂移 (`6a5fa63`), 7 处「禁止 JOIN」注释更新 (`43bc248`)。
+- wpp_messages 双 id 缺失时的应用层去重 + 两张表补进 schema.sql (`287e4f2`); 补 wpp_hf_ledger 时间列索引修 5 处 filesort (`de99611`)。
+
+### Fixed / 其他
+- `stringifyLargeInts` 从正则改为结构化扫描, 消除形态依赖漂移 (`1fde4bb`)。
+- 声明构建工具链 + 提交 lockfile 修复构建不可复现 (`cb63352`); 清理失效 tsconfig exclude + metrics 死判断 (`5d93d56`)。
+
+### Feat / OpenClaw 契约
+- wppChannelPlugin 全量契约对齐 (`satisfies ChannelPlugin` 零错误, `f35a4ce`/`14b1e24`)。
+
+### 测试状态
+- **340 tests / 338 pass / 0 fail / 2 skip** (2 skip 为显式 `# SKIP` 的 HMAC 凭据保留 test)。
+
 ## [v1.9.2] 收窄红包关键词: 纯文本提到"红包"不再被静默 (2026-09-27)
 
 > 接 v1.9.1 同批 (老板拍板"一并收窄"), 与 v1.9.1 一次部署。v1.9.1 修的是**接龙被吞**,

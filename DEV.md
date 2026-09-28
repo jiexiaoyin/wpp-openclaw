@@ -2,7 +2,7 @@
 
 > **当前基线: v1.9.x** · 源码见 [README.md](./README.md) · 使用见 [USAGE.md](./USAGE.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
 
-面向接开发本插件（v1.5.x）的代码结构、构建、测试与多端同步说明。生产部署者在走 `build-release.sh`，开发者在本仓库改源码时以此为准。
+面向接开发本插件（v1.9.2）的代码结构、构建、测试与多端同步说明。生产部署者在走 `build-release.sh`，开发者在本仓库改源码时以此为准。
 
 ---
 
@@ -53,7 +53,7 @@ node --test tests/unit/*.test.mjs    # 全量
 npm run test:single -- <file>        # 单个
 ```
 
-当前基线: **324 pass / 0 fail / 2 skip**（326 tests；随版本演进, 以 `node --test tests/unit/*.test.mjs` 实跑为准）（2 skip 为显式 `# SKIP` 的 HMAC 凭据保留 test）。
+当前基线: **338 pass / 0 fail / 2 skip**（340 tests；随版本演进, 以 `node --test tests/unit/*.test.mjs` 实跑为准）（2 skip 为显式 `# SKIP` 的 HMAC 凭据保留 test）。
 
 测试分两类：
 1. **运行时/集成** — 直接 import src 逻辑跑断言（如 heartflow-learn、send-group）。

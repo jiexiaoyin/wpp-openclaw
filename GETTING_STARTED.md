@@ -77,7 +77,7 @@ docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
 
 # 3. 验证 (端口是宿主机端口)
 curl http://127.0.0.1:18062          # HTTP API
-curl http://127.0.0.1:18062/swagger/  # 313 个 API 文档
+curl http://127.0.0.1:18062/swagger/  # 323 个 API 文档
 ```
 
 ### 2.0.1 人脸认证 + iPad 扫码登录 (首次必做)
