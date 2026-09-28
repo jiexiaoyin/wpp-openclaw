@@ -23,67 +23,67 @@ export const SEARCH_META: ToolMeta = {
   searchAll: [
     "微信综合搜索 (文章/公众号/小程序一起).",
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
-    (query: string) => getSearchApi().all(query),
+    (query: string, cursor?: string, limit?: number) => getSearchApi().all(query, cursor ?? "", limit ?? 20),
   ],
   /** /Search/Articles */
   searchArticles: [
     "公众号文章搜索.",
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
-    (query: string) => getSearchApi().articles(query),
+    (query: string, cursor?: string, limit?: number) => getSearchApi().articles(query, cursor ?? "", limit ?? 20),
   ],
   /** /Search/OfficialAccounts */
   searchOfficialAccounts: [
     "公众号与账号搜索.",
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
-    (query: string) => getSearchApi().officialAccounts(query),
+    (query: string, cursor?: string, limit?: number) => getSearchApi().officialAccounts(query, cursor ?? "", limit ?? 20),
   ],
   /** /Search/MiniPrograms */
   searchMiniPrograms: [
     "小程序搜索.",
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
-    (query: string) => getSearchApi().miniPrograms(query),
+    (query: string, cursor?: string, limit?: number) => getSearchApi().miniPrograms(query, cursor ?? "", limit ?? 20),
   ],
   /** /Search/Channels */
   searchChannels: [
     "视频号内容搜索.",
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
-    (query: string) => getSearchApi().channels(query),
+    (query: string, cursor?: string, limit?: number) => getSearchApi().channels(query, cursor ?? "", limit ?? 20),
   ],
   /** /Search/Moments */
   searchMoments: [
     "朋友圈搜索.",
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
-    (query: string) => getSearchApi().moments(query),
+    (query: string, cursor?: string, limit?: number) => getSearchApi().moments(query, cursor ?? "", limit ?? 20),
   ],
   /** /Search/Images */
   searchImages: [
     "图片搜索.",
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
-    (query: string) => getSearchApi().images(query),
+    (query: string, cursor?: string, limit?: number) => getSearchApi().images(query, cursor ?? "", limit ?? 20),
   ],
   /** /Search/News */
   searchNews: [
     "新闻搜索.",
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
-    (query: string) => getSearchApi().news(query),
+    (query: string, cursor?: string, limit?: number) => getSearchApi().news(query, cursor ?? "", limit ?? 20),
   ],
   /** /Search/Baike */
   searchBaike: [
     "百科搜索.",
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
-    (query: string) => getSearchApi().baike(query),
+    (query: string, cursor?: string, limit?: number) => getSearchApi().baike(query, cursor ?? "", limit ?? 20),
   ],
   /** /Search/Books */
   searchBooks: [
     "读书搜索.",
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
-    (query: string) => getSearchApi().books(query),
+    (query: string, cursor?: string, limit?: number) => getSearchApi().books(query, cursor ?? "", limit ?? 20),
   ],
   /** /Search/Emoji */
   searchEmoji: [
     "表情搜索 (可分页).",
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
-    (query: string) => getSearchApi().emoji(query),
+    (query: string, cursor?: string, limit?: number) => getSearchApi().emoji(query, cursor ?? "", limit ?? 20),
   ],
   /** /Search/AI */
   searchAI: [
@@ -94,7 +94,8 @@ export const SEARCH_META: ToolMeta = {
       sessionId: Type.Optional(Type.String()),
       turn: Type.Optional(Type.Number()),
     }),
-    (query: string) => getSearchApi().ai(query),
+    (query: string, model?: string, sessionId?: string, turn?: number) =>
+      getSearchApi().ai(query, { model, sessionId, turn }),
   ],
   // ===== v1.3.25 SWAGGER-254: 新增 5 个通用搜索 =====
 

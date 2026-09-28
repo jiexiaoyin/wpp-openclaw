@@ -142,7 +142,7 @@ export const USER_META: ToolMeta = {
       qr_code: Type.Optional(Type.Boolean()),
       contact_card: Type.Optional(Type.Boolean()),
     }),
-    (opts: { phone?: boolean; wechat_id?: boolean; group_chat?: boolean; qr_code?: boolean; contact_card?: boolean }) =>
-      getUserApi().addMeMethods(opts),
+    (phone?: boolean, wechat_id?: boolean, group_chat?: boolean, qr_code?: boolean, contact_card?: boolean) =>
+      getUserApi().addMeMethods({ phone, wechat_id, group_chat, qr_code, contact_card }),
   ],
 };

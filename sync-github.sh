@@ -19,6 +19,7 @@
 #      而它在公开仓 master 分支 ⇒ 公开仓被自己人泄了 62 个提交。任何"要发布的文件"都不得内联敏感串。
 #
 # 前置: build-release.sh 的脱敏校验通过 + 两个分支的快照都过 sanitize-source.sh --check (有残留 exit 1)
+#       + 镜像仓的**所有 tag** 都过 sanitize-source.sh --check-tags (STRICT; 2026-09-28 接线)
 #       新建的提交还要过 tools/check-commit-metadata.sh (作者/提交者邮箱, 不看文件内容)
 # 凭证: 走 git credential store (jiexiaoyin token)
 
@@ -130,6 +131,19 @@ rsync -a --delete --exclude=.git "$DEV_DIR/release/" "$MIRROR_DIR/"
 
 # 上传前最终敏感扫描 (双保险): 规则外置, 无豁免清单 (v1.6.8 起 --check 覆盖全树)
 WPP_SANITIZE_STRICT=1 bash "$SANITIZER" --check "$MIRROR_DIR" || { echo "✗ 敏感残留, 阻止上传"; exit 1; }
+
+# 上传前 tag 校验 (2026-09-28 接线): 分支 tip 干净 != tag 干净.
+#   2026-09-26 的历史重写只重写了 master **分支**, tag 从未重写 ⇒ 5 个公开 tag
+#   (v1.4.0/v1.4.1/v1.4.2/v1.5.0/v1.5.4-complete) 仍指向含明文 API key 的旧提交.
+#   而三层出口门 (pre-commit / 本脚本 / check-commit-metadata) 扫的都是工作树与分支,
+#   没有任何一层扫 tag —— 9db61fa 补了这道门, 但**从未接线**, 等于没加.
+#   ⚠️ 必须 STRICT: CHANGELOG.md 的豁免是 **dev 提交门** 的策略
+#      (tools/sanitize-exempt.txt 自己写明「发布路径由 STRICT 模式强制脱敏, 不可依赖本条豁免」),
+#      而 CHANGELOG.md 恰好是公开 tag 树里唯一携带真实格式密钥的文件 —— 实测对同一镜像仓:
+#        非 STRICT: v1.4.1/v1.4.2/v1.5.0/v1.5.4-complete 命中 sync-github.sh/openclaw.plugin.json
+#        STRICT   : 同样 4 个 tag 改命中 CHANGELOG.md (豁免若生效则这 4 处被静默放行)
+#   STRICT 通过环境变量传递给 --check-tags 内部的递归 --check (已实测继承).
+WPP_SANITIZE_STRICT=1 bash "$SANITIZER" --check-tags "$MIRROR_DIR" || { echo "✗ tag 敏感残留, 阻止上传"; exit 1; }
 
 git add -A
 if git diff --cached --quiet; then

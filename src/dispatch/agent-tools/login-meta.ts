@@ -108,8 +108,8 @@ export const LOGIN_META: ToolMeta = {
       deviceName: Type.Optional(Type.String()),
       oversea: Type.Optional(Type.Boolean()),
     }),
-    (opts: { deviceName?: string; oversea?: boolean }) =>
-      getLoginApi().loginGetQRPadCloud(opts.deviceName ?? "我的 iPad", opts.oversea ?? false),
+    (deviceName?: string, oversea?: boolean) =>
+      getLoginApi().loginGetQRPadCloud(deviceName ?? "我的 iPad", oversea ?? false),
   ],
   /** /Login/GetQRPadPPMT — 获取二维码 Pad PPMT (v1.3.67) */
   loginGetQRPadPPMT: [
@@ -118,8 +118,8 @@ export const LOGIN_META: ToolMeta = {
       deviceName: Type.Optional(Type.String()),
       oversea: Type.Optional(Type.Boolean()),
     }),
-    (opts: { deviceName?: string; oversea?: boolean }) =>
-      getLoginApi().loginGetQRPadPPMT(opts.deviceName ?? "我的 iPad", opts.oversea ?? false),
+    (deviceName?: string, oversea?: boolean) =>
+      getLoginApi().loginGetQRPadPPMT(deviceName ?? "我的 iPad", oversea ?? false),
   ],
   /** /Login/62dataQRCodeVerify — 62 数据二维码验证 (v1.3.67) */
   login62dataQRCodeVerify: [

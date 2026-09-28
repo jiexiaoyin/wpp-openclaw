@@ -65,15 +65,26 @@ export async function connectMcpClient(accountId?: string): Promise<boolean> {
   if (existing?.connectPromise) return existing.connectPromise;
 
   const entry: McpConn = { client: null as never, transport: null as never, token, connectedAt: 0, connectPromise: null };
+  // ⚠️ 顺序关键 (2026-09-28 修): 旧 entry 必须**在这行 set 之前**取出 (existing),
+  //   并在下面 IIFE 里 close —— 不能用 _conns.get(key) 在 IIFE 里取, 因为 set 已经
+  //   把 Map 里的旧引用覆盖掉, 覆盖后旧 transport 连 disconnectMcpClient() 也够不到,
+  //   那条 SSE 连接就永久泄漏 (实测: 重连后旧 transport 的 close 状态为 false,
+  //   disconnectMcpClient() 跑完仍是 false).
+  //   原实现的 bug: IIFE 里检查的是 `entry` —— 即上面刚 new 出来的这个对象,
+  //   其 transport/client 恒为 null ⇒ 两个 if 分支是死代码, 从未 close 过任何旧连接.
+  //   这里仍然**先 set 再 await**: set + connectPromise 赋值必须是同步的, 否则在
+  //   `await close` 的间隙里并发调用者会看到 Map 为空而重复建连 (丢失去重).
   _conns.set(key, entry);
   entry.connectPromise = (async () => {
     try {
       // v1.2.1 P2-fix: 重连前 close 旧 transport (防 SSE 连接每 5 分钟泄漏)
-      if (entry.transport) {
-        try { await entry.transport.close(); } catch { /* ignore */ }
-      }
-      if (entry.client) {
-        try { await entry.client.close(); } catch { /* ignore */ }
+      if (existing) {
+        if (existing.transport) {
+          try { await existing.transport.close(); } catch { /* ignore */ }
+        }
+        if (existing.client) {
+          try { await existing.client.close(); } catch { /* ignore */ }
+        }
       }
       const transport = new StreamableHTTPClientTransport(
         new URL(MCP_BASE_URL),

@@ -150,8 +150,8 @@ export const FINDER_META: ToolMeta = {
       loop: Type.Optional(Type.Boolean()),
       playSeconds: Type.Optional(Type.Number({ description: "播放秒数, 0=不限" })),
     }),
-    (opts: { objectId?: string; finderUsername?: string; playUrl?: string; loop?: boolean; playSeconds?: number }) =>
-      getFinderApi().playVideo(opts),
+    (objectId?: string, finderUsername?: string, playUrl?: string, loop?: boolean, playSeconds?: number) =>
+      getFinderApi().playVideo({ objectId, finderUsername, playUrl, loop, playSeconds }),
   ],
   /** /Finder/PlayVideoStop — 停止视频播放 (v1.3.67 新 API) */
   playVideoStop: [
