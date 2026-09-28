@@ -11,6 +11,12 @@ import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { info, warn, error, formatErr } from "../../core/logger.js";
 import { findPluginRoot } from "../../core/paths.js";
+import {
+  rowToAccount,
+  rowToHfGroupProfile,
+  rowToHfGroupState,
+  rowToMessage,
+} from "./row-mappers.js";
 import type {
   AccountRecord,
   ApiCallRecord,
@@ -417,7 +423,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
   // v1.7.0 群画像 (1 行/群): 每日一次 LLM 生成的结构化画像 + 生成时的统计快照.
   //   用途 = 给 judge prompt 注入"这个群是什么群、bot 在这里该怎么说话"(老板 2026-09-26 要的"应景").
   //   画像只**收紧**约束 (更克制的阈值/更小的预算), 不许放开 —— 见 heartflow-profile.ts 的钳制函数.
-  //   单表读写 (不 JOIN wpp_messages —— 两者 collation 不同, 见 listHfGroupMsgHourBuckets 的警告).
+  //   单表读写 (不 JOIN wpp_messages —— 历史限制, 见 listHfGroupMsgHourBuckets 的警告).  // 2026-09-28 历史: collation 已统一为 utf8mb4_unicode_ci, 此限制已解除; 保留单表读写作代码组织选择.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS wpp_hf_group_profile (
       account_id VARCHAR(64) NOT NULL,
@@ -437,7 +443,7 @@ async function applyMigrations(pool: Pool): Promise<void> {
   // v1.8.0 分层统计 (群 × 时段, 1 行/群/段): **每轮 sweep 全量重算后的快照**, 不是累加器.
   //   n/engaged 只反映 windowDays 窗口内的可采信样本; 不做增量累加 (累加不幂等: sweep 每 300s 一次,
   //   同一批行会被重复计入 ⇒ n 一小时虚涨 12 倍且永不收敛) —— 见 heartflow-layer.ts 文件头.
-  //   新表 (不是给旧表加列) ⇒ 不需要 ensureColumn; 单表读写, 不与 wpp_messages JOIN.
+  //   新表 (不是给旧表加列) ⇒ 不需要 ensureColumn; 单表读写, 不与 wpp_messages JOIN.  // 2026-09-28 历史: collation 已统一为 utf8mb4_unicode_ci, 此限制已解除; 保留单表读写作代码组织选择.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS wpp_hf_layer_stat (
       account_id VARCHAR(64) NOT NULL,
@@ -1158,8 +1164,9 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
     //   (之后的出站/入站行该列全 NULL). 把它当秒用会把那些行排到公元 643000 年 ⇒ 分桶/排序/窗口全错,
     //   且**不报错**. 当前窗口 (≤30 天) 恰好够不到它们, 属于"埋着的雷", 故一并拆掉.
     //   ⚠️ **单表查询**是有意的: wpp_messages 是 utf8mb4_unicode_ci, 而 wpp_hf_* 三表是 MariaDB 11
-    //   默认的 utf8mb4_uca1400_ai_ci (2026-09-26 生产实测 wpp_messages.chat_id JOIN wpp_hf_ledger.group_id
-    //   直接报 "Illegal mix of collations"). 将来若要跨表 JOIN, 被比较的两列都必须显式 COLLATE 到同一侧.
+    //   2026-09-26 历史: 当时 MariaDB 11 schema 默认 utf8mb4_uca1400_ai_ci, 实测 wpp_messages.chat_id JOIN
+    //   wpp_hf_ledger.group_id 直接报 "Illegal mix of collations". 同年 09-28 已 ALTER DATABASE +
+    //   CONVERT TO 把 5 张存量表统一到 utf8mb4_unicode_ci, 此警告的前提已不存在; 新表 DDL 也已硬编码 COLLATE.
     async listHfGroupMsgHourBuckets(
       accountId,
       sinceSec,
@@ -1310,7 +1317,8 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
     //   口径与 listHfGroupMsgHourBuckets 一致: peer_kind='group' + direction='inbound' (排除 bot 自己的出站),
     //   时间走 UNIX_TIMESTAMP(ts) (绝对 epoch) 并加 localOffsetSec 偏移后取本地小时/日.
     //   ⚠️ 同 listHfGroupMsgHourBuckets: 不得用 create_time (遗留死列, 值是 YYYYMMDDHHMMSS 不是 epoch).
-    //   ⚠️ 不 JOIN wpp_hf_* : wpp_messages 是 utf8mb4_unicode_ci, wpp_hf_* 是 utf8mb4_uca1400_ai_ci ⇒ 跨表报错.
+    //   历史: wpp_messages 是 utf8mb4_unicode_ci, wpp_hf_* 当时是 utf8mb4_uca1400_ai_ci ⇒ 跨表报错.
+    //   2026-09-28 已统一, 此限制解除; 保留单表读写作组织选择.
     async getHfGroupMessageStats(accountId, groupId, sinceSec): Promise<HfGroupMsgStats> {
       const p = getPool();
       const localOffsetSec = -new Date(sinceSec * 1000).getTimezoneOffset() * 60;
@@ -1581,72 +1589,6 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       );
       return rows.map((r) => String(r.group_id));
     },
-  };
-}
-
-/** wpp_hf_group_state row → HfGroupStateRecord */
-function rowToHfGroupState(r: RowDataPacket): HfGroupStateRecord {
-  return {
-    account_id: String(r.account_id),
-    group_id: String(r.group_id),
-    learned_threshold: r.learned_threshold == null ? null : Number(r.learned_threshold),
-    last_change_at: r.last_change_at == null ? null : Number(r.last_change_at),
-    last_change_old: r.last_change_old == null ? null : Number(r.last_change_old),
-    last_change_new: r.last_change_new == null ? null : Number(r.last_change_new),
-    last_change_reason: r.last_change_reason == null ? null : String(r.last_change_reason),
-  };
-}
-
-function rowToHfGroupProfile(r: RowDataPacket): HfGroupProfileRecord {
-  return {
-    account_id: String(r.account_id),
-    group_id: String(r.group_id),
-    // profile_json 为 NULL 的存量/异常行 → 空串 (上层解析失败即视为无画像, 不注入)
-    profile_json: r.profile_json == null ? "" : String(r.profile_json),
-    stats_json: r.stats_json == null ? null : String(r.stats_json),
-    sample_msgs: Number(r.sample_msgs) || 0,
-    model: r.model == null ? null : String(r.model),
-    version: Number(r.version) || 1,
-    generated_at: r.generated_at == null ? null : Number(r.generated_at),
-  };
-}
-
-/** wpp_accounts row → AccountRecord (脱敏不在这层做, 上层只存非敏感字段) */
-function rowToAccount(r: RowDataPacket): AccountRecord {
-  return {
-    account_id: String(r.account_id),
-    display_name: r.display_name == null ? null : String(r.display_name),
-    self_wxid: r.self_wxid == null ? null : String(r.self_wxid),
-    nickname: r.nickname == null ? null : String(r.nickname),
-    enabled: r.enabled == null ? false : Number(r.enabled) !== 0,
-    config_json: r.config_json == null ? null : String(r.config_json),
-  };
-}
-
-function rowToMessage(r: RowDataPacket): MessageRecord {
-  const rawStr = r.raw_payload;
-  let raw: unknown = rawStr;
-  if (typeof rawStr === "string") {
-    try {
-      raw = JSON.parse(rawStr);
-    } catch {
-      raw = rawStr;
-    }
-  }
-  return {
-    account_id: String(r.account_id),
-    msg_id: r.msg_id == null ? null : String(r.msg_id),
-    new_msg_id: r.new_msg_id == null ? null : String(r.new_msg_id),
-    direction: r.direction as MessageRecord["direction"],
-    peer_kind: r.peer_kind as MessageRecord["peer_kind"],
-    peer_id: String(r.peer_id),
-    peer_name: r.peer_name == null ? null : String(r.peer_name),
-    chat_id: r.chat_id == null ? null : String(r.chat_id),
-    msg_type: r.msg_type == null ? null : String(r.msg_type),
-    content: r.content == null ? null : String(r.content),
-    raw_payload: raw,
-    from_wxid: r.from_wxid == null ? null : String(r.from_wxid),
-    ts: r.ts instanceof Date ? Math.floor(r.ts.getTime() / 1000) : Number(r.ts ?? 0),
   };
 }
 

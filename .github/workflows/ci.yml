@@ -1,0 +1,43 @@
+# .github/workflows/ci.yml — 质量门 (build + lint + 全量测试)
+#
+# 背景: 本仓库的 sync-github.sh 会把源码 rsync 到公开仓 jiexiaoyin/wpp-openclaw
+#   (rsync 的 SOURCE_EXCLUDES 不含 .github/), 因此本工作流会在**公开仓**上运行,
+#   作为「推上去的东西至少能编译、能过 lint、能过测试」的兜底。
+#
+# 步骤与本地命令严格等价, 避免出现「本地绿、CI 红」或反过来的假信号:
+#   npm run build          → tsc && node scripts/build-setup-wizard.mjs
+#   npm run lint           → eslint src --max-warnings 0
+#   node --test tests/unit/*.test.mjs  → 与 npm test 同一条 glob
+#     (刻意不写 `npm test`: 让 CI 日志里直接看到被执行的命令, 出问题时不用再查 package.json)
+#
+# 注意 build 必须在 test 之前: 测试从 ../../dist/*.js 导入, 不 build 就没有被测产物。
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # npm ci (不是 install): 严格按 package-lock.json 装, lock 与 package.json 不一致时直接失败。
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (tsc, strict)
+        run: npm run build
+
+      - name: Lint (eslint, --max-warnings 0)
+        run: npm run lint
+
+      - name: Test (node --test)
+        run: node --test tests/unit/*.test.mjs

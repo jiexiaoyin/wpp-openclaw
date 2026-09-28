@@ -293,25 +293,30 @@ export function resetHfLayerCache(): void {
   _hourCounts.clear();
 }
 
-/** 启动预热: 把库里已有的段统计读进内存 (judge 热路径零 DB 读的前提) */
+/** 启动预热: 把库里已有的段统计读进内存 (judge 热路径零 DB 读的前提)。失败降级: 空缓存启动, 首个 sweep 会重算补全。 */
 export async function loadHfLayerStats(accountId: string): Promise<number> {
-  const rows = await listHfLayerStats(accountId);
-  const prefix = `${accountId}:`;
-  for (const k of [..._layerStats.keys()]) if (k.startsWith(prefix)) _layerStats.delete(k);
-  for (const k of [..._written.keys()]) if (k.startsWith(prefix)) _written.delete(k);
-  for (const r of rows) {
-    putRow(accountId, {
-      group_id: r.group_id,
-      layer_kind: r.layer_kind,
-      layer_key: r.layer_key,
-      n: r.n,
-      engaged: r.engaged,
-      ambient_p: r.ambient_p,
-      window_start: r.window_start,
-    });
-    _written.set(wk(accountId, r), sigOf(r));
+  try {
+    const rows = await listHfLayerStats(accountId);
+    const prefix = `${accountId}:`;
+    for (const k of [..._layerStats.keys()]) if (k.startsWith(prefix)) _layerStats.delete(k);
+    for (const k of [..._written.keys()]) if (k.startsWith(prefix)) _written.delete(k);
+    for (const r of rows) {
+      putRow(accountId, {
+        group_id: r.group_id,
+        layer_kind: r.layer_kind,
+        layer_key: r.layer_key,
+        n: r.n,
+        engaged: r.engaged,
+        ambient_p: r.ambient_p,
+        window_start: r.window_start,
+      });
+      _written.set(wk(accountId, r), sigOf(r));
+    }
+    return rows.length;
+  } catch (e) {
+    warn(`[WPP HF] 分层统计预热失败 ⇒ 账号以空缓存启动 (首个 sweep 重算补全): ${(e as Error)?.message ?? e}`);
+    return 0;
   }
-  return rows.length;
 }
 
 // ---------------------------------------------------------------- 每群×每小时入站量 (唯一取数入口)

@@ -186,6 +186,15 @@ else
   WPP_SANITIZE_STRICT=1 bash "$SANITIZER" --check "$SNAP_DIR" || { echo "✗ 源码快照敏感残留, 阻止上传"; exit 1; }
 
   cd "$MIRROR_DIR"
+  # 2026-09-28 修复: 切分支前先还原工作树。上面 [3/4] 的 rsync 已把 release/ 全量写进镜像
+  #   工作树 (并 git add), dry-run 下不 commit ⇒ 带着未提交改动切 master 会被 git 拒绝
+  #   ("Please commit your changes or stash them before you switch branches"), 而 set -e
+  #   会让脚本当场终止, **文件末尾的 dry-run 还原段因此永远执行不到** —— 残留改动留给下一次
+  #   真跑, 正好在这里再次被挡 (2026-09-26 踩过, 当时只加了收尾还原, 没覆盖失败路径)。
+  #   还原到 HEAD 是确定性的: 镜像仓是脚本专属纯 clone, 无人工改动。
+  if [ "$DRY_RUN" -eq 1 ]; then
+    git reset -q --hard HEAD && git clean -qfd
+  fi
   if git show-ref --verify --quiet refs/heads/master; then
     git checkout -q master
   else

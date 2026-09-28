@@ -15,7 +15,6 @@ import type { TSchema } from "typebox";
 export type ToolEntry = [
   description: string,
   parameters: TSchema,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fn: (...args: any[]) => Promise<unknown>,
 ];
 

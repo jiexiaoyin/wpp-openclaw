@@ -222,7 +222,8 @@ export interface DbAdapter {
   /**
    * v1.7.0 画像素材: 该群近 sinceSec 秒的**入站人类消息**统计
    * (总数/活跃天数/小时直方图/发言 TOP 成员/类型分布/平均字数)。
-   * **单表只读** (wpp_messages) —— 不 JOIN wpp_hf_* (collation 不同, 见 mysql.ts 注释)。
+   * **单表只读** (wpp_messages) —— 历史: 不 JOIN wpp_hf_* (collation 不同).
+   * 2026-09-28 已统一 collation, 此限制解除; 保留单表读写作组织选择 (见 mysql.ts 注释)。
    */
   getHfGroupMessageStats(
     accountId: string,
@@ -234,7 +235,8 @@ export interface DbAdapter {
   /**
    * 分层统计的**输入**: 窗口内**全部群**已收敛 (status='closed' 且 engaged 非空) 的台账行, 一次批量取回。
    * 一次查询覆盖所有群是刻意的 (避免 N+1: 20 个群一次 sweep 打 20 次 DB)。
-   * 只读单表 wpp_hf_ledger (不与 wpp_messages JOIN: collation 不同)。
+   * 只读单表 wpp_hf_ledger —— 历史: 不与 wpp_messages JOIN (collation 不同).
+   * 2026-09-28 已统一 collation, 此限制解除; 保留单表读写作组织选择.
    */
   listHfClosedSince(accountId: string, sinceSec: number, limit: number): Promise<HfLayerSampleRow[]>;
   /** upsert 一行段统计 (PK = account_id+group_id+layer_kind+layer_key); 调用方只在内容变化时调 */
@@ -256,7 +258,8 @@ export interface DbAdapter {
    * ⚠️ 出站行的 `chat_id`/`from_wxid` 恒为 NULL (出站只写 peer_kind='group' + peer_id=目标群),
    *   故归群必须 `COALESCE(NULLIF(chat_id,''), peer_id)` —— 直接 GROUP BY chat_id 会让 bot 侧分子
    *   **恒为 0 且不报错** (占比永远显示 0%, 外环永远不触发)。
-   * ⚠️ 不与 wpp_hf_* JOIN: 两者 collation 不同 (MariaDB 实测 Illegal mix of collations)。
+   * 历史: 不与 wpp_hf_* JOIN —— 两者 collation 不同 (MariaDB 实测 Illegal mix of collations).
+   * 2026-09-28 已统一 collation, 此限制解除; 保留单表读写作组织选择.
    */
   listHfBotMsgShare(accountId: string, sinceSec: number): Promise<HfGroupShareRow[]>;
   /**
