@@ -1,7 +1,13 @@
-// src/send/finder.ts - Finder tag (15 endpoints)
+// src/send/finder.ts - Finder tag (19 endpoints)
 // v1.1.27 FINDER-FIELD-FIX (2026-08-08 P1-2): 字段名对齐 swagger
 //   之前: objectId/sessionId/topicId 等通用名 → vendor Go 匹配不上
 //   fix: Username/Id/FinderUsername/Text 等 vendor 字段名
+// 2026-09-28 (本轮): search / getCommentDetail / decrypt / finderGetMsgSessionId /
+//   finderGetTopicList / playVideo 六处的签名与 body 按 vendor 契约重写
+//   (search 的 `keyword` 是**非 vendor 字段** → 此前必静默失效; getCommentDetail 的 Id/RootCommentId
+//   类型对齐 integer; finderGetTopicList 的 LastBuffer 与 playVideo 的 10 个缺失属性解除硬编码).
+//   body 键一律逐字 vendor 原样 (含 playVideo 组的 snake_case); 各端点缺省依据见其条目注释.
+//   注: 全 19 个端点的 schema↔vendor 键名/键集/类型已自动化比对通过 (19/19 相等).
 
 import { postWppJson, getWppJson } from "../api/client.js";
 import { ctxToCallOpts, type WppAccountCtx } from "./factory.js";
@@ -42,13 +48,24 @@ export function makeWppFinder(ctx: WppAccountCtx) {
         SessionBuffer: opt.sessionBuffer ?? "",
       }),
 
-    /** /Finder/Decrypt — 评论(解密) (Content) */
-    decrypt: (encryptContent: string) =>
-      dispatch("/Finder/Decrypt", { Content: encryptContent }),
+    /**
+     * /Finder/Decrypt — 解密**企业微信会话记录** (Content).
+     * vendor Finder.DecryptParamDoc (1 字段, swagger 未声明 required): {Content string}.
+     * ⚠️ 语义更正 (v1.9.2): swagger summary 为「解密企业微信会话记录（非视频号/小微）」,
+     *   Content 描述明示「十六进制企业微信会话记录；不用于视频号或小微内容」——
+     *   **本端点与「解密视频号评论」无关**, 是企微会话记录解密 (见 meta 层同名注释).
+     * 本层 body 键本已正确 (Content), 错的是 meta 层 schema 键 encryptedContent → 已修正.
+     */
+    decrypt: (content: string) => dispatch("/Finder/Decrypt", { Content: content }),
 
-    /** /Finder/FinderGetMsgSessionId — 获取私信会话 ID (FinderUsername) */
-    finderGetMsgSessionId: (toFinderId: string) =>
-      dispatch("/Finder/FinderGetMsgSessionId", { FinderUsername: toFinderId }),
+    /**
+     * /Finder/FinderGetMsgSessionId — 获取视频号私信会话 ID.
+     * vendor Finder.FinderGetMsgSessionIdParamDoc (1 字段, 无 required): {FinderUsername string}.
+     * v1.9.2 契约重写: 本层 body 键本已正确 (FinderUsername), 错的是 meta 层 schema 键
+     *   (toFinderId 不是 vendor 字段) → 调用方按 schema 传的值被错位喂入. 形参一并改回 vendor 语义.
+     */
+    finderGetMsgSessionId: (finderUsername: string) =>
+      dispatch("/Finder/FinderGetMsgSessionId", { FinderUsername: finderUsername }),
 
     /**
      * /Finder/FinderLiveDetail — 获取视频号直播详情.
@@ -73,9 +90,16 @@ export function makeWppFinder(ctx: WppAccountCtx) {
     finderSendText: (finderUsername: string, text: string) =>
       dispatch("/Finder/FinderSendText", { FinderUsername: finderUsername, Text: text }),
 
-    /** /Finder/Findergettopiclist — 主题列表 (LastBuffer + TopTitle) */
-    finderGetTopicList: (topTitle = "", lastBuffer = "") =>
-      dispatch("/Finder/Findergettopiclist", { TopTitle: topTitle, LastBuffer: lastBuffer }),
+    /**
+     * /Finder/Findergettopiclist — 主题列表.
+     * vendor Finder.FinderGetTopicListParamDoc (2 字段, swagger 未声明 required):
+     *   {LastBuffer string, TopTitle string}.
+     * v1.9.2 契约重写: 原先 TopTitle 可传但 LastBuffer 恒硬编码 "" → 调用方无法翻页;
+     *   改为可传参. 缺省按 vendor 描述取: LastBuffer「首页留空」→ "". TopTitle 是分类过滤, 无则 "".
+     *   形参顺序按 vendor 文档序 (LastBuffer 在前).
+     */
+    finderGetTopicList: (lastBuffer = "", topTitle = "") =>
+      dispatch("/Finder/Findergettopiclist", { LastBuffer: lastBuffer, TopTitle: topTitle }),
 
     /**
      * /Finder/Follow — 关注/取消关注视频号用户.
@@ -85,14 +109,25 @@ export function makeWppFinder(ctx: WppAccountCtx) {
     follow: (finderUsername: string, opType = 1, userver = 1) =>
       dispatch("/Finder/Follow", { FinderUsername: finderUsername, OpType: opType, Userver: userver }),
 
-    /** /Finder/GetCommentDetail — 评论详情 (v1.2.1 swagger-alignment: GetCommentDetailParamDoc {FinderUsername, Id, LastBuffer, ObjectNonceId, RootCommentId}) */
-    getCommentDetail: (finderUsername: string, id: string, rootCommentId = "") =>
+    /**
+     * /Finder/GetCommentDetail — 查看指定内容.
+     * vendor Finder.GetCommentDetailParamDoc (**与 GetCommentList 共用同一 param doc**, 5 字段,
+     *   swagger 未声明 required):
+     *   {FinderUsername string, Id integer int64, LastBuffer string, ObjectNonceId string, RootCommentId integer int64}.
+     * v1.9.2 契约重写: 原先 Id 收 string 且 RootCommentId 缺省 "" (vendor 均为 integer), 且
+     *   LastBuffer/ObjectNonceId 恒硬编码 "" → 调用方无法翻页/无法带上内容凭据.
+     *   **与 getCommentList 类型对齐**: Id/RootCommentId 同为 vendor integer int64 → 用 number
+     *   (JSON 字符串会被 Go int64 unmarshal 拒绝); int64 精度风险见 meta 层文件顶部注释.
+     *   缺省按 vendor 描述取: LastBuffer「首页留空」→ ""; RootCommentId「获取全部评论时传 0」→ 0;
+     *   ObjectNonceId 是「内容响应中的业务凭据」, 无合理缺省 → "".
+     */
+    getCommentDetail: (finderUsername: string, id: number, lastBuffer = "", objectNonceId = "", rootCommentId = 0) =>
       dispatch("/Finder/GetCommentDetail", {
         FinderUsername: finderUsername,
         Id: id,
+        LastBuffer: lastBuffer,
+        ObjectNonceId: objectNonceId,
         RootCommentId: rootCommentId,
-        LastBuffer: "",
-        ObjectNonceId: "",
       }),
 
     /**
@@ -159,8 +194,17 @@ export function makeWppFinder(ctx: WppAccountCtx) {
         SessionBuffer: opt.sessionBuffer ?? "",
       }),
 
-    /** /Finder/Search — 用户搜索 */
-    search: (keyword: string) => dispatch("/Finder/Search", { keyword }),
+    /**
+     * /Finder/Search — 用户搜索.
+     * vendor Finder.DefaultParamDoc (通用占位 doc, 2 字段, swagger 未声明 required):
+     *   {FinderUsername string, Value string}. 注意 /Finder/Search 是**唯一**使用该 doc 的 Finder 端点.
+     * v1.9.2 契约重写: 原先发 `{keyword}` —— **keyword 不是 vendor 字段**, Go 端匹配不上,
+     *   该调用此前必然静默失效 (vendor 无 unknown-field 报错, 只会按零值处理).
+     *   改为逐字 field 名; 缺省按 vendor 描述取: Value「查询时可填搜索关键词」是本次搜索的操作数,
+     *   FinderUsername「来自搜索或详情响应」无则留空 "".
+     */
+    search: (finderUsername: string, value: string) =>
+      dispatch("/Finder/Search", { FinderUsername: finderUsername, Value: value }),
 
     /**
      * /Finder/TargetUserPage — 查看指定视频号用户首页.
@@ -176,21 +220,63 @@ export function makeWppFinder(ctx: WppAccountCtx) {
 
     // ===== v1.3.67 新 vendor: 视频号播放控制 =====
 
-    /** /Finder/PlayVideo — 播放视频号视频 (v1.3.67 新 API; object_id/finder_username/play_url 选传 + 高级参数) */
+    /**
+     * /Finder/PlayVideo — 启动视频号 CDN 分片播放任务.
+     * vendor Finder.PlayVideoParamDoc (15 字段, **全 snake_case**, swagger 未声明 required,
+     *   且**所有字段 description 均为空** → 无 vendor 语义可依据, 缺省策略由本层自行裁定):
+     *   {async, feed_id, finder_username, interval_seconds, loop, loop_count, object_id,
+     *    object_nonce_id, play_seconds, play_url, range_bytes, referer, request_interval_ms,
+     *    urls(array[string]), user_agent}.
+     * 缺省策略 (我的判断, 非 vendor 规定 —— vendor 该 doc 无 description/required 可循):
+     *   调用方未提供的字段**不发**(而非发 0/""): 对 play_url/urls/interval_seconds/range_bytes
+     *   这类字段, 发一个 0 或空串可能被后端当成「真实的空值」而报错或产生副作用, 缺省不发明比
+     *   发明一个假值更安全. 判据用 `!== undefined` 而非真值判断 —— 保证 `loop:false` /
+     *   `loop_count:0` 这类**显式假值/零值仍能发出** (真值判断会把它们吃掉).
+     *   唯一例外: async 未给时取 true (沿用本端点改写前的既有缺省; vendor 示例亦为 true).
+     * 行为变更提示: 改写前 loop / loop_count / play_seconds 是**无条件**发出 (false/0/0),
+     *   现改为「未提供则不发」—— 见上, 这三个的旧缺省是凭空发明的, 不再保留.
+     */
     playVideo: (opts: {
-      objectId?: string; finderUsername?: string; playUrl?: string;
-      loop?: boolean; loopCount?: number; playSeconds?: number; async?: boolean;
-    }) => dispatch("/Finder/PlayVideo", {
-      ...(opts.objectId ? { object_id: opts.objectId } : {}),
-      ...(opts.finderUsername ? { finder_username: opts.finderUsername } : {}),
-      ...(opts.playUrl ? { play_url: opts.playUrl } : {}),
-      loop: opts.loop ?? false,
-      loop_count: opts.loopCount ?? 0,
-      play_seconds: opts.playSeconds ?? 0,
-      async: opts.async ?? true,
-    }),
+      async?: boolean;
+      feedId?: string;
+      finderUsername?: string;
+      intervalSeconds?: number;
+      loop?: boolean;
+      loopCount?: number;
+      objectId?: string;
+      objectNonceId?: string;
+      playSeconds?: number;
+      playUrl?: string;
+      rangeBytes?: number;
+      referer?: string;
+      requestIntervalMs?: number;
+      urls?: string[];
+      userAgent?: string;
+    }) =>
+      dispatch("/Finder/PlayVideo", {
+        // 逐字 vendor snake_case; 顺序同 PlayVideoParamDoc
+        ...(opts.async !== undefined ? { async: opts.async } : { async: true }),
+        ...(opts.feedId !== undefined ? { feed_id: opts.feedId } : {}),
+        ...(opts.finderUsername !== undefined ? { finder_username: opts.finderUsername } : {}),
+        ...(opts.intervalSeconds !== undefined ? { interval_seconds: opts.intervalSeconds } : {}),
+        ...(opts.loop !== undefined ? { loop: opts.loop } : {}),
+        ...(opts.loopCount !== undefined ? { loop_count: opts.loopCount } : {}),
+        ...(opts.objectId !== undefined ? { object_id: opts.objectId } : {}),
+        ...(opts.objectNonceId !== undefined ? { object_nonce_id: opts.objectNonceId } : {}),
+        ...(opts.playSeconds !== undefined ? { play_seconds: opts.playSeconds } : {}),
+        ...(opts.playUrl !== undefined ? { play_url: opts.playUrl } : {}),
+        ...(opts.rangeBytes !== undefined ? { range_bytes: opts.rangeBytes } : {}),
+        ...(opts.referer !== undefined ? { referer: opts.referer } : {}),
+        ...(opts.requestIntervalMs !== undefined ? { request_interval_ms: opts.requestIntervalMs } : {}),
+        ...(opts.urls !== undefined ? { urls: opts.urls } : {}),
+        ...(opts.userAgent !== undefined ? { user_agent: opts.userAgent } : {}),
+      }),
 
-    /** /Finder/PlayVideoStop — 停止视频播放任务 (v1.3.67 新 API; task_id=PlayVideo 返回) */
+    /**
+     * /Finder/PlayVideoStop — 停止视频号播放任务.
+     * vendor Finder.PlayVideoStopParamDoc (1 字段, 无 required): {task_id string}.
+     * TaskId 设为必填 (我的判断): 不指明停哪个任务则调用无意义. body 键逐字 vendor snake_case (本就正确).
+     */
     playVideoStop: (taskId: string) =>
       dispatch("/Finder/PlayVideoStop", { task_id: taskId }),
 
