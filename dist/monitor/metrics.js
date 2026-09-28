@@ -25,8 +25,6 @@ export function renderPrometheus() {
         if (!type)
             continue;
         const restStr = rest.join("_");
-        if (restStr === undefined)
-            continue;
         const base = restStr.replace(/_total$/, "");
         if (!byType.has(type))
             byType.set(type, []);

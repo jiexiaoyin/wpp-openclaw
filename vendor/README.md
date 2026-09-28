@@ -17,7 +17,7 @@
 docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
 ```
 
-镜像包含: 服务端主程序 + `swagger/` (313 个 API 文档) + 人脸验证代理 (pad-face-verify)。
+镜像包含: 服务端主程序 + `swagger/` (323 个 API 文档) + 人脸验证代理 (pad-face-verify)。
 
 ## 部署 (官方 docker-deploy 发布包)
 

@@ -40,15 +40,34 @@ export const FRIEND_META = {
         Type.Object({ keyword: Type.String() }),
         (keyword) => getFriendApi().search(keyword),
     ],
-    /** /Friend/SendRequest */
+    /**
+     * /Friend/SendRequest — 添加联系人 (发好友请求).
+     * vendor swagger Friend.SendRequestParamDoc (v09102):
+     *   {opcode, scene, sourceContext, v1, v2, verifyContent} (无 required).
+     * 老板决策「选新路径」: 推荐直接用 /Friend/Search 返回的 sourceContext;
+     *   旧路径须 opcode + scene + v1 + v2 **同时**提供 (v1/v2 来自 Search 返回).
+     * ⚠️ source_context 一次性使用, 过期或网络结果不明时**重新搜索**, 不重放旧票据 (vendor 原话).
+     */
     sendFriendRequest: [
-        "添加联系人 (发好友请求). content 留空也允许.",
+        "添加联系人 (发好友请求). 新路径: 直接传 /Friend/Search 返回的 sourceContext 即可; " +
+            "旧路径: opcode + scene + v1 + v2 必须同时提供. verifyContent 是验证说明 (如「你好，我是通过名片添加的」). " +
+            "⚠️ sourceContext 一次性使用, 过期或网络结果不明时重新搜索, 不可重放旧票据.",
+        // 顺序 = vendor 契约: opcode/scene/sourceContext/v1/v2/verifyContent, sourceContext 提到最前以示推荐
         Type.Object({
-            v1: Type.String(),
-            v2: Type.String(),
-            content: Type.Optional(Type.String()),
+            sourceContext: Type.Optional(Type.String({
+                description: "推荐: /Friend/Search 返回的 source_context (一次性; 过期需重新搜索, 不重放)",
+            })),
+            opcode: Type.Optional(Type.Number({
+                description: "操作类型 (vendor example 2); 旧路径需与 scene/v1/v2 同时提供",
+            })),
+            scene: Type.Optional(Type.Number({
+                description: "好友来源场景 (vendor example 17); 旧路径需与 opcode/v1/v2 同时提供",
+            })),
+            v1: Type.Optional(Type.String({ description: "兼容字段: /Friend/Search 返回的 v1 (旧路径)" })),
+            v2: Type.Optional(Type.String({ description: "兼容字段: /Friend/Search 返回的 v2 (旧路径)" })),
+            verifyContent: Type.Optional(Type.String({ description: "验证说明, 如「你好，我是通过名片添加的」" })),
         }),
-        (v1, v2) => getFriendApi().sendRequest(v1, v2),
+        (sourceContext, opcode, scene, v1, v2, verifyContent) => getFriendApi().sendRequest({ sourceContext, opcode, scene, v1, v2, verifyContent }),
     ],
     /** /Friend/PassVerify */
     passFriendVerify: [

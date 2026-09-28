@@ -1,6 +1,6 @@
 # 使用指南 (USAGE.md)
 
-> **当前版本: v1.3.78** · 安装见 [GETTING_STARTED.md](./GETTING_STARTED.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
+> **当前版本: v1.9.2** · 安装见 [GETTING_STARTED.md](./GETTING_STARTED.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
 
 WeChatPadPro OpenClaw Plugin 在 OpenClaw 框架下的使用指南: 加载、Agent Tools、消息收发、配置、多账号、验证与监控。
 
@@ -220,15 +220,18 @@ npm run setup remove wechatB --clean   # 删账号 + agent + binding (防残留)
 | `/help` | 显示全部可用命令 | `/help` |
 | `/genpair` | **生成新配对码** — 给白名单外用户, 对方私聊机器人发 `/pair <码>` 自助加入 | `/genpair` |
 | `/pairs` | **查看当前配对码** + 有效期 (过期可重新生成) | `/pairs` |
-| `/adduser <wxid>` | **授权私聊白名单** — 添加允许私聊的用户 | `/adduser wxid_abc123` |
-| `/deluser <wxid>` | **移除私聊白名单** — 撤销私聊权限 | `/deluser wxid_abc123` |
-| `/addgroup <群ID>` | **授权群聊白名单** — 允许机器人响应某群 | `/addgroup xxxxxxxx@chatroom` |
-| `/delgroup <群ID>` | **移除群聊白名单** — 停止响应某群 | `/delgroup xxxxxxxx@chatroom` |
+| `/user add <wxid> [wxid...]` | **私聊白名单** — 添加允许私聊的用户 (可批量) | `/user add wxid_abc123` |
+| `/user del <wxid> [wxid...]` | **私聊白名单** — 移除用户 | `/user del wxid_abc123` |
+| `/user list` | **私聊白名单** — 查看当前列表 | `/user list` |
+| `/group add <群ID> [群ID...]` | **群白名单** — 允许机器人响应某群 (可批量) | `/group add xxxxxxxx@chatroom` |
+| `/group del <群ID> [群ID...]` | **群白名单** — 停止响应某群 | `/group del xxxxxxxx@chatroom` |
+| `/group list` | **群白名单** — 查看当前列表 | `/group list` |
+| `/blacklist add\|del\|list <群ID>` | **群黑名单** — 硬性屏蔽某群 (优先于白名单) | `/blacklist add xxxxxxxx@chatroom` |
 | `/xiaowei on\|off\|status` | **小微智能体开关** — 开启/关闭/查看小微 AI 智能体能力 (默认关闭) | `/xiaowei on` |
 
 > 💡 **说明**:
 > - 命令只在**文件传输助手**生效, 普通聊天不会误触发
-> - 白名单命令 (`/adduser` 等) 是**管理操作**, 只建议管理员使用
+> - 白名单命令 (`/user` / `/group` / `/blacklist`) 是**管理操作**, 只建议管理员使用
 > - `/xiaowei` 控制**小微智能体**能力 (预开发), 默认关闭, 开启后用 AI 对话
 
 ---
@@ -256,7 +259,7 @@ ss -tlnp | grep 4398              # webhook 监听确认
 
 ### 7.3 日志与监控
 
-- 日志格式: `ISO时间 LEVEL [WPP v1.3.78] msg key=value`
+- 日志格式: `ISO时间 LEVEL [WPP v1.9.2] msg key=value`
 - DEBUG: `WPP_DEBUG=1`
 - Prometheus metrics: 14+ counters (received / processed / rejected_* / timeout 等)
 

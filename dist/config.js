@@ -133,7 +133,8 @@ export async function loadAccountConfig(accountId = DEFAULT_ACCOUNT_ID) {
                 raw.authcode = envAuth;
         }
         // v1.3.18 B-8 fix: cache 层也补 webhookSecret env 注入 (跟 disk 路径一致)
-        if (typeof raw.webhookSecretEnv === "string" && raw.webhookSecretEnv && !raw.webhookSecret) {
+        // 2026-09-28 M5 fix: env-wins (去掉 `&& !raw.webhookSecret`), 与上面 disk 路径 / tokenKey/authcode 一致
+        if (typeof raw.webhookSecretEnv === "string" && raw.webhookSecretEnv) {
             const envSecret = process.env[raw.webhookSecretEnv];
             if (envSecret)
                 raw.webhookSecret = envSecret;
@@ -190,15 +191,19 @@ export async function loadAccountConfig(accountId = DEFAULT_ACCOUNT_ID) {
             raw.authcode = envAuth;
     }
     // v1.3.18 B-8 fix (2026-08-10): webhookSecretEnv 真接入 — 不再死配, webhook HMAC 验签才能 ON
-    //   (跟 tokenKeyEnv/authcodeEnv 同模式: raw.webhookSecret 优先, 缺失才从 env 取)
-    if (typeof raw.webhookSecretEnv === "string" && raw.webhookSecretEnv && !raw.webhookSecret) {
+    // 2026-09-28 M5 fix: 改为 env-wins, 真正与 tokenKeyEnv/authcodeEnv 同模式
+    //   (旧注释谎称同模式, 实现却是 raw-wins (`&& !raw.webhookSecret`) — 注释与实现不符)。
+    if (typeof raw.webhookSecretEnv === "string" && raw.webhookSecretEnv) {
         const envSecret = process.env[raw.webhookSecretEnv];
         if (envSecret) {
+            if (raw.webhookSecret) {
+                log.warn(`account=${accountId}: both webhookSecret and webhookSecretEnv set, env wins (webhookSecret ignored)`);
+            }
             raw.webhookSecret = envSecret;
             log.info(`account=${accountId}: webhookSecret loaded from env ${raw.webhookSecretEnv}`);
         }
-        else {
-            log.warn(`account=${accountId}: webhookSecretEnv=${raw.webhookSecretEnv} but env empty — HMAC verification OFF`);
+        else if (!raw.webhookSecret) {
+            log.warn(`account=${accountId}: webhookSecretEnv=${raw.webhookSecretEnv} but env empty AND webhookSecret empty — HMAC verification OFF`);
         }
     }
     // webhookPublicUrl env var fallback (跟 tokenKey/authcode 同模式)

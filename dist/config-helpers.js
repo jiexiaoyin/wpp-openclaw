@@ -68,6 +68,8 @@ export function listAccountIds(_cfg) {
  * 测试: tests/config-helpers.test.ts 已 verify `await resolveAccount(...)` 兼容.
  */
 export function resolveAccount(_cfg, accountId) {
+    // 契约 ChannelConfigAdapter.resolveAccount 的 accountId 为 `string | null`;
+    // `??` 已把 null 与 undefined 一并兜到 DEFAULT_ACCOUNT_ID, 故纯类型加宽, 运行时不变。
     const id = accountId ?? DEFAULT_ACCOUNT_ID;
     if (!isValidAccountId(id))
         return null;
@@ -97,12 +99,14 @@ export function resolveAccount(_cfg, accountId) {
             raw.authcode = envAuth;
     }
     // v1.3.18 B-8 fix: webhookSecretEnv 真接入 (OpenClaw resolveAccount 是它取 secret 的路径)
-    if (typeof raw.webhookSecretEnv === "string" && raw.webhookSecretEnv && !raw.webhookSecret) {
+    // 2026-09-28 M5 fix: env-wins (去掉 `&& !raw.webhookSecret`), 与 config.ts disk/cache 两层一致
+    if (typeof raw.webhookSecretEnv === "string" && raw.webhookSecretEnv) {
         const envSecret = process.env[raw.webhookSecretEnv];
         if (envSecret)
             raw.webhookSecret = envSecret;
     }
-    return raw;
+    // 2026-09-28 E6 方案(1): 盖章 accountId (见 WppResolvedAccount 说明)
+    return { ...raw, accountId: id };
 }
 /**
  * 默认账号 ID.
@@ -122,7 +126,18 @@ export function isConfigured(account) {
 }
 /**
  * 未配置原因 (OpenClaw 诊断显示).
- * 返 null 表示已配置 (OpenClaw 据此隐藏提示).
+ * 返空串表示已配置 (OpenClaw 的消费点全部有 `??` 兜底, 见下).
+ *
+ * 2026-09-28 契约对齐 (E5): 返回类型 `string | null` → `string`。
+ *   契约: `unconfiguredReason?: (account, cfg) => string` (types.adapters:312)。
+ *   实测三个消费点, 空串与 null 逐位等价:
+ *     - status-CnU4iCHm.mjs:36 → account-state-C8XRII9P.mjs:56-60
+ *       该值仅在 `if (!input.configured)` 分支被读 (`?? "not configured"`);
+ *       已配置分支根本不会读它。而"已配置"正是旧代码唯一返回 null 的路径。
+ *     - read-only-DeZS8AKt.mjs:243 `... ?? ""` → null 与 "" 结果同为 ""。
+ *     - status.scan.runtime-BSfxBJrs.mjs:397 `... ?? "not configured"`
+ *       该行在 `configuredAccounts.length === 0` 时才可达 → 账号必未配置
+ *       → 本函数返回的仍是同样的原因串 (非 null 路径), 值不变。
  */
 export function unconfiguredReason(account) {
     if (!account)
@@ -134,18 +149,37 @@ export function unconfiguredReason(account) {
     }
     if (!account.apiBaseUrl)
         return "apiBaseUrl missing";
-    return null;
+    return ""; // 已配置: 空串 (旧实现返回 null)
 }
 /**
- * 账号描述 (供日志/UI 显示).
- * 格式: `<nickname> (selfWxid=<selfWxid>, configured=<bool>)`
+ * 账号描述 (契约: `ChannelConfigAdapter.describeAccount` → `ChannelAccountSnapshot`)。
+ *
+ * 2026-09-28 契约对齐 (E6): 返回类型 `string` → `ChannelAccountSnapshot`。
+ *
+ * 旧实现返回**字符串**, 而契约与全部 6 个消费点都按**对象**消费 →
+ *   - status-CnU4iCHm.mjs:26-33 读 `described?.enabled/configured/linked` 全是 undefined
+ *     (回落到框架自算值), 属"无效但无害";
+ *   - 🔴 account-summary-do7uk4cE.mjs:61-70 `{ ...described }` 把字符串展开成
+ *     字符索引键 (`{0:'头',1:'像',…}`) 污染快照对象 —— 这是**真 bug**。
+ *   ⇒ 改成对象后, 该污染消失。
+ *
+ * ⚠️ 刻意只填两个字段 (最小且**可证明零行为变化**):
+ *   - `accountId`: 契约必填。取自 resolveAccount 盖的章 (见 WppResolvedAccount)。
+ *   - `configured`: 用与 `config.isConfigured` **同一个** `_isConfigured` 谓词取值,
+ *     故与框架自己调用 isConfigured 得到的布尔值**完全相同** (消费点 `described?.configured ?? await isConfigured(...)`
+ *     在此只是短路, 值不变)。
+ *   未填 `enabled`/`name`/`linked`/`running`... : 这些字段在消费点**优先于**框架自算值
+ *   (如 status-CnU4iCHm:26 `described?.enabled ?? snapshot.enabled ?? …`, account-summary `...described` 覆盖
+ *   `enabled`/`configured`)。填了就会改变 openclaw status / account summary 的**既有输出** ——
+ *   超出本次"仅对齐类型、不改运行时"的范围。如需更丰富的快照, 应作为独立改动评估
+ *   (现有富快照在 `status.buildAccountSnapshot`, 见 index.ts)。
  */
 export function describeAccount(account) {
     if (!account)
-        return "(no account)";
-    const nick = account.nickname || "(unnamed)";
-    const self = account.selfWxid || "(unset)";
-    const cfg = _isConfigured(account) ? "configured" : "unconfigured";
-    return `${nick} (selfWxid=${self}, ${cfg})`;
+        return { accountId: "" }; // 未解析到账号: accountId 必填, 空串是诚实的"未知"
+    return {
+        accountId: account.accountId,
+        configured: _isConfigured(account),
+    };
 }
 //# sourceMappingURL=config-helpers.js.map

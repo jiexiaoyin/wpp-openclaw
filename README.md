@@ -31,7 +31,7 @@ WeChatPadPro 微信 Pad 协议 → OpenClaw gateway → AI 自动回复。支持
 | 🔐 **安全门禁** | 私聊白名单 (fail-closed) + 群策略 + 凭证 env 隔离 |
 | 📊 **监控** | Prometheus metrics (消息/错误/性能) |
 
-> **200+ AI 工具 · 313 vendor 端点 (含小微 20) · 6 配置助手** — 完整能力见 [功能清单](#功能清单)。
+> **200+ AI 工具 · 323 vendor 端点 (含小微 20) · 6 配置助手** — 完整能力见 [功能清单](#功能清单)。
 
 ---
 
@@ -59,7 +59,7 @@ chmod +x install.sh check-proxy.sh
 
 # 5. 验证服务就绪
 curl http://127.0.0.1:18062          # HTTP API
-curl http://127.0.0.1:18062/swagger/  # 313 个 API 文档
+curl http://127.0.0.1:18062/swagger/  # 323 个 API 文档
 ```
 
 部署详情见 [`vendor/README.md`](./vendor/README.md) (host 网络 + 独立 Redis + 端口)。
@@ -159,11 +159,11 @@ bash deploy-swap.sh --force  # 真实部署
 
 ### 🔧 系统与安全
 - **安全门禁**: 私聊白名单 (fail-closed) + 群策略 (open/allowlist/disabled) + 凭证 env 隔离
-- **313 vendor endpoints**: 覆盖 WeChatPadPro 服务端全部 API
+- **323 vendor endpoints**: 覆盖 WeChatPadPro 服务端全部 API
 - **6 channel config helpers**: OpenClaw UI/诊断集成
 - **Prometheus metrics**: 消息/错误/性能监控
 - **WS 智能退避**: WebSocket 断线自动重连 + 监控告警
-- **文件助手命令**: 文件传输助手内管理 — `/genpair` 配对码 `/adduser` 私聊白名单 `/addgroup` 群白名单 `/xiaowei` 小微开关等 (见 [USAGE.md 第 6 章](./USAGE.md#6-文件助手命令))
+- **文件助手命令**: 文件传输助手内管理 — `/genpair` 配对码 `/user` 私聊白名单 `/group` 群白名单 `/blacklist` 群黑名单 `/xiaowei` 小微开关等 (见 [USAGE.md 第 6 章](./USAGE.md#6-文件助手命令))
 
 ## 配置
 

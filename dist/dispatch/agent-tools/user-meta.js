@@ -138,7 +138,7 @@ export const USER_META = {
             qr_code: Type.Optional(Type.Boolean()),
             contact_card: Type.Optional(Type.Boolean()),
         }),
-        (opts) => getUserApi().addMeMethods(opts),
+        (phone, wechat_id, group_chat, qr_code, contact_card) => getUserApi().addMeMethods({ phone, wechat_id, group_chat, qr_code, contact_card }),
     ],
 };
 //# sourceMappingURL=user-meta.js.map

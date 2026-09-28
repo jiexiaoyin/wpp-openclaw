@@ -118,7 +118,7 @@ export const OFFICIAL_ACCOUNTS_META = {
             limit: Type.Optional(Type.Number()),
             offset: Type.Optional(Type.Number()),
         }),
-        (opts) => getOfficialAccountsApi().articleList(opts.accountId ?? "", opts.historyUrl ?? "", opts.limit ?? 20, opts.offset ?? 0),
+        (accountId, historyUrl, limit, offset) => getOfficialAccountsApi().articleList(accountId ?? "", historyUrl ?? "", limit ?? 20, offset ?? 0),
     ],
     /** /OfficialAccounts/ArticleMarkdown — 公众号文章转 Markdown (v1.3.67 新 API) */
     articleMarkdown: [

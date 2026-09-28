@@ -81,6 +81,67 @@ async function ensureIndex(pool, table, indexName, cols) {
 function firstRow(rows) {
     return rows.length > 0 && rows[0] !== undefined ? rows[0] : null;
 }
+/** v1.9.2 NULL-KEY-DEDUP: 空串与 undefined/null 同等视为「没有这个 id」(与 buildDedupeKey 的判空口径一致) */
+function hasId(v) {
+    return typeof v === "string" && v !== "";
+}
+/**
+ * v1.9.2 NULL-KEY-DEDUP 时间窗 (秒)。
+ *
+ * 生产实测 (2026-09-28, wpp_messages 中 msg_id 与 new_msg_id 双双为 NULL 的 178 行):
+ *   - 确认为重复的行: 同一秒内两条同 (account_id,direction,peer_id,msg_type,content)
+ *     —— id 29277/29280 (2026-08-31 22:36:31)、29285/29286 (22:37:00), 间隔 = 0s;
+ *   - 确认为**合法重复**的行 (bot 周期性状态播报, 同一内容多次真发): 最小间隔 27s
+ *     ("⚠️ Billing or credits exhausted" 22:33:54 → 22:34:22)。
+ * 取 10s: 远大于 0s (能盖住同一次发送被落库两次), 又远小于 27s (不会吃掉正常重复)。
+ * ⚠️ 该窗**只**用于「两个 id 都缺」这条兜底路径; 有 id 时仍走 UNIQUE + ON DUPLICATE KEY, 本常量不参与。
+ */
+const NULL_KEY_DEDUP_WINDOW_SEC = 10;
+/**
+ * v1.9.2 NULL-KEY-DEDUP (2026-09-28 审阅修复): 「两个 id 都缺」时的应用层判重。
+ *
+ * 问题: wpp_messages 的 UNIQUE KEY uk_account_msg (account_id, msg_id, new_msg_id) 中
+ *   msg_id / new_msg_id **都可空**, 而 MySQL/MariaDB 语义下 **NULL 互不相等** ⇒
+ *   只要两者之一是 NULL, ON DUPLICATE KEY UPDATE 就**永不触发**, 去重静默失效
+ *   (生产实测: 总 10,734 行, msg_id NULL 178, new_msg_id NULL 5,264, 两者都 NULL 178)。
+ *
+ * 老板决策 (2026-09-28): 走**应用层**去重 —— 不动存量数据、不改列约束。
+ *   (实测把 NULL 改 '' 再建 UNIQUE 会撞 21 组键冲突致迁移失败; 且 178 行删掉不可恢复。)
+ *
+ * 替代键 = account_id + direction + peer_kind + peer_id + msg_type + content + 短时间窗。
+ *   为什么必带 content: 生产同 peer/type 下相同内容会**相隔数分钟~小时**合法重现
+ *     (如 "你好！👋" 6 次, 间隔 3722s/691s/...); 只按四元组判重会把正常消息吃掉。
+ *   为什么必带时间窗: 见 NULL_KEY_DEDUP_WINDOW_SEC 的实测依据。
+ *   为什么不用 raw_payload md5: 该兜底路径主导场景 (172/178) raw_payload 为 NULL,
+ *     findMessageByMd5 的 LIKE 也只能全表扫, 不适合放在写路径上。
+ *
+ * 幂等: 命中即跳过 INSERT (候选行内容与本次完全相同, 无需 UPDATE)。
+ *   ⚠️ 并发下同一毫秒两条相同消息可能同时通过检查 (无 DB 唯一约束可依) ——
+ *   本路径只处理 vendor 未回 id 的罕见场景, 且调用方基本串行, 接受该极小竞态 (不引入新锁)。
+ *
+ * @returns true = 窗口内已有同内容行, 调用方应跳过 INSERT
+ */
+async function isDuplicateNullKeyMessage(pool, record) {
+    // content 为 NULL 时没有可比对的替代键 (原样 INSERT, 退化为旧行为)
+    if (record.content == null)
+        return false;
+    const anchorSec = record.ts ?? Math.floor(Date.now() / 1000);
+    const rows = await queryWithTimeout(pool, `SELECT id FROM wpp_messages
+      WHERE account_id = ? AND direction = ? AND peer_kind = ? AND peer_id = ?
+        AND msg_type <=> ? AND content = ?
+        AND ts >= FROM_UNIXTIME(?) AND ts <= FROM_UNIXTIME(?)
+      LIMIT 1`, [
+        record.account_id,
+        record.direction,
+        record.peer_kind,
+        record.peer_id,
+        record.msg_type ?? null,
+        record.content,
+        anchorSec - NULL_KEY_DEDUP_WINDOW_SEC,
+        anchorSec + NULL_KEY_DEDUP_WINDOW_SEC,
+    ]);
+    return rows.length > 0;
+}
 /**
  * 把 schema.sql 切成可执行语句 (纯函数, 可单测)。
  *
@@ -175,7 +236,21 @@ async function applyMigrations(pool) {
         "msg_type",
         "ts",
     ]);
+    // ---- 心流台账 (wpp_hf_ledger) 时间列索引 (2026-09-28 审阅发现) ----
+    //   该表的 5 处热查询全部按 (account_id + 时间列) 过滤/排序, 而 judged_at/sent_at/
+    //   closed_at 上此前**没有任何索引** -> 每条都走 filesort/全扫段:
+    //     mysql.ts:930  WHERE account_id=? AND judged_at >= ? GROUP BY status
+    //     mysql.ts:954  WHERE account_id=? AND status='closed' AND judged_at >= ?
+    //     mysql.ts:1039 WHERE account_id=? AND status='judged' AND judged_at <= ?
+    //     mysql.ts:1049 ORDER BY closed_at DESC LIMIT ?
+    //     mysql.ts:1110 WHERE account_id=? AND sent_at IS NOT NULL AND sent_at >= ?
+    //   复合前缀与查询一致 (account_id 先, 时间列后), 纯增量无数据风险。
+    await ensureIndex(pool, "wpp_hf_ledger", "idx_hf_judged", ["account_id", "judged_at"]);
+    await ensureIndex(pool, "wpp_hf_ledger", "idx_hf_sent", ["account_id", "sent_at"]);
+    await ensureIndex(pool, "wpp_hf_ledger", "idx_hf_closed", ["account_id", "closed_at"]);
     // 引用消息 svrid 映射表: 微信 svrid 无法主动获取, 只能从"别人引用该消息"的 refermsg.svrid 被动捕获
+    // ⚠️ v1.9.2 (2026-09-28): 本 DDL 同时写进了 db/schema.sql 的 wpp_svrid_mapping —— 两处必须同步 (改一处必改另一处)。
+    //    (此前 schema.sql 里 grep 计数为 0 ⇒ 按 schema.sql 建库会缺这张表, schema.sql 不是单一真源。)
     await pool.query(`
     CREATE TABLE IF NOT EXISTS wpp_svrid_mapping (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -187,16 +262,18 @@ async function applyMigrations(pool) {
       PRIMARY KEY (id),
       UNIQUE KEY uk_svrid_acct (account_id, svrid),
       KEY idx_md5 (msg_md5)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
     // Synckey 增量游标持久化: 保存 Sync 返回的 KeyBuf.buffer, 重启后用增量游标只拉新消息 (防全量重放风暴)
+    // ⚠️ v1.9.2 (2026-09-28): 本 DDL 同时写进了 db/schema.sql 的 wpp_sync_state —— 两处必须同步 (改一处必改另一处)。
+    //    (此前 schema.sql 里 grep 计数为 0 ⇒ 按 schema.sql 建库会缺这张表, schema.sql 不是单一真源。)
     await pool.query(`
     CREATE TABLE IF NOT EXISTS wpp_sync_state (
       account_id VARCHAR(64) NOT NULL,
       synckey VARCHAR(1024) NOT NULL,
       updated_at INT UNSIGNED NOT NULL DEFAULT 0,
       PRIMARY KEY (account_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
     // ====== v1.6.x HEARTFLOW-FEEDBACK (心流反馈闭环) ======
     // 生产建表唯一途径 = applyMigrations (deploy-swap.sh 不拷 db/, schema.sql 只在 dev 生效)
@@ -234,7 +311,7 @@ async function applyMigrations(pool) {
       UNIQUE KEY uk_hf_acct_msg (account_id, inbound_msg_id),
       KEY idx_hf_group_status (account_id, group_id, status),
       KEY idx_hf_open (account_id, status, window_expires_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
     // 每群 learned 阈值状态 (learned 落 DB, 不回写 accounts JSON 防 fs.watch 抖动)
     await pool.query(`
@@ -248,7 +325,7 @@ async function applyMigrations(pool) {
       last_change_reason VARCHAR(128) NULL,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (account_id, group_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
     // 阈值变更审计 (每次变更插一行, 满足「变更留痕」护栏)
     await pool.query(`
@@ -264,7 +341,7 @@ async function applyMigrations(pool) {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
       KEY idx_hf_audit (account_id, group_id, created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
     // v1.7.0 群画像 (1 行/群): 每日一次 LLM 生成的结构化画像 + 生成时的统计快照.
     //   用途 = 给 judge prompt 注入"这个群是什么群、bot 在这里该怎么说话"(老板 2026-09-26 要的"应景").
@@ -283,7 +360,7 @@ async function applyMigrations(pool) {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (account_id, group_id),
       KEY idx_hf_profile_gen (account_id, generated_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
     // v1.8.0 分层统计 (群 × 时段, 1 行/群/段): **每轮 sweep 全量重算后的快照**, 不是累加器.
     //   n/engaged 只反映 windowDays 窗口内的可采信样本; 不做增量累加 (累加不幂等: sweep 每 300s 一次,
@@ -302,7 +379,7 @@ async function applyMigrations(pool) {
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (account_id, group_id, layer_kind, layer_key),
       KEY idx_hf_layer_acct (account_id, layer_kind, updated_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
     // v1.6.8 心流标签改造: 生产上 wpp_hf_ledger 早已存在, 上面的 CREATE ... IF NOT EXISTS 不会给它加列
     //   ⇒ 新列只能 ensureColumn 幂等补 (SHOW COLUMNS 判重). 见 heartflow-label.ts 的设计注释.
@@ -356,6 +433,14 @@ export function createMysqlAdapter(cfg) {
         // ===== Messages =====
         async saveMessage(record) {
             const p = getPool();
+            // v1.9.2 NULL-KEY-DEDUP: 两个 id 都缺时 UNIQUE 键失效 (NULL 互不相等) ⇒ 先用替代键在应用层判重.
+            //   有任一 id → 不查、行为与旧版逐字一致 (仍走下面的 ON DUPLICATE KEY).
+            if (!hasId(record.msg_id) && !hasId(record.new_msg_id)) {
+                if (await isDuplicateNullKeyMessage(p, record)) {
+                    // 幂等: 窗口内已有同内容行, 不再插重复行 (也不 UPDATE — 候选行内容本就相同)
+                    return;
+                }
+            }
             // UNIQUE (account_id, msg_id, new_msg_id) + ON DUPLICATE KEY UPDATE — 三通道重复推送时幂等
             await p.query(`INSERT INTO wpp_messages
          (account_id, msg_id, new_msg_id, direction, peer_kind, peer_id, peer_name,
