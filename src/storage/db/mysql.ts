@@ -11,6 +11,12 @@ import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { info, warn, error, formatErr } from "../../core/logger.js";
 import { findPluginRoot } from "../../core/paths.js";
+import {
+  rowToAccount,
+  rowToHfGroupProfile,
+  rowToHfGroupState,
+  rowToMessage,
+} from "./row-mappers.js";
 import type {
   AccountRecord,
   ApiCallRecord,
@@ -1583,72 +1589,6 @@ export function createMysqlAdapter(cfg: ResolvedDbConfig): DbAdapter {
       );
       return rows.map((r) => String(r.group_id));
     },
-  };
-}
-
-/** wpp_hf_group_state row → HfGroupStateRecord */
-function rowToHfGroupState(r: RowDataPacket): HfGroupStateRecord {
-  return {
-    account_id: String(r.account_id),
-    group_id: String(r.group_id),
-    learned_threshold: r.learned_threshold == null ? null : Number(r.learned_threshold),
-    last_change_at: r.last_change_at == null ? null : Number(r.last_change_at),
-    last_change_old: r.last_change_old == null ? null : Number(r.last_change_old),
-    last_change_new: r.last_change_new == null ? null : Number(r.last_change_new),
-    last_change_reason: r.last_change_reason == null ? null : String(r.last_change_reason),
-  };
-}
-
-function rowToHfGroupProfile(r: RowDataPacket): HfGroupProfileRecord {
-  return {
-    account_id: String(r.account_id),
-    group_id: String(r.group_id),
-    // profile_json 为 NULL 的存量/异常行 → 空串 (上层解析失败即视为无画像, 不注入)
-    profile_json: r.profile_json == null ? "" : String(r.profile_json),
-    stats_json: r.stats_json == null ? null : String(r.stats_json),
-    sample_msgs: Number(r.sample_msgs) || 0,
-    model: r.model == null ? null : String(r.model),
-    version: Number(r.version) || 1,
-    generated_at: r.generated_at == null ? null : Number(r.generated_at),
-  };
-}
-
-/** wpp_accounts row → AccountRecord (脱敏不在这层做, 上层只存非敏感字段) */
-function rowToAccount(r: RowDataPacket): AccountRecord {
-  return {
-    account_id: String(r.account_id),
-    display_name: r.display_name == null ? null : String(r.display_name),
-    self_wxid: r.self_wxid == null ? null : String(r.self_wxid),
-    nickname: r.nickname == null ? null : String(r.nickname),
-    enabled: r.enabled == null ? false : Number(r.enabled) !== 0,
-    config_json: r.config_json == null ? null : String(r.config_json),
-  };
-}
-
-function rowToMessage(r: RowDataPacket): MessageRecord {
-  const rawStr = r.raw_payload;
-  let raw: unknown = rawStr;
-  if (typeof rawStr === "string") {
-    try {
-      raw = JSON.parse(rawStr);
-    } catch {
-      raw = rawStr;
-    }
-  }
-  return {
-    account_id: String(r.account_id),
-    msg_id: r.msg_id == null ? null : String(r.msg_id),
-    new_msg_id: r.new_msg_id == null ? null : String(r.new_msg_id),
-    direction: r.direction as MessageRecord["direction"],
-    peer_kind: r.peer_kind as MessageRecord["peer_kind"],
-    peer_id: String(r.peer_id),
-    peer_name: r.peer_name == null ? null : String(r.peer_name),
-    chat_id: r.chat_id == null ? null : String(r.chat_id),
-    msg_type: r.msg_type == null ? null : String(r.msg_type),
-    content: r.content == null ? null : String(r.content),
-    raw_payload: raw,
-    from_wxid: r.from_wxid == null ? null : String(r.from_wxid),
-    ts: r.ts instanceof Date ? Math.floor(r.ts.getTime() / 1000) : Number(r.ts ?? 0),
   };
 }
 
