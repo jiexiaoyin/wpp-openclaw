@@ -4,6 +4,7 @@
 //   - named export wppChannelPlugin = 实际 channel 实现 (start/stop/sendText/sendImage)
 // 多账号管理走 AccountRegistry class
 
+import type { ChannelPlugin, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { logObj as log, formatErr } from "./core/logger.js";
 import { SetWebhookMetrics } from "./monitor/metrics.js";
 import { CHANNEL_ID, PLUGIN_NAME, PLUGIN_VERSION, DEFAULT_BOT_NICKNAME } from "./core/constants.js";
@@ -22,19 +23,9 @@ import {
   initDbPool,
   getSynckey,
   saveSynckey,
-  listHfGroupStates,
-  countHfLedgerByStatus,
-  countHfEngageSignals,
-  getHfLedgerLast,
-  getHfGroupProfile,
-  listHfLayerStats,
-  listHfSentCountsRecent,
-  markHfLedgerVeto,
-  listHfClosedSince,
-  listHfBotMsgShare,
-  listHfOutboundTexts,
 } from "./db.js";
 import { getHeartflowRuntime } from "./inbound/heartflow-runtime.js";
+import { handleFeatureCommand } from "./inbound/filehelper-features.js";
 import { WechatpadproWsClient } from "./ws-client.js";
 import { WechatpadproWebhookServer } from "./webhook-receiver.js";
 import { createWppInboundHandler } from "./inbound/handler.js";
@@ -49,54 +40,25 @@ import { buildSessionKey } from "./session-key.js";
 import { sendText as dispatchSendText, sendImage as dispatchSendImage } from "./dispatch/outbound.js";
 import { AGENT_TOOLS } from "./dispatch/agent-tools/index.js";
 import { getCurrentAccountId } from "./dispatch/account-context.js";
-import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, setAccountField, updateHeartflowGroups, updateBlacklistGroups, ensureWebhookPathToken } from "./config.js";
+import { watchAccountConfigs, watchGlobalConfig, appendAllowFrom, appendGroupAllowFrom, removeAllowFrom, removeGroupAllowFrom, setAccountFlag, updateBlacklistGroups, ensureWebhookPathToken } from "./config.js";
 import { watchOpenClawChannelConfig, publishAccountCoreFieldsToChannelConfig } from "./channel-ui-bridge.js";
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig, type ResolvedGlobalConfig } from "./core/runtime-config.js";
 import type { WppTriggerConfig, WppAccountTriggerCtx } from "./inbound/triggers.js";
 import type { WppInboundMessage } from "./types.js";
 import { resolveAiConfig } from "./config-ai.js";
-import { defaultHeartflowConfig, resolveHfLearning } from "./inbound/heartflow.js";
+import { defaultHeartflowConfig } from "./inbound/heartflow.js";
 import {
-  forgetHfOpenWindow,
-  getLearnedThreshold,
-  hfLayerAnchorFor,
-  hfLayerStep,
   loadLearnedThresholds,
   loadHfBudgetSeed,
-  resolveHfThresholdDecision,
   startHeartflowSweep,
 } from "./inbound/heartflow-learn.js";
 import {
-  ambientPFromHourCounts,
-  HF_LAYER_DB_ROW_CAP,
-  hfLayerKeyFor,
-  loadHfGroupHourCounts,
   loadHfLayerStats,
-  resolveHfLayeredCfg,
 } from "./inbound/heartflow-layer.js";
-import { getHfBudgetState, hfBudgetBlockedSnapshot, hfLocalHour, resolveHfBudget } from "./inbound/heartflow-budget.js";
-import { resolveHfDedupeCfg } from "./inbound/heartflow-dedupe.js";
-import {
-  buildHfDigest,
-  hfBotShare,
-  hfEngagementSummary,
-  hfRepeatRate,
-  hfShareGuardSnapshot,
-  resolveHfShareGuardCfg,
-} from "./inbound/heartflow-observe.js";
-import {
-  getHfProfileBandFloor,
-  getHfProfilePromptText,
-  parseHfGroupProfileRow,
-  resolveHfProfileCfg,
-} from "./inbound/heartflow-profile.js";
 import { defaultJargonConfig } from "./inbound/jargon.js";
 import { defaultAffectionConfig } from "./inbound/affection.js";
 import type { WppSendMessageParams, WppSendType } from "./dispatch/send-message.js";
-
-/** v1.8.0: /heartflow status 里已学阈值群 / layers 里群的显示上限 (超出折叠成 "…其余 N 群") */
-const HF_STATUS_MAX_GROUPS = 5;
 
 // 每账号 triggerConfig/triggerCtx 可变容器: handler 闭包持有对象引用, 热重载 update 字段即刻生效
 const runtimeTriggerConfigs = new Map<string, WppTriggerConfig>();
@@ -147,7 +109,10 @@ function maskSecret(secret: string): string {
  * 框架调 outbound.sendText/sendImage/sendMedia 时 accountId 缺失 → 用当前 dispatch 账号 (ALS),
  * 再兜底 "default" (单账号兼容)。
  */
-function resolveOutboundAccount(accountId: string | undefined, via: string): string {
+// 2026-09-28 契约对齐: 形参加宽 `string | undefined` → `string | null | undefined`
+//   (契约 ChannelOutboundContext.accountId 为 `string | null`);
+//   函数体首行 `if (accountId)` 本就 falsy 兜底 null, 运行时零变化。
+function resolveOutboundAccount(accountId: string | null | undefined, via: string): string {
   if (accountId) return accountId;
   const ctx = getCurrentAccountId();
   if (ctx) {
@@ -341,504 +306,6 @@ export const FILEHELPER_COMMANDS: FileHelperCommand[] = [
   },
 ];
 
-/**
- * v1.3.80 FEATURE-UNIFY: 三功能 (heartflow/affection/jargon) 统一命令处理器。
- * 通用: on/off/status; heartflow 特有: threshold + group add|del|list。
- * 返回 handled=true 表示命令已处理 (不分发给其它命令)。
- */
-type FeatureName = "heartflow" | "affection" | "jargon";
-
-async function handleFeatureCommand(
-  feature: FeatureName,
-  args: string[],
-  send: (text: string) => Promise<void>,
-  accountId: string,
-): Promise<boolean> {
-  const arg = (args[0] ?? "").toLowerCase();
-  const cfg = await loadAccountConfigAsync(accountId);
-  const fc = cfg?.[feature] as Record<string, unknown> | undefined;
-  const current = Boolean(fc?.enabled);
-  const label = feature === "heartflow" ? "心流主动回复" : feature === "affection" ? "好感度系统" : "黑话挖掘";
-
-  // status: 显示当前状态 (+ heartflow 额外显示阈值/群白名单)
-  if (arg === "status") {
-    let extra = "";
-    if (feature === "heartflow") {
-      const th = typeof fc?.replyThreshold === "number" ? fc.replyThreshold : 0.6;
-      const wl = Array.isArray(fc?.whitelistGroups) ? (fc.whitelistGroups as string[]).length : 0;
-      const lrEnabled = Boolean((fc?.learning as { enabled?: boolean } | undefined)?.enabled);
-      let learnLine = `\n自适应调阈: ${lrEnabled ? "✅ 开启" : "❌ 关闭"}`;
-      try {
-        const learned = await listHfGroupStates(accountId);
-        if (learned.length > 0) {
-          // v1.8.0: 上限 HF_STATUS_MAX_GROUPS —— 群多了之后这条消息会长到看不清 (无上限时 20 群 ≈ 20 行)
-          const shown = learned.slice(0, HF_STATUS_MAX_GROUPS);
-          learnLine += `\n已学阈值群 (${learned.length}):\n` + shown
-            .map((s) => {
-              const cur = s.learned_threshold == null ? "回落账号级" : Number(s.learned_threshold).toFixed(2);
-              const last = s.last_change_new == null ? "" : ` (上次 ${s.last_change_old == null ? "账号级" : Number(s.last_change_old).toFixed(2)}→${Number(s.last_change_new).toFixed(2)})`;
-              return `- ${s.group_id} → ${cur}${last}`;
-            })
-            .join("\n") +
-            (learned.length > shown.length ? `\n…其余 ${learned.length - shown.length} 群` : "");
-        } else {
-          learnLine += " (暂无已学阈值 — 样本收集中, 满 10 条才自动调)";
-        }
-      } catch (e) {
-        learnLine += " (读学习状态失败)";
-      }
-      // v1.6.1 可观测: 近 24h 台账摘要 —— 「judge 跑了但没回」不再是盲区 (09-11 静默瘫教训)
-      let ledgerLine = "";
-      try {
-        const since = Math.floor(Date.now() / 1000) - 86400;
-        const c = await countHfLedgerByStatus(accountId, since);
-        if (c.total === 0) {
-          ledgerLine = "\n近24h台账: 0 行 (群里无消息 / judge 未跑 / judge 全失败 — 看日志 [WPP HEARTFLOW])";
-        } else {
-          const replied = (c.byStatus.sent ?? 0) + (c.byStatus.closed ?? 0);
-          const silent = c.byStatus.suppressed ?? 0;
-          const pending = c.byStatus.judged ?? 0;
-          const reasons = Object.entries(c.bySuppressedReason)
-            .map(([k, v]) => `${k} ${v}`)
-            .join(", ");
-          ledgerLine =
-            `\n近24h台账: judge ${c.total} 次 → 回复 ${replied} / 沉默 ${silent}` +
-            (pending ? ` / 待发送 ${pending}` : "") +
-            (reasons ? `\n  沉默原因: ${reasons}` : "");
-        }
-      } catch (e) {
-        ledgerLine = "\n近24h台账: (读台账失败)";
-      }
-      // v1.6.8 可观测: 近 24h 已收敛样本的**命中信号分布** —— 老板要看的"标签是不是锚在我那条上",
-      //   legacy = v1.6.8 之前的旧标签行 (不采信, 见 heartflow-label.ts)
-      let sigLine = "";
-      try {
-        const since = Math.floor(Date.now() / 1000) - 86400;
-        const sig = await countHfEngageSignals(accountId, since);
-        const entries = Object.entries(sig);
-        sigLine = entries.length
-          ? `\n信号分布(24h): ${entries.map(([k, v]) => `${k} ${v}`).join(" / ")}\n  (quote/@=强正, negative=强负, short-window=窄窗有人说话, silence=无人接; 强信号恒采信, 弱信号按本底过滤)`
-          : "\n信号分布(24h): 0 (还没攒到已收敛样本)";
-      } catch (e) {
-        sigLine = "\n信号分布(24h): (读取失败)";
-      }
-      // v1.6.9 可观测: 发言预算档位 + 进程内拦截计数 (计数**重启归零**, 故标注"本次运行")
-      let budgetLine = "";
-      try {
-        const hfCfg = runtimeHeartflow.get(accountId);
-        const b = resolveHfBudget(hfCfg);
-        const blocked = hfBudgetBlockedSnapshot();
-        const blockedStr = Object.keys(blocked).length
-          ? Object.entries(blocked).map(([k, v]) => `${k} ${v}`).join(" / ")
-          : "无";
-        budgetLine =
-          `\n发言预算: ${b.enabled ? "开" : "关"} (每群 ≥${b.minGapSec}s / ≤${b.maxPerHour}条·小时 / ≤${b.maxPerDay}条·天` +
-          `${b.quietHours.length ? ` / 静默段 ${b.quietHours.map(([s, e]) => `${s}-${e}时`).join(",")}` : " / 静默段 关"})` +
-          `\n本次运行拦截: ${blockedStr}`;
-      } catch (e) {
-        budgetLine = "\n发言预算: (读取失败)";
-      }
-      // v1.8.0 可观测: 分层模式 + 已达门槛的段 (老板要看"到底有没有在分层学", 否则影子态像"什么都没发生")
-      let layerLine = "";
-      try {
-        const LAY = resolveHfLayeredCfg(runtimeHeartflow.get(accountId));
-        const rows = await listHfLayerStats(accountId);
-        const qualified = rows.filter((r) => r.n >= LAY.minSamples);
-        const detail = qualified
-          .slice(0, HF_STATUS_MAX_GROUPS)
-          .map((r) => `${r.group_id}[${r.layer_key}] n=${r.n} rate=${r.n > 0 ? (r.engaged / r.n).toFixed(3) : "-"}`)
-          .join(" / ");
-        layerLine =
-          `\n分层(群×时段): ${!LAY.enabled ? "❌ 关闭" : LAY.apply ? "✅ 生效" : "影子 (只记录不生效)"}` +
-          ` (门槛 n≥${LAY.minSamples} / 窗口 ${LAY.windowDays} 天 / ${LAY.allowLoosen ? "允许放宽" : "只许收紧"})` +
-          `\n  已达标段 ${qualified.length} 个` +
-          (detail ? `: ${detail}` : " (样本仍在攒)") +
-          (qualified.length > HF_STATUS_MAX_GROUPS ? ` …其余 ${qualified.length - HF_STATUS_MAX_GROUPS} 个` : "");
-      } catch (e) {
-        layerLine = "\n分层(群×时段): (读取失败)";
-      }
-      // v1.9.0 可观测: 重复闸 + 占比外环 —— 老板要能一眼看到"重复闸拦了多少"(误杀信号) 与"外环收紧了谁"
-      let v19Line = "";
-      try {
-        const hfCfg = runtimeHeartflow.get(accountId);
-        const DED = resolveHfDedupeCfg(hfCfg);
-        const SG = resolveHfShareGuardCfg(hfCfg);
-        const hits = hfShareGuardSnapshot(accountId, resolveHfBudget(hfCfg), hfCfg, Math.floor(Date.now() / 1000));
-        const suppressed = (await countHfLedgerByStatus(accountId, Math.floor(Date.now() / 1000) - 86400)).bySuppressedReason;
-        v19Line =
-          `\n重复闸: ${DED.enabled ? "✅ 开" : "❌ 关"} (仅心流主动插话 / 同群 ${Math.round(DED.windowSec / 3600)}h / 相似 ≥${DED.simThreshold} / 短句豁免 <${DED.minChars} 字)` +
-          `\n  近24h拦下: ${suppressed["repeat"] ?? 0} 条 (异常增多=误杀, 可 heartflow.dedupe.simThreshold 调高)` +
-          `\n占比外环: ${SG.enabled ? "✅ 开" : "❌ 关"} (目标 ≤${(SG.targetShare * 100).toFixed(0)}% / 样本 ≥${SG.minMsgs} 条·≥${SG.minBotSends} bot 条)` +
-          (hits.length
-            ? `\n  今日已收紧 ${hits.length} 群: ` + hits.slice(0, HF_STATUS_MAX_GROUPS)
-                .map((h) => `${h.groupId} ${(h.share * 100).toFixed(1)}%`)
-                .join(" / ")
-            : "\n  今日未收紧 (无群超目标占比)");
-      } catch (e) {
-        v19Line = "\n重复闸/占比外环: (读取失败)";
-      }
-      extra = `\n阈值: ${th}\n心流群白名单: ${wl} 个${learnLine}${ledgerLine}${sigLine}${budgetLine}${layerLine}${v19Line}`;
-    }
-    await send(`${label} (account=${accountId}):\n状态: ${current ? "✅ 开启" : "❌ 关闭"}${extra}\n用法: /${feature} on|off|status`);
-    return true;
-  }
-
-  // on/off: 开关
-  if (arg === "on" || arg === "off") {
-    const target = arg === "on";
-    const r = await setAccountField(accountId, `${feature}.enabled`, target);
-    await send(r.ok
-      ? `✅ ${label}已${target ? "开启" : "关闭"} (account=${accountId})`
-      : `❌ 设置失败: ${r.reason ?? "unknown"}`);
-    return true;
-  }
-
-  // heartflow 特有: threshold
-  if (feature === "heartflow" && arg === "threshold") {
-    const v = Number(args[1]);
-    if (!Number.isFinite(v) || v < 0 || v > 1) {
-      await send("用法: /heartflow threshold <0-1>\n示例: /heartflow threshold 0.5 (0.6=默认, 越低越活跃)");
-      return true;
-    }
-    const r = await setAccountField(accountId, "heartflow.replyThreshold", v);
-    await send(r.ok
-      ? `✅ 心流阈值已设为 ${v} (account=${accountId})`
-      : `❌ 设置失败: ${r.reason ?? "unknown"}`);
-    return true;
-  }
-
-  // heartflow 特有: group add|del|list (add 联动群聊白名单, del 只删心流)
-  if (feature === "heartflow" && arg === "group") {
-    const sub = (args[1] ?? "").toLowerCase();
-    const targets = args.slice(2).map((s) => s.trim()).filter(Boolean);
-    const wl = Array.isArray(fc?.whitelistGroups) ? (fc.whitelistGroups as string[]) : [];
-    if (sub === "list" || (sub === "" && targets.length === 0)) {
-      await send(`心流群白名单 (${wl.length}):\n` + (wl.length ? wl.map((g) => `- ${g}`).join("\n") : "(空)"));
-      return true;
-    }
-    if ((sub === "add" || sub === "del") && targets.length) {
-      for (const t of targets) {
-        await updateHeartflowGroups(accountId, sub as "add" | "del", t);
-      }
-      const cfg2 = await loadAccountConfigAsync(accountId);
-      const wl2 = (cfg2?.heartflow?.whitelistGroups as string[] | undefined) ?? [];
-      const gal = cfg2?.groupAllowFrom ?? [];
-      await send(`✅ 心流群白名单已${sub === "add" ? "添加" : "移除"}: ${targets.join(", ")}\n当前心流群 (${wl2.length}): ${wl2.join(", ") || "(空)"}\n(add 自动补群聊白名单; del 不删群聊白名单, 当前群聊白名单 ${gal.length} 个)`);
-      return true;
-    }
-    await send("用法: /heartflow group add <群ID> [群ID...]\n  或 /heartflow group del <群ID> [群ID...]\n  或 /heartflow group list");
-    return true;
-  }
-
-  // heartflow 特有: profile <群ID> (v1.7.0: 看该群画像 + 实测统计)
-  if (feature === "heartflow" && arg === "profile") {
-    const gid = (args[1] ?? "").trim();
-    if (!gid) {
-      await send("用法: /heartflow profile <群ID>\n(画像由 sweep 每日自动生成; 样本不足的群暂无画像)");
-      return true;
-    }
-    try {
-      const row = await getHfGroupProfile(accountId, gid);
-      if (!row) {
-        await send(`该群暂无画像 (account=${accountId}):\n${gid}\n画像在 sweep 里每日生成; 需近 14 天有足够群消息。`);
-        return true;
-      }
-      const p = parseHfGroupProfileRow(row);
-      const profileApplyQuiet = resolveHfProfileCfg(runtimeHeartflow.get(accountId)).applyQuietHours;
-      const st = row.stats_json ? (JSON.parse(row.stats_json) as Record<string, unknown>) : {};
-      const hist = Array.isArray(st.hourHist) ? (st.hourHist as number[]) : [];
-      const derived = Array.isArray(st.derivedActiveHours) ? (st.derivedActiveHours as number[]) : [];
-      const genAt = row.generated_at ? new Date(row.generated_at * 1000).toLocaleString("zh-CN") : "?";
-      const lines = [
-        `群画像 (account=${accountId}, v${row.version ?? 1}, ${genAt}, ${row.model ?? "?"})`,
-        `群: ${gid}`,
-        p ? `群性质: ${p.nature || "-"}` : "⚠️ 画像解析失败 (只展示统计)",
-        p ? `语言风格: ${p.style || "-"}` : "",
-        p ? `我在该群的角色: ${p.botRole || "-"}` : "",
-        p && p.engage.length ? `宜接话题: ${p.engage.join("、")}` : "",
-        p && p.avoid.length ? `忌接话题: ${p.avoid.join("、")}` : "",
-        p && p.activeHours.length ? `画像说活跃时段: ${p.activeHours.map((h) => `${h}时`).join(",")}` : "",
-        derived.length ? `实测活跃时段: ${derived.map((h) => `${h}时`).join(",")}` : "",
-        p && p.quietHours.length
-          ? `建议静默段: ${p.quietHours.map(([s, e]) => `${s}-${e}时`).join(",")} (${profileApplyQuiet ? "已生效" : "未生效, 仅建议"})`
-          : "",
-        p && p.band != null ? `建议阈值下限: ${p.band} (只会抬高阈值, 不会下压)` : "",
-        p && p.budget ? `建议预算收紧: ${JSON.stringify(p.budget)}` : "",
-        `样本: ${row.sample_msgs ?? 0} 条 / 窗口内共 ${st.total ?? "?"} 条 / 活跃 ${st.activeDays ?? "?"} 天 / 均长 ${st.avgLen ?? "?"} 字`,
-        hist.length ? `每小时消息量: ${hist.map((n, h) => (n > 0 ? `${h}时${n}` : null)).filter(Boolean).join(" ")}` : "",
-      ].filter(Boolean);
-      await send(lines.join("\n"));
-    } catch (e) {
-      await send(`读取画像失败: ${e instanceof Error ? e.message : String(e)}`);
-    }
-    return true;
-  }
-
-  // heartflow 特有: layers [群ID] (v1.8.0: 看每群各时段的分层统计 + 影子建议 + 每段样本进度)
-  if (feature === "heartflow" && arg === "layers") {
-    const gid = (args[1] ?? "").trim();
-    try {
-      const hfCfg = runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig();
-      const LAY = resolveHfLayeredCfg(hfCfg);
-      const nowSec = Math.floor(Date.now() / 1000);
-      const curKey = hfLayerKeyFor(hfLocalHour(nowSec), LAY.buckets);
-      const rows = await listHfLayerStats(accountId);
-      const all = [...new Set(rows.map((r) => r.group_id))].sort();
-      const groups = gid ? all.filter((g) => g === gid) : all;
-      if (groups.length === 0) {
-        await send(
-          gid
-            ? `该群暂无分层统计 (account=${accountId}):\n${gid}\n(统计由 sweep 每 5 分钟重算一次; 需先有心流已收敛样本)`
-            : `暂无分层统计 (account=${accountId})\n(统计由 sweep 每 5 分钟重算一次; 需先有心流已收敛样本)`,
-        );
-        return true;
-      }
-      const shown = groups.slice(0, HF_STATUS_MAX_GROUPS);
-      const lines = [
-        `分层统计 (群×时段; account=${accountId})`,
-        `模式: ${!LAY.enabled ? "❌ 关闭" : LAY.apply ? "✅ 生效" : "影子 (apply=false, 只记录不生效)"}` +
-          ` / 每段门槛 n≥${LAY.minSamples} / 窗口 ${LAY.windowDays} 天 / ${LAY.allowLoosen ? "允许放宽" : "只许收紧"}`,
-        `段: ${LAY.buckets.map(([s, e]) => `${s}-${e}时`).join(" / ")} · 当前时段 ${curKey ?? "(未被任何段覆盖)"}`,
-      ];
-      for (const g of shown) {
-        const anchor = hfLayerAnchorFor(accountId, g, hfCfg);
-        lines.push(`群 ${g}: 群级锚点 ${anchor.toFixed(2)}`);
-        for (const [s, e] of LAY.buckets) {
-          const key = `${s}-${e}`;
-          const r = rows.find((x) => x.group_id === g && x.layer_key === key && x.layer_kind === "daypart");
-          const n = r?.n ?? 0;
-          const engaged = r?.engaged ?? 0;
-          const step = hfLayerStep(anchor, { n, engaged }, hfCfg);
-          lines.push(
-            `  ${key}时: n=${n}/${LAY.minSamples}${n >= LAY.minSamples ? "" : " (样本不足)"}` +
-              ` rate=${n > 0 ? (engaged / n).toFixed(3) : "-"}` +
-              (r?.ambient_p != null ? ` 本底=${Number(r.ambient_p).toFixed(3)}` : "") +
-              (step.changed
-                ? ` ⇒ 建议 ${step.threshold.toFixed(2)}${LAY.apply ? " (生效)" : " (未生效)"}`
-                : " ⇒ 无建议 (死区/样本不足)") +
-              (key === curKey ? " ← 当前时段" : ""),
-          );
-        }
-      }
-      if (groups.length > shown.length) lines.push(`…其余 ${groups.length - shown.length} 群`);
-      await send(lines.join("\n"));
-    } catch (e) {
-      await send(`读取分层统计失败: ${e instanceof Error ? e.message : String(e)}`);
-    }
-    return true;
-  }
-
-  // heartflow 特有: veto [群ID] (v1.8.0: 一键"这条不该回" = 人工强负样本)
-  if (feature === "heartflow" && arg === "veto") {
-    const nowSec = Math.floor(Date.now() / 1000);
-    try {
-      let gid = (args[1] ?? "").trim();
-      if (!gid) {
-        // 多群歧义保护: 最近 15 分钟有几个群发过? 0 → 明确回执; 1 → 就用它; ≥2 → 拒绝并要求显式群 ID
-        //   (写错群不可撤销: 错误样本会在 60 天分层窗口里持续污染)
-        const recent = await listHfSentCountsRecent(accountId, nowSec - 900, nowSec - 900);
-        const active = recent.map((r) => r.group_id);
-        if (active.length === 0) {
-          await send(`最近 15 分钟没有心流发言可否决 (account=${accountId})\n用法: /heartflow veto [群ID]`);
-          return true;
-        }
-        if (active.length >= 2) {
-          await send(
-            `最近 15 分钟有 ${active.length} 个群发过言, 无法判断是哪一条 ⇒ 请显式指定群 ID:\n` +
-              active.map((g) => `- ${g}`).join("\n") +
-              `\n用法: /heartflow veto <群ID>`,
-          );
-          return true;
-        }
-        gid = active[0] as string;
-      }
-      const r = await markHfLedgerVeto(accountId, gid, nowSec);
-      if (!r) {
-        await send(
-          `没找到可否决的发言 (account=${accountId}):\n${gid}\n(只对"已发出/已收敛"的心流发言生效; 已收敛的更早发言不在"最近一条")`,
-        );
-        return true;
-      }
-      // ⚠️ 必须删内存开窗: 否则随后有人引用那条 bot 消息会把 veto 覆盖成 engaged=1 (比不点更糟)
-      forgetHfOpenWindow(accountId, gid);
-      await send(
-        `已标记「这条不该回」(account=${accountId}):\n群: ${gid}\n那条: ${(r.content_head ?? "(无内容记录)").slice(0, 40)}\n` +
-          `发出: ${r.sent_at ? new Date(r.sent_at * 1000).toLocaleString("zh-CN") : "?"}\n` +
-          `已作为强负样本参与分层与调阈 (signal=veto, 不受本底过滤)。`,
-      );
-    } catch (e) {
-      await send(`否决失败: ${e instanceof Error ? e.message : String(e)}`);
-    }
-    return true;
-  }
-
-  // heartflow 特有: why <群ID> (v1.7.0: 解释上一条为什么回/不回)
-  if (feature === "heartflow" && arg === "why") {
-    const gid = (args[1] ?? "").trim();
-    if (!gid) {
-      await send("用法: /heartflow why <群ID>\n(显示该群最近一次 judge 的五维打分/有效阈值/命中信号 + 当前预算与画像)");
-      return true;
-    }
-    try {
-      const last = await getHfLedgerLast(accountId, gid);
-      // 缺省用 defaultHeartflowConfig() (enabled 默认 false): 这里只读字段做展示, 不改变行为
-      const hfCfg = runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig();
-      const learned = getLearnedThreshold(accountId, gid);
-      const floor = getHfProfileBandFloor(accountId, gid);
-      // v1.8.0: 阈值决策改用统一入口 (与 handler 判定同源) —— 归因行才不会与实际判定脱节
-      const d = resolveHfThresholdDecision(accountId, gid, hfCfg);
-      const anchor = hfLayerAnchorFor(accountId, gid, hfCfg);
-      const base = d.applied ?? hfCfg.replyThreshold ?? 0.6;
-      const eff = floor == null ? base : Math.max(base, floor);
-      const srcName =
-        d.source === "layer"
-          ? `分层[${d.layerKey}]`
-          : d.source === "group"
-            ? `群级 learned ${learned?.toFixed(2) ?? "-"}`
-            : "账号级";
-      const attrLine =
-        `当前有效阈值 ${eff.toFixed(2)} = ${srcName} ${base.toFixed(2)}` +
-        (d.layerKey ? ` [段 ${d.layerKey} n=${d.layerN} ${d.layerRate == null ? "无样本" : `rate=${d.layerRate.toFixed(3)}`}${d.apply ? " 生效" : " 未生效(影子)"}]` : "") +
-        ` ← 群级 ${learned?.toFixed(2) ?? `- (锚点 ${anchor.toFixed(2)})`} / 账号 ${hfCfg.replyThreshold ?? "-"}${floor != null ? ` / 画像下限 ${floor}` : ""}`;
-      const shadowLine = d.shadow
-        ? `影子建议: 分层[${d.shadow.layerKey}] n=${d.shadow.n} rate=${d.shadow.rate.toFixed(3)} ⇒ ${d.shadow.threshold.toFixed(2)} (layered.apply=false, 未生效)`
-        : d.layerKey && d.layerN > 0 && !d.apply
-          ? `影子分层: 段 ${d.layerKey} n=${d.layerN} rate=${d.layerRate?.toFixed(3) ?? "-"} ⇒ 死区内/不可动, 无建议`
-          : d.layerKey
-            ? `影子分层: 段 ${d.layerKey} n=0 ⇒ 样本不足 (门槛 ${resolveHfLayeredCfg(hfCfg).minSamples})`
-            : "";
-      const b = getHfBudgetState(accountId, gid, Math.floor(Date.now() / 1000));
-      const budgetStr =
-        `预算(本群): 本小时 ${b.hourCount} 条 / 今日 ${b.dayCount} 条` +
-        (b.lastReplyAtSec ? ` / 上次发言 ${Math.round((Date.now() / 1000 - b.lastReplyAtSec) / 60)} 分钟前` : "");
-      const prof = getHfProfilePromptText(accountId, gid);
-      const head = last
-        ? [
-            `最近一次 judge: ${new Date(last.judged_at * 1000).toLocaleString("zh-CN")} 状态=${last.status}`,
-            last.judge_overall != null
-              ? `综合分 ${last.judge_overall} vs 当时阈值 ${last.effective_threshold ?? "?"} ⇒ ${last.judge_overall >= (last.effective_threshold ?? 0.6) ? "过阈" : "未过阈(沉默)"}`
-              : "无打分 (judge 未产出结果)",
-            `五维: 相关 ${last.dim_r ?? "-"} / 意愿 ${last.dim_w ?? "-"} / 社交 ${last.dim_s ?? "-"} / 时机 ${last.dim_t ?? "-"} / 连贯 ${last.dim_c ?? "-"}`,
-            `精力 ${last.energy ?? "-"} / 被接话 ${last.engaged == null ? "(不含在样本内)" : last.engaged ? "是" : "否"} / 信号 ${last.engage_signal ?? "(旧行/无)"}`,
-            last.suppressed_reason ? `沉默原因: ${last.suppressed_reason}` : "",
-            `消息: ${(last.content_head ?? "").slice(0, 40)}`,
-          ]
-        : ["最近无 judge 记录 (该群近 7 天没攒到台账行)"];
-      await send(
-        [
-          `为什么 (account=${accountId}):`,
-          `群: ${gid}`,
-          ...head,
-          attrLine,
-          shadowLine,
-          budgetStr,
-          prof ? `画像摘要:\n${prof}` : "画像: 无 (未生成 / 未预热)",
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      );
-    } catch (e) {
-      await send(`读取台账失败: ${e instanceof Error ? e.message : String(e)}`);
-    }
-    return true;
-  }
-
-  // heartflow 特有: report [天数] (v1.9.0 观测复盘: 占比/接话率/被制止率/重复率/分层/预算/外环)
-  if (feature === "heartflow" && arg === "report") {
-    const raw = Number(args[1] ?? 7);
-    const days = Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 1), 30) : 7;
-    const nowSec = Math.floor(Date.now() / 1000);
-    const since = nowSec - days * 86400;
-    try {
-      const hfCfg = runtimeHeartflow.get(accountId) ?? defaultHeartflowConfig();
-      const LRN = resolveHfLearning(hfCfg);
-      const LAY = resolveHfLayeredCfg(hfCfg);
-      const DED = resolveHfDedupeCfg(hfCfg);
-      const baseBudget = resolveHfBudget(hfCfg);
-
-      // ① 发言占比 (wpp_messages: 按群 × 方向计数; adapter 已 COALESCE 归群)
-      const shareRows = await listHfBotMsgShare(accountId, since);
-      const agg = new Map<string, { inbound: number; outbound: number }>();
-      for (const r of shareRows) {
-        if (!r.group_id) continue;
-        const cur = agg.get(r.group_id) ?? { inbound: 0, outbound: 0 };
-        if (r.direction === "outbound") cur.outbound += r.n;
-        else cur.inbound += r.n;
-        agg.set(r.group_id, cur);
-      }
-      const shares = [...agg.entries()]
-        .map(([groupId, v]) => ({ groupId, inbound: v.inbound, outbound: v.outbound, share: hfBotShare(v.inbound, v.outbound) }))
-        .sort((a, b) => b.share - a.share);
-
-      // ② 接话率 (台账已收敛样本; 逐样本用它自己那一小时的本底 ⇒ 与 sweep 的调阈 pass 同源)
-      const ambient = ambientPFromHourCounts(await loadHfGroupHourCounts(accountId, nowSec), LRN.labelWindowSec);
-      const closed = await listHfClosedSince(accountId, since, HF_LAYER_DB_ROW_CAP);
-      const engagement = hfEngagementSummary(closed, ambient, LRN.ambientMax);
-
-      // ③ 被制止率 (judged_at 口径; legacy 旧标签行不计入分母)
-      const sig = await countHfEngageSignals(accountId, since);
-      const stoppedTotal = Object.entries(sig).reduce((s, [k, v]) => (k === "legacy" ? s : s + v), 0);
-
-      // ④ 重复率 (闸同源)
-      const outbound = await listHfOutboundTexts(accountId, since, 2000);
-      const repeat = hfRepeatRate(
-        outbound.map((r) => ({ groupId: r.group_id, text: r.content, atSec: r.at_sec })),
-        DED,
-      );
-
-      // ⑤ 分层 (只看**当前时段**; 与 /heartflow layers 同一个 hfLayerStep, 不写第二套判定参数)
-      const curKey = hfLayerKeyFor(hfLocalHour(nowSec), LAY.buckets);
-      const layerRows = await listHfLayerStats(accountId);
-      const layers: Array<{
-        groupId: string; layerKey: string; n: number; engaged: number;
-        rate: number | null; suggestion: number | null; applied: boolean;
-      }> = [];
-      if (curKey) {
-        for (const g of [...new Set(layerRows.map((r) => r.group_id))]) {
-          const r = layerRows.find((x) => x.group_id === g && x.layer_key === curKey && x.layer_kind === "daypart");
-          const n = r?.n ?? 0;
-          const engaged = r?.engaged ?? 0;
-          const step = hfLayerStep(hfLayerAnchorFor(accountId, g, hfCfg), { n, engaged }, hfCfg);
-          layers.push({
-            groupId: g,
-            layerKey: curKey,
-            n,
-            engaged,
-            rate: n > 0 ? engaged / n : null,
-            suggestion: step.changed ? step.threshold : null,
-            applied: LAY.apply && LAY.enabled && n >= LAY.minSamples && step.changed,
-          });
-        }
-        layers.sort((a, b) => b.n - a.n);
-      }
-
-      const text = buildHfDigest({
-        nowSec,
-        days,
-        shares,
-        engagement,
-        stopped: { negative: sig["negative"] ?? 0, veto: sig["veto"] ?? 0, total: stoppedTotal },
-        repeat,
-        repeatSampleTotal: outbound.length,
-        layers,
-        budget: hfBudgetBlockedSnapshot(),
-        shareGuard: hfShareGuardSnapshot(accountId, baseBudget, hfCfg, nowSec),
-      });
-      await send(text);
-    } catch (e) {
-      await send(`生成复盘失败: ${e instanceof Error ? e.message : String(e)}`);
-    }
-    return true;
-  }
-
-  // 未知 action: 提示用法
-  const extra =
-    feature === "heartflow"
-      ? "\n  或 /heartflow threshold <0-1>\n  或 /heartflow group add|del|list <群ID>\n  或 /heartflow profile <群ID>\n  或 /heartflow why <群ID>\n  或 /heartflow layers [群ID] (v1.8.0 分层统计)\n  或 /heartflow veto [群ID] (v1.8.0 这条不该回)\n  或 /heartflow report [天数] (v1.9.0 复盘: 占比/接话率/重复率/外环)"
-      : "";
-  await send(`用法: /${feature} on|off|status${extra}\n状态: ${current ? "✅ 开启" : "❌ 关闭"}`);
-  return true;
-}
 
 /**
  * v1.3.80 WHITELIST-UNIFY: 白名单统一处理器 (私聊 /user, 群 /group, 黑名单 /blacklist)。
@@ -1359,8 +826,50 @@ export function inferFileNameForMedia(mediaUrl: string, explicitFileName?: strin
   return explicitFileName ?? inferredFileName;
 }
 
-export const wppChannelPlugin = {
-  id: CHANNEL_ID,
+// ============================================================
+// 2026-09-28 契约对齐 (S8): 原对象字面量里混着 **9 个非契约成员**
+//   (name / version / kind / start / stop / sendText / sendImage / sendMessage / buildSessionKey)
+//   以及嵌套在 outbound 下的 1 个非契约成员 (sendImage)。
+//   `satisfies ChannelPlugin` 对**新鲜对象字面量**做 excess-property 检查 ⇒ 这些成员必须先移出。
+//
+// 处置 = 方案 (a)+(c) 的组合: **移出为独立 export**, 再用 Object.assign 合并回去。
+//   - 仓内对这 9 个成员**零调用点** (全仓 src/ + tests/ grep 命中均为注释/定义处);
+//     openclaw 2026.9.6 也**完全不读不调** (证据见下)。
+//   - 但「openclaw 2026.7.1 ~ 2026.9.5 是否调用 plugin.start/stop/sendText」**未经验证** ⇒
+//     直接删除、或只移出不挂回, 都可能在更老框架上丢掉启动/收发入口 (与"不弱化连接/收发"冲突)。
+//   - 故: 契约面走受检字面量, 历史面走独立 export, Object.assign 合回 →
+//     **运行时对象成员集合与改动前完全一致** (零行为变化), 且全程无 as any / @ts-expect-error / 断言。
+//   - 若确认部署目标只有 2026.9.6, 后续可把 wppChannelLegacyApi 从合并里摘掉 (纯减法)。
+//
+// 证据 (openclaw 2026.9.6 dist):
+//   - 生命周期走 plugin.gateway.startAccount / stopAccount
+//     (server-channels-D1JRZ19m.mjs:409-410, 590-595), **不调** plugin.start / plugin.stop。
+//   - outbound 只调 sendText / sendMedia (channel-outbound-c-7621zH.mjs:161-176);
+//     全 dist `sendImage` 仅 3 处且都是 Telegram 内部 sendImageAsPhoto,
+//     契约 ChannelOutboundAdapter 亦无该成员。
+//   - buildSessionKey 全 dist 0 命中。
+// ============================================================
+
+/** outbound 下的历史方法 (非契约; 保留运行时以兼容更老框架 —— 见上方 S8 说明) */
+const wppOutboundLegacyApi = {
+  async sendImage(opts: { accountId?: string | null; to: string; imageUrl: string }) {
+    const r = await dispatchSendImage(resolveOutboundAccount(opts.accountId, "sendImage"), opts.to, opts.imageUrl);
+    return {
+      ok: r.ok, error: r.error,
+      msgId: r.msgId, newMsgId: r.newMsgId, createTime: r.createTime,
+      messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : ""),
+      chatId: opts.to,
+      roomId: opts.to.includes("@chatroom") ? opts.to : undefined,
+    };
+  },
+};
+
+/**
+ * wppChannelPlugin 的**历史 API 面** (非 ChannelPlugin 契约; 见上方 S8 说明)。
+ * 独立导出, 便于潜在调用方显式迁移; 同时由 Object.assign 合回 wppChannelPlugin,
+ * 使运行时对象与改动前逐成员一致。
+ */
+export const wppChannelLegacyApi = {
   name: PLUGIN_NAME,
   version: PLUGIN_VERSION,
   kind: "channel" as const, // channel 类型 (供 registerChannel 识别)
@@ -1382,9 +891,6 @@ export const wppChannelPlugin = {
       throw e;
     }
   },
-
-  // 注入 agentTools 供 OpenClaw 框架读取 (配合 api/client.ts 空凭证兑底 → 工具真正可调)
-  agentTools: AGENT_TOOLS,
 
   async stop(): Promise<void> {
     await shutdown();
@@ -1421,6 +927,16 @@ export const wppChannelPlugin = {
     return dispatchSendMessage(params);
   },
 
+  buildSessionKey,
+};
+
+/** 受 `satisfies ChannelPlugin` 检查的契约对象 (excess 字段已全部移出, 见上方 S8 说明) */
+const wppChannelContract = {
+  id: CHANNEL_ID,
+
+  // 注入 agentTools 供 OpenClaw 框架读取 (配合 api/client.ts 空凭证兑底 → 工具真正可调)
+  agentTools: AGENT_TOOLS,
+
   // ============================================================
   // v1.3.43 OUTBOUND-RUNTIME (2026-08-12 接总立 P1, 修复 cron announce delivery 永久错误)
   //
@@ -1436,7 +952,9 @@ export const wppChannelPlugin = {
   // 不动 wppChannelPlugin.sendText/sendImage/sendMessage (历史 inbound/outbound 都在调, 不能破坏)
   // 不动 gateway.startAccount (v1.1.14 已修 inbound dispatcher 的 channelRuntime 注入)
   // 最小可行版: 只 sendText + sendImage + deliveryMode, 跑通再说; chunker/normalizePayload/resolveTarget 后补
-  outbound: {
+  // Object.assign = 把非契约的 outbound.sendImage 合回 (运行时与改动前一致)。
+  //   返回的是交叉类型 (非新鲜字面量) ⇒ 不触发 excess-property 检查; 无任何断言。
+  outbound: Object.assign({
     deliveryMode: "direct" as const,
     // v1.3.46 IDENTITY-RETURN (2026-08-12 接总立 P1, 修复 framework hasDeliveryResultIdentity 报
     //   "adapter_returned_no_identity" → payload outcome: suppressed → message 工具看似 ok 但实际没发)
@@ -1459,27 +977,25 @@ export const wppChannelPlugin = {
     //
     // 不动现有功能 (sendText/sendImage/sendMedia 行为保持)
     // 仿 GeWe v1.4.4 范式 (gewe-multi-agent/src/index.ts:231 完整 outbound 字段定义)
-    async sendText(opts: { accountId?: string; to: string; text: string; ats?: string[] }) {
+    // 2026-09-28 契约对齐 (E2): 契约签名 `(ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>`。
+    //   - 入参 accountId 放宽为 `string | null` (契约如此; 实现走 resolveOutboundAccount 的 falsy 兜底)
+    //   - 返回值补**必填** `channel`; `messageId` 由 `string | undefined` 收紧为 `string`
+    //     (缺失时用 "" —— 空串在框架 hasDeliveryResultIdentity 里与 undefined 同为 falsy,
+    //      故不会凭空制造投递身份; chatId/roomId 仍照旧兜底)
+    async sendText(opts: { accountId?: string | null; to: string; text: string; ats?: string[] }) {
       const r = await dispatchSendText(resolveOutboundAccount(opts.accountId, "sendText"), opts.to, opts.text, opts.ats);
       return {
         ok: r.ok, error: r.error,
         msgId: r.msgId, newMsgId: r.newMsgId, createTime: r.createTime,
-        // v1.3.46 identity 字段:
-        messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : undefined),
+        // v1.3.46 + 2026-09-28 identity 字段 (契约必填 channel/messageId):
+        channel: CHANNEL_ID,
+        messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : ""),
         chatId: opts.to,
         roomId: opts.to.includes("@chatroom") ? opts.to : undefined,
       };
     },
-    async sendImage(opts: { accountId?: string; to: string; imageUrl: string }) {
-      const r = await dispatchSendImage(resolveOutboundAccount(opts.accountId, "sendImage"), opts.to, opts.imageUrl);
-      return {
-        ok: r.ok, error: r.error,
-        msgId: r.msgId, newMsgId: r.newMsgId, createTime: r.createTime,
-        messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : undefined),
-        chatId: opts.to,
-        roomId: opts.to.includes("@chatroom") ? opts.to : undefined,
-      };
-    },
+    // 注: 原 outbound.sendImage 是非契约成员, 已移出为 wppOutboundLegacyApi (见上方 S8 说明),
+    //     并由本对象外层 Object.assign 在**运行时**合回 —— 行为与改动前一致。
     // ============================================================
     // v1.3.44 SENDMEDIA (2026-08-12 接总立 P1, 修复 cron 晨报图片降级为文件卡片)
     //
@@ -1498,25 +1014,47 @@ export const wppChannelPlugin = {
     // framework sendMedia ctx (deliver.js:1454):
     //   { kind: "media", text: caption, mediaUrl, cfg, to, accountId, replyToId, threadId, formatting, ... }
     // WPP 暂不支持 replyToId/threadId (WPP outbound.ts sendText/sendImage 不支持 replyTo, 后续 P3 补)
+    // 2026-09-28 契约对齐 (E3):
+    //   - accountId: `string` → `string | null` (契约 ChannelOutboundContext.accountId)
+    //   - mediaUrl:   `string` → `string | undefined` (**契约里 mediaUrl 是可选的**, outbound.types:82)
+    //   - 返回值补必填 `channel` + `messageId` 收紧为 `string` (同 E2)
+    //   - 运行时防御: 旧实现 `opts.mediaUrl.split("?")` 在 mediaUrl 缺省时会抛 TypeError。
+    //     契约既然允许缺省, 就**不能崩**: 空 mediaUrl 直接返回结构化失败 (不发空媒体)。
+    //     这是把既有潜在崩溃改成显式失败, 正常路径 (mediaUrl 存在) 逐字不变。
     async sendMedia(opts: {
       cfg?: unknown;
       to: string;
-      accountId?: string;
+      accountId?: string | null;
       text?: string;          // caption
-      mediaUrl: string;
+      mediaUrl?: string;
       mediaType?: string;
       fileName?: string;      // v1.3.47: 调用方可显式传 fileName (framework 当前不传, 仅 plugin internal 可传)
       mimeType?: string;
-      replyToId?: string;
-      threadId?: string;
+      // 契约 ChannelOutboundContext.replyToId: `string | null` / threadId: `string | number | null`。
+      // 本实现**仍不消费**这两者 (WPP outbound.ts 不支持 replyTo, P3 补), 仅按契约放宽声明类型,
+      // 否则 ChannelOutboundContext 不可赋给本形参 (逆变检查)。
+      replyToId?: string | null;
+      threadId?: string | number | null;
       formatting?: unknown;
       audioAsVoice?: boolean;
       silent?: boolean;
     }) {
       const { sendMessage: dispatchSendMessage } = await import("./dispatch/send-message.js");
       const accountId = resolveOutboundAccount(opts.accountId, "sendMedia");
+      const mediaUrl = opts.mediaUrl ?? "";
+      if (!mediaUrl) {
+        log.warn(`outbound.sendMedia: mediaUrl missing (to=${opts.to}) — 拒绝发送空媒体 (契约允许 mediaUrl 缺省)`);
+        return {
+          ok: false,
+          error: "sendMedia: mediaUrl is required",
+          channel: CHANNEL_ID,
+          messageId: "",
+          chatId: opts.to,
+          roomId: opts.to.includes("@chatroom") ? opts.to : undefined,
+        };
+      }
       // 按 mediaType 优先; 没传则按 url 后缀推断
-      const urlNoQuery = (opts.mediaUrl.split("?")[0] ?? "").toLowerCase();
+      const urlNoQuery = (mediaUrl.split("?")[0] ?? "").toLowerCase();
       const inferred: WppSendType =
         /\.(jpg|jpeg|png|gif|webp|bmp|ico|tiff)$/i.test(urlNoQuery) ? "image" :
         /\.(mp4|mov|avi|mkv|webm|3gp)$/i.test(urlNoQuery) ? "video" :
@@ -1541,25 +1079,26 @@ export const wppChannelPlugin = {
       // 不动现有 framework ctx 接口 (让 plugin 兼容 framework 不传 fileName 的现状)。
       // 不动现有 sendMedia 类型推断 (v1.3.44 修复保持)。
       // ============================================================
-      const fileName = inferFileNameForMedia(opts.mediaUrl, opts.fileName);
+      const fileName = inferFileNameForMedia(mediaUrl, opts.fileName);
       // 走 WPP 统一 sendMessage 入口 (v1.3.17 MESSAGE-UNIFY 已统一所有 type 路由 + persist + oss)
       const r = await dispatchSendMessage({
         accountId,
         toWxid: opts.to,
         type,
-        content: opts.mediaUrl,
+        content: mediaUrl,
         fileName,  // v1.3.47: 传 fileName 给 dispatchSendMessage → vendor sendFile(toWxid, mediaUrl, fileName)
       });
       return {
         ok: r.ok, error: r.error,
         msgId: r.msgId, newMsgId: r.newMsgId, createTime: r.createTime,
-        // v1.3.46 identity 字段 (仿 framework hasDeliveryResultIdentity 期望):
-        messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : undefined),
+        // v1.3.46 + 2026-09-28 identity 字段 (契约必填 channel/messageId):
+        channel: CHANNEL_ID,
+        messageId: r.newMsgId ?? (r.msgId != null ? String(r.msgId) : ""),
         chatId: opts.to,
         roomId: opts.to.includes("@chatroom") ? opts.to : undefined,
       };
     },
-  },
+  }, wppOutboundLegacyApi), // ← 合回非契约的 outbound.sendImage (见上方 S8 说明)
 
   // ============================================================
   // v1.3.45 MESSAGING-TARGET-RESOLVER (2026-08-12 接总立 P1,
@@ -1666,7 +1205,9 @@ export const wppChannelPlugin = {
   //   - 不用 accountScopedRestart: extractAccountIdFromPath 对 accountId="default" 返回 null
   //     (特判整 channel 重启), default 账号无法被账号级重启隔离。
   // 2026-09-27 OPENCLAW-STATUS: 接入 OpenClaw 2026.9.6 的 status 契约
-  //   背景: 审阅发现插件仅实现 ChannelPlugin 必填字段 + 8 个可选项 (共 34 可选),
+  //   背景: 审阅发现插件仅实现 ChannelPlugin 必填 4 项 + 8 个可选项 (共 35 可选;
+  //         数字实测自 openclaw 2026.9.6 的 types.plugin-*.d.ts。已实现的 8 项:
+  //         reload/outbound/status/gateway/doctor/messaging/directory/agentTools),
   //         status 缺失 -> openclaw status 看不到本 channel 的账号健康度。
   //   数据源: AccountRegistry (get/listIds) + WppAccountState (vendorAuthed/selfWxid/ws/webhook)。
   //   字段语义对齐 ChannelAccountSnapshot (见 OpenClaw types.core)。
@@ -1762,7 +1303,9 @@ export const wppChannelPlugin = {
     },
   },
   // 2026-09-27 OPENCLAW-DOCTOR: 接入 OpenClaw 2026.9.6 的 doctor 契约
-  //   背景: 审阅发现插件只实现 ChannelPlugin 必填 4 项 + 9 个可选项 (共 34 可选)。
+  //   背景: 审阅发现插件只实现 ChannelPlugin 必填 4 项 + 8 个可选项 (共 35 可选;
+  //         数字实测自 openclaw 2026.9.6 的 types.plugin-*.d.ts。已实现的 8 项:
+  //         reload/outbound/status/gateway/doctor/messaging/directory/agentTools)。
   //         doctor 缺失 -> openclaw doctor 无法诊断本 channel 的配置问题,
   //         运维只能手写 ps/curl/grep 排查 (本会话调试时即如此)。
   //   本适配器是纯声明式的: 告诉框架「本 channel 的配置长什么样、边界在哪」,
@@ -1808,7 +1351,16 @@ export const wppChannelPlugin = {
       return out;
     },
   },
+  // 2026-09-28 契约对齐 (E7): 契约要求 `configPrefixes: string[]` 为**必填** (types.plugin-DWwKnMgs.d.ts:40-44)。
+  //   补**空数组** = 不声明任何「热前缀」。framework 装配规则 (config-reload-plan-D9XO5ks7.mjs:308-322):
+  //     prefixes: plugin.reload?.configPrefixes ?? []  → 空数组不产出任何 hot 规则
+  //   ⇒ 与「完全不声明 configPrefixes」在 reload 计划上**逐位等价** (该 channel 只剩 noop 规则, kind: "none")
+  //     → 网关对 channels.wechatpadpro 不重启 channel runtime, 微信连接不掉。
+  //   ⚠️ 绝不可写成 ["channels.wechatpadpro"]: 等深同前缀时 hot 规则靠插入顺序排在 noop 前获胜
+  //      → accountId===null ⇒ plan.restartChannels.add(plugin.id) ⇒ 整 channel 停启 ⇒ **微信掉线**。
+  //   (复刻 config-reload-plan 的比较器 + 规则构造实测: absent / [] 均 kind:"none"; ["channels.wechatpadpro"] 为 kind:"hot")
   reload: {
+    configPrefixes: [],
     noopPrefixes: ["channels.wechatpadpro"],
   },
 
@@ -1868,38 +1420,50 @@ export const wppChannelPlugin = {
       }
       return { ok: true };
     },
-    async stopAccount(ctx: { accountId: string }): Promise<{ ok: boolean; error?: string }> {
+    // 2026-09-28 契约对齐 (E8): 返回 `Promise<{ok,error?}>` → `Promise<void>`。
+    //   依据: 契约 `stopAccount?: (ctx: ChannelGatewayContext) => Promise<void>` (types.adapters:503);
+    //   框架唯一调用点 server-channels-D1JRZ19m.mjs:590-595 走
+    //   `runPluginCleanup(stopAccount, …)`, 而 runPluginCleanup
+    //   (plugin-instance-scope-C9hxyH_A.mjs:32-35) **丢弃返回值** —— 框架从不读 {ok,error}。
+    //   故: 原来靠返回值传达的 "no-op / 失败" 改走 log (信息不减, 只是换成框架真会看的通道);
+    //   且旧实现本就**不抛**(错误被 catch 后转成 {ok:false}), 新实现同样不抛 → 上层语义不变。
+    async stopAccount(ctx: { accountId: string }): Promise<void> {
       log.info(`gateway.stopAccount: accountId=${ctx.accountId}`);
       const reg = getDefaultAccountRegistry();
-      // 显式检查 — registry.stop 对未知账号是 no-op + warn, OpenClaw gateway
-      // 需要明确知道 stop 是 no-op 还是真停了
+      // registry.stop 对未知账号是 no-op + warn → 这里显式记录, 便于区分 "真停了" 与 "什么都没做"
       if (!reg.has(ctx.accountId)) {
-        return { ok: false, error: `account not found: ${ctx.accountId}` };
+        log.warn(`gateway.stopAccount: no-op — account not found: ${ctx.accountId}`);
+        return;
       }
       try {
         await reg.stop(ctx.accountId);
         log.info(`gateway.stopAccount: stopped ${ctx.accountId}`);
-        return { ok: true };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         log.error(`gateway.stopAccount: failed ${ctx.accountId}: ${msg}`);
-        return { ok: false, error: msg };
       }
     },
   },
+} satisfies ChannelPlugin;
 
-  buildSessionKey,
-};
+/**
+ * wppChannelPlugin = 契约对象 (受 satisfies 检查) **合并** 历史 API 面。
+ * 合并后运行时对象与改动前成员集合一致 (含 name/version/kind/start/stop/sendText/sendImage/
+ * sendMessage/buildSessionKey + outbound.sendImage); 详见上方 S8 说明。
+ */
+export const wppChannelPlugin = Object.assign(wppChannelContract, wppChannelLegacyApi);
 
 // ============================================================
 // plugin — OpenClaw v2026.7.1+ 要求的 manifest wrapper (default export)
 // 范式: 仿 OpenClaw v2026.7.1+ plugin 对象
 // ============================================================
 
-/** OpenClaw runtime 提供的 API (最少需要 registerChannel) */
-interface OpenClawPluginApi {
-  registerChannel: (arg: { plugin: typeof wppChannelPlugin }) => void;
-}
+// 2026-09-28 契约对齐 (S9): 删除本地**自引用**的假接口
+//   interface OpenClawPluginApi { registerChannel: (arg: { plugin: typeof wppChannelPlugin }) => void }
+//   —— 它把契约检查完全绕过 (自己定义的目标类型引用自己, 任何形状都"满足")。
+//   改用 openclaw/plugin-sdk/core 的**真** OpenClawPluginApi
+//   (其 registerChannel 为 `(registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void`,
+//    见 agent-harness-runtime-wMciqZ6Z.d.ts:22305, 最终指向与 ChannelPlugin 同一份类型)。
 
 export const plugin = {
   id: CHANNEL_ID,

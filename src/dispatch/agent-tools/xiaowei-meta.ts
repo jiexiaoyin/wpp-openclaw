@@ -40,12 +40,8 @@ export const XIAO_WEI_META: ToolMeta = {
       roomId: Type.Optional(Type.String()),
       welcomeText: Type.Optional(Type.String()),
     }),
-    (opts: { clientRequestId?: string; roomId?: string; welcomeText?: string }) =>
-      getXiaoWei().createSession({
-        clientRequestId: opts.clientRequestId,
-        roomId: opts.roomId,
-        welcomeText: opts.welcomeText,
-      }),
+    (clientRequestId?: string, roomId?: string, welcomeText?: string) =>
+      getXiaoWei().createSession({ clientRequestId, roomId, welcomeText }),
   ],
   xiaoWeiGetSession: [
     "获取小微会话状态 (当前消息/房间/最后事件序号).",

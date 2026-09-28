@@ -236,3 +236,24 @@ CREATE TABLE IF NOT EXISTS wpp_hf_layer_stat (
   PRIMARY KEY (account_id, group_id, layer_kind, layer_key),
   KEY idx_hf_layer_acct (account_id, layer_kind, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ⚠️ 与 src/storage/db/mysql.ts 的行内 DDL 必须同步 (改一处必改另一处)
+CREATE TABLE IF NOT EXISTS wpp_svrid_mapping (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  account_id VARCHAR(64) NOT NULL,
+  svrid VARCHAR(32) NOT NULL,
+  msg_md5 VARCHAR(32) NULL,
+  quoted_content_hash VARCHAR(64) NULL,
+  captured_at INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_svrid_acct (account_id, svrid),
+  KEY idx_md5 (msg_md5)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ⚠️ 与 src/storage/db/mysql.ts 的行内 DDL 必须同步 (改一处必改另一处)
+CREATE TABLE IF NOT EXISTS wpp_sync_state (
+  account_id VARCHAR(64) NOT NULL,
+  synckey VARCHAR(1024) NOT NULL,
+  updated_at INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (account_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

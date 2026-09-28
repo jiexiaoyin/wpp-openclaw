@@ -413,8 +413,10 @@ test('接线: handler 记人类消息 (与接话判定同一处, 零额外 IO)',
 test('接线: 账号启动回填 + /heartflow status 显示档位与拦截计数', (t) => {
   const i = src('src/index.ts');
   assert.match(i, /loadHfBudgetSeed\(accountId\)/, 'startAccount 必须回填预算计数');
-  assert.match(i, /hfBudgetBlockedSnapshot\(\)/, 'status 必须显示本次运行的拦截计数');
-  assert.match(i, /resolveHfBudget\(hfCfg\)/, 'status 必须显示生效档位');
+  // v1.9.2: handleFeatureCommand 迁到 src/inbound/filehelper-features.ts —— status 侧断言跟着源码搬家, 意图不变
+  const iCmd = src('src/inbound/filehelper-features.ts');
+  assert.match(iCmd, /hfBudgetBlockedSnapshot\(\)/, 'status 必须显示本次运行的拦截计数');
+  assert.match(iCmd, /resolveHfBudget\(hfCfg\)/, 'status 必须显示生效档位');
   const hl = src('src/inbound/heartflow-learn.ts');
   assert.match(hl, /export async function loadHfBudgetSeed/, 'heartflow-learn 必须 export loadHfBudgetSeed');
   assert.match(hl, /hfHourStartSec\(nowSec\)[\s\S]{0,60}?hfDayStartSec\(nowSec\)/, '回填边界必须用本地整点/零点');

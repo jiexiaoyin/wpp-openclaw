@@ -47,9 +47,26 @@ export function makeWppFriend(ctx: WppAccountCtx) {
     search: (keyword: string, fromScene = 1, searchScene = 1) =>
       dispatch("/Friend/Search", { keyword, fromScene, searchScene }),
 
-    /** /Friend/SendRequest — 添加联系人 (v1 + v2) */
-    sendRequest: (v1: string, v2: string) =>
-      dispatch("/Friend/SendRequest", { v1, v2 }),
+    /**
+     * /Friend/SendRequest — 添加联系人.
+     * vendor Friend.SendRequestParamDoc (v09102): {opcode, scene, sourceContext, v1, v2, verifyContent}.
+     * 新路径 (老板 2026-09-28 决策): 直接用 /Friend/Search 返回的 sourceContext;
+     *   旧路径: opcode + scene + v1 + v2 必须**同时**提供 (v1/v2 来自 Search 返回).
+     * ⚠️ source_context 一次性使用, 过期或网络结果不明时**重新搜索**, 不重放旧票据 (vendor 原话).
+     * 字段名逐字对齐 vendor (opcode 全小写, 非 opCode); 仅传调用方给出的键, 不塞空占位.
+     */
+    sendRequest: (opt?: {
+      sourceContext?: string; opcode?: number; scene?: number;
+      v1?: string; v2?: string; verifyContent?: string;
+    }) =>
+      dispatch("/Friend/SendRequest", {
+        ...(opt?.sourceContext ? { sourceContext: opt.sourceContext } : {}),
+        ...(opt?.opcode !== undefined ? { opcode: opt.opcode } : {}),
+        ...(opt?.scene !== undefined ? { scene: opt.scene } : {}),
+        ...(opt?.v1 ? { v1: opt.v1 } : {}),
+        ...(opt?.v2 ? { v2: opt.v2 } : {}),
+        ...(opt?.verifyContent ? { verifyContent: opt.verifyContent } : {}),
+      }),
 
     /** /Friend/SetRemarks — 设置好友备注 (remarks + toWxid) */
     setRemarks: (wxid: string, remarks: string) =>

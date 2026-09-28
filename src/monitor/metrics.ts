@@ -30,7 +30,6 @@ export function renderPrometheus(): string {
     const [type, ...rest] = k.split("_");
     if (!type) continue;
     const restStr = rest.join("_");
-    if (restStr === undefined) continue;
     const base = restStr.replace(/_total$/, "");
     if (!byType.has(type)) byType.set(type, []);
     byType.get(type)!.push(base);

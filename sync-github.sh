@@ -19,6 +19,7 @@
 #      而它在公开仓 master 分支 ⇒ 公开仓被自己人泄了 62 个提交。任何"要发布的文件"都不得内联敏感串。
 #
 # 前置: build-release.sh 的脱敏校验通过 + 两个分支的快照都过 sanitize-source.sh --check (有残留 exit 1)
+#       + 镜像仓的**所有 tag** 都过 sanitize-source.sh --check-tags (STRICT; 2026-09-28 接线)
 #       新建的提交还要过 tools/check-commit-metadata.sh (作者/提交者邮箱, 不看文件内容)
 # 凭证: 走 git credential store (jiexiaoyin token)
 
@@ -37,8 +38,21 @@ SANITIZER="$DEV_DIR/tools/sanitize-source.sh"   # 绝对路径: 后面会 cd 到
 # master (源码分支) 发布快照的排除项 —— 只发**源码**, 不发依赖/产物/本机运行期配置
 #   node_modules/ coverage/ release/ dist-release/ : 依赖与构建产物 (历史里曾有 130M+, 已从 master 历史移除)
 #   accounts/default.json : 本机运行期账号配置 (真实 wxid / 管理员 / 群白名单); 公开仓只保留 .example
+#   dist/ 与 src/**/*.js (2026-09-28): tsc 编译产物与编译残留.
+#     为何必须显式列出 —— **rsync 不读 .gitignore**. 下面 L157 的 rsync 只认本数组,
+#     于是 .gitignore:15 (dist/) 与 :25 (src/**/*.js) 对发布路径完全失效:
+#       dev 仓 git 跟踪的 dist/*.js = 0 个, 而 master 快照实际含 147 个 dist/*.js
+#       + 35 个 src/*.js + 182 个 .map (共 364 个文件纯由 rsync 带上去).
+#     风险: 这些产物绕过脱敏 (sanitize-source.sh 的 SKIP_DIRS 亦未排除),
+#     而 dist/ 内联真实 URL/ID (见 .gitignore:15 注释). 且 src/*.js 是被误信的过期逻辑.
 SOURCE_EXCLUDES=(--exclude='.git/' --exclude='node_modules/' --exclude='coverage/'
-                 --exclude='release/' --exclude='dist-release/' --exclude='accounts/default.json')
+                 --exclude='release/' --exclude='dist-release/' --exclude='accounts/default.json'
+                 --exclude='dist/' --exclude='**/*.map'
+                 # src 下 35 个 .js 全部有对应 .ts (实测 0 孤儿) = 纯编译残留;
+                 #   两行都要: rsync 的 '**' 要求中间夹目录, 只写 src/**/*.js 会漏掉 src/ 根层 6 个
+                 #   (实测漏 config.js/llm-judge.js/db.js/api-client.js/account-state.js/types.js).
+                 #   scripts/setup.js 是手写脚本, 必须保留 -> 用 src/ 前缀限定, 不用 '*.js'.
+                 --exclude='src/*.js' --exclude='src/**/*.js')
 
 DRY_RUN=0
 NO_BUILD=0
@@ -117,6 +131,19 @@ rsync -a --delete --exclude=.git "$DEV_DIR/release/" "$MIRROR_DIR/"
 
 # 上传前最终敏感扫描 (双保险): 规则外置, 无豁免清单 (v1.6.8 起 --check 覆盖全树)
 WPP_SANITIZE_STRICT=1 bash "$SANITIZER" --check "$MIRROR_DIR" || { echo "✗ 敏感残留, 阻止上传"; exit 1; }
+
+# 上传前 tag 校验 (2026-09-28 接线): 分支 tip 干净 != tag 干净.
+#   2026-09-26 的历史重写只重写了 master **分支**, tag 从未重写 ⇒ 5 个公开 tag
+#   (v1.4.0/v1.4.1/v1.4.2/v1.5.0/v1.5.4-complete) 仍指向含明文 API key 的旧提交.
+#   而三层出口门 (pre-commit / 本脚本 / check-commit-metadata) 扫的都是工作树与分支,
+#   没有任何一层扫 tag —— 9db61fa 补了这道门, 但**从未接线**, 等于没加.
+#   ⚠️ 必须 STRICT: CHANGELOG.md 的豁免是 **dev 提交门** 的策略
+#      (tools/sanitize-exempt.txt 自己写明「发布路径由 STRICT 模式强制脱敏, 不可依赖本条豁免」),
+#      而 CHANGELOG.md 恰好是公开 tag 树里唯一携带真实格式密钥的文件 —— 实测对同一镜像仓:
+#        非 STRICT: v1.4.1/v1.4.2/v1.5.0/v1.5.4-complete 命中 sync-github.sh/openclaw.plugin.json
+#        STRICT   : 同样 4 个 tag 改命中 CHANGELOG.md (豁免若生效则这 4 处被静默放行)
+#   STRICT 通过环境变量传递给 --check-tags 内部的递归 --check (已实测继承).
+WPP_SANITIZE_STRICT=1 bash "$SANITIZER" --check-tags "$MIRROR_DIR" || { echo "✗ tag 敏感残留, 阻止上传"; exit 1; }
 
 git add -A
 if git diff --cached --quiet; then

@@ -143,7 +143,8 @@ test('6. mysql.ts: countHfLedgerByStatus 按 status+suppressed_reason 聚合, �
 });
 
 test('7. /heartflow status 打印 近24h台账 (judge 未过阈值在运维面可见)', () => {
-  const src = fs.readFileSync(`${ROOT}/src/index.ts`, 'utf-8');
+  // v1.9.2: handleFeatureCommand 迁到 src/inbound/filehelper-features.ts —— 命令侧断言跟着源码搬家, 意图不变
+  const src = fs.readFileSync(`${ROOT}/src/inbound/filehelper-features.ts`, 'utf-8');
   assert.match(src, /countHfLedgerByStatus/, '/heartflow status 必须调 countHfLedgerByStatus');
   assert.match(src, /近24h台账/, '必须打印"近24h台账"行 (沉默也可见)');
   assert.match(src, /bySuppressedReason/, '必须展示沉默原因分解');

@@ -168,14 +168,16 @@ test('11. index.ts: 启动加载 learned + 起 sweep + /heartflow status 只读 
   const i = src('src/index.ts');
   assert.match(i, /loadLearnedThresholds\(accountId\)/, 'startAccountById 必须 loadLearnedThresholds');
   assert.match(i, /startHeartflowSweep\(state, accountId,/, '必须 startHeartflowSweep (含 getCfg 取热载配置)');
-  assert.match(i, /listHfGroupStates\(/, 'status 摘要必须 listHfGroupStates');
-  assert.match(i, /learning/, '/heartflow status 分支必须提 learning');
+  // v1.9.2: handleFeatureCommand 迁到 src/inbound/filehelper-features.ts —— status 侧断言跟着源码搬家, 意图不变
+  const cmd = src('src/inbound/filehelper-features.ts');
+  assert.match(cmd, /listHfGroupStates\(/, 'status 摘要必须 listHfGroupStates');
+  assert.match(cmd, /learning/, '/heartflow status 分支必须提 learning');
   // v1.8.0: 启动预热分层缓存 (judge 热路径零 DB 读) + status 显示分层模式 + layers/veto 子命令
   assert.match(i, /loadHfLayerStats\(accountId\)/, 'startAccountById 必须预热分层缓存');
-  assert.match(i, /listHfLayerStats\(/, 'status 分层摘要必须 listHfLayerStats');
-  assert.match(i, /arg === "layers"/, '必须实现 /heartflow layers 子命令');
-  assert.match(i, /arg === "veto"/, '必须实现 /heartflow veto 子命令');
-  assert.match(i, /forgetHfOpenWindow\(/, 'veto 必须删内存开窗 (否则随后的引用会把 veto 覆盖成 engaged=1)');
+  assert.match(cmd, /listHfLayerStats\(/, 'status 分层摘要必须 listHfLayerStats');
+  assert.match(cmd, /arg === "layers"/, '必须实现 /heartflow layers 子命令');
+  assert.match(cmd, /arg === "veto"/, '必须实现 /heartflow veto 子命令');
+  assert.match(cmd, /forgetHfOpenWindow\(/, 'veto 必须删内存开窗 (否则随后的引用会把 veto 覆盖成 engaged=1)');
 });
 
 // ===== 4. schema / accounts (dev 侧即时绿) =====

@@ -474,7 +474,8 @@ test('veto 五要件: 值域 / 排序键 / 强信号 / 清开窗 / 多群歧义�
   assert.doesNotMatch(vbody, /UPDATE[\s\S]*WHERE id = \(SELECT/, '不得同表子查询更新 (MariaDB 拒绝)');
   assert.match(vbody, /engaged = 0, engage_signal = 'veto'/, 'veto = engaged 0 + 信号 veto');
   // 命令侧: 清开窗 + 多群歧义拒绝
-  const i = src('src/index.ts');
+  // v1.9.2: handleFeatureCommand 迁到 src/inbound/filehelper-features.ts —— 命令侧断言跟着源码搬家, 意图不变
+  const i = src('src/inbound/filehelper-features.ts');
   assert.match(i, /forgetHfOpenWindow\(accountId, gid\)/, 'veto 必须清内存开窗');
   assert.match(i, /active\.length >= 2/, '≥2 群时必须拒绝并要求显式群 ID (写错群不可撤销)');
   assert.match(i, /listHfSentCountsRecent\(accountId, nowSec - 900, nowSec - 900\)/, '歧义判定用最近 15 分钟已发统计');
