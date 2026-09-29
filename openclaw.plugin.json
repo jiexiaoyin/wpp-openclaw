@@ -1,8 +1,8 @@
 {
   "name": "wechatpadpro",
   "id": "wechatpadpro",
-  "version": "1.10.0",
-  "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin v1.10.0. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件/小程序卡片; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 323 paths API 覆盖 (vendor v09102, 含朋友圈批量导出/自动跟发、好友自动通过、运动排行). HEARTFLOW 心流 (未@群消息小模型多维持打分自动参与 + 发言预算/群画像/分层/观测复盘/重复内容闸/占比外环); JARGON 群黑话挖掘 (自主学习, AI 可查群黑话含义); AFFECTION 好感度/社交关系系统 + AI-UNIFY 统一判断模型. v1.9.x 修复: 红包/接龙关键词撞车 (结构性识别优先于关键词启发式) + 纯文本\"红包\"不再误静默 (关键词仅在卡片类 msgType=49 采信). v1.10.0 修复心流阈值自锁: 画像 band 有界抬升 (+0.10 上限) + 可达性天花板 (阈值够不着就压回最高分+一步) + 画像禁言令注入过滤 + 阈值不再印进裁判 prompt; 新增停摆金丝雀指标 (hf_last_send_age_sec / 生效阈值 gauge)。 安全加固: webhook token 强制 / 群白名单 fail-closed / WS 长退避 / 去重账号隔离 / DB 重试 / 时间口径全仓统一走 ts.",
+  "version": "1.11.0",
+  "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin v1.11.0. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件/小程序卡片; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 323 paths API 覆盖 (vendor v09102, 含朋友圈批量导出/自动跟发、好友自动通过、运动排行). HEARTFLOW 心流 (未@群消息小模型多维持打分自动参与 + 发言预算/群画像/分层/观测复盘/重复内容闸/占比外环); JARGON 群黑话挖掘 (自主学习, AI 可查群黑话含义); AFFECTION 好感度/社交关系系统 + AI-UNIFY 统一判断模型. v1.9.x 修复: 红包/接龙关键词撞车 (结构性识别优先于关键词启发式) + 纯文本\"红包\"不再误静默 (关键词仅在卡片类 msgType=49 采信). v1.10.0 修复心流阈值自锁: 画像 band 有界抬升 (+0.10 上限) + 可达性天花板 (阈值够不着就压回最高分+一步) + 画像禁言令注入过滤 + 阈值不再印进裁判 prompt; 新增停摆金丝雀指标 (hf_last_send_age_sec / 生效阈值 gauge)。 v1.11.0 心流看图: 待判定消息的图片直链以 OpenAI 兼容多模态内容块交给裁判 (默认开, 单条最多 1 张, 只取该条消息的图), 判分由猜变读; 无图时请求体逐字节不变; ⚠️会把图片发往厂商端点 (含人脸/客户单据)。 安全加固: webhook token 强制 / 群白名单 fail-closed / WS 长退避 / 去重账号隔离 / DB 重试 / 时间口径全仓统一走 ts.",
   "kind": "plugin",
   "configUiHints": {
     "tokenKey": {

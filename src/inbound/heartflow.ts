@@ -112,6 +112,12 @@ export interface HeartflowConfig {
    * 缺省走 HF_SHARE_GUARD_DEFAULTS。
    */
   shareGuard?: HfShareGuardConfig;
+  /**
+   * v1.11.0 看图 (老板 2026-09-29 拍板): 把待判定消息里的图片直链当多模态内容块交给 judge,
+   * 让判断依据从"猜"变"读"。**不进 UI schema** (与 budget 同惯例, 只走 accounts JSON)。
+   * 缺省 enabled=true / maxImages=1, 见 HF_VISION_DEFAULTS 与 extractHfImageUrls。
+   */
+  vision?: HfVisionConfig;
 }
 
 /**
@@ -498,6 +504,63 @@ export function buildChatContextSummary(
   return info;
 }
 
+// ===== 看图 (v1.11.0) =====
+
+/**
+ * v1.11.0 看图配置 (老板 2026-09-29 拍板)。
+ *
+ * 起因: 群里的图在 judge 眼里只是一行 `[图片] https://…jpg` 文本 ⇒ 模型只能瞎猜,
+ * 实测 5 条真实图片消息纯文本判分全部 ~0.25 (含"零售单晒单"和"下单指引"这种明显该接的)。
+ * 把图直接交给视觉模型后 (同一 prompt, 只多一个 image_url 块): 晒单 0.25→0.66~0.705、
+ * 下单指引 0.31→0.705~0.72 (过线), 而白酒广告/街景/自拍仍 0.25 (挡下) —— 是"由瞎猜变实读", 不是无脑抬分。
+ */
+export interface HfVisionConfig {
+  /** 总开关 (默认 true)。关掉 = 回到纯文本判图 (分数会掉回 ~0.25) */
+  enabled?: boolean;
+  /** 单条消息最多送几张图 (默认 1)。每张约 +1000 prompt tokens / +0.4~0.9s 延迟 */
+  maxImages?: number;
+}
+
+/** 看图缺省表 (代码默认; schema default 与 accounts JSON 缺省保持一致) */
+export const HF_VISION_DEFAULTS: Required<HfVisionConfig> = {
+  enabled: true,
+  // 只送 1 张: A/B 里翻盘的两条都只有 1 张图; 而一张原图已约 +1000 tokens,
+  // 多条图串 (群里常见连发) 会把 5s judge 超时和成本同时顶上去。
+  maxImages: 1,
+};
+
+/**
+ * v1.11.0 从消息文本里抠图片 URL (纯函数)。
+ *
+ * 形态来自 handler.ts enrich: `${content}\n[图片] ${mediaUrl}` (vendor v1 schema 分支尾部还可能跟
+ * 一句 "(注: …)" 说明 —— 正则按空白截断, 不会被它带歪)。
+ * 只认 `http(s)://` (生产是 OSS 直链; 实测匿名可 GET, 厂商端点取得到), 去重后按出现顺序截取 max 张。
+ * ⚠️ 边界 (不假装做到了): 这里按 **scheme** 过滤, 不解析主机 —— `http://127.0.0.1/…` 这种也放行。
+ *    来源本身可信 (URL 是自家 enrich 从 vendor 媒体数组取出来的, 不是群友手写的), 故不做 SSRF 级过滤;
+ *    真要收口, 该加在远端抓取侧 (厂商端点), 加在这里只是心理安慰。
+ */
+export function extractHfImageUrls(text: string, max = HF_VISION_DEFAULTS.maxImages): string[] {
+  if (!text || max <= 0) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const m of text.matchAll(/\[图片\]\s*(\S+)/g)) {
+    const url = m[1];
+    if (!url || !/^https?:\/\//i.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** 解析看图配置 (缺省 → HF_VISION_DEFAULTS) */
+export function resolveHfVisionCfg(cfg?: HfVisionConfig | null): Required<HfVisionConfig> {
+  return {
+    enabled: cfg?.enabled ?? HF_VISION_DEFAULTS.enabled,
+    maxImages: Math.max(0, Math.floor(cfg?.maxImages ?? HF_VISION_DEFAULTS.maxImages)),
+  };
+}
+
 // ===== LLM 判断 (5 维打分) =====
 
 export interface HeartflowJudgeInput {
@@ -693,6 +756,10 @@ export async function judgeHeartflow(
   const maxRetries = Math.max(0, cfg.maxRetries ?? 1); // v1.4.0 P0-fix 19:25: fallback 2→1 跟 defaultHeartflowConfig (line 154) 对齐 + 真实实现老板 14:55 C 方案 "5000ms × 2次重试 = 10秒总"
 
   const prompt = buildHeartflowPrompt(input, cfg);
+  // v1.11.0 看图: 只从**待判定消息**里取图 (不取上下文图, 成本可控 + 焦点清楚);
+  // 无图 / 关闭 / 端点不支持多模态 (非 openai 格式) 时 images 为空 ⇒ 请求体与本版之前逐字节一致。
+  const vision = resolveHfVisionCfg(cfg.vision);
+  const images = vision.enabled ? extractHfImageUrls(input.content, vision.maxImages) : [];
   const systemPrompt =
     (cfg.businessContext ? cfg.businessContext + "\n\n" : "") +
     "你是一个专业的群聊回复决策系统，能够准确判断消息价值和回复时机。\n" +
@@ -711,6 +778,7 @@ export async function judgeHeartflow(
         model,
         userPrompt,
         systemPrompt,
+        images,
         maxTokens,
         timeoutMs,
         creds: {
