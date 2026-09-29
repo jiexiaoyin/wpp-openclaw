@@ -34,6 +34,11 @@ export const DEFAULT_JUDGE_ENDPOINTS = {
   minimax: "https://api.minimaxi.com/anthropic",
 };
 
+/** v1.11.0 看图: OpenAI 兼容多模态内容块 (文本 + 图片 URL) */
+export type JudgeContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export interface JudgeCreds {
   apiKey: string;
   baseUrl: string;
@@ -78,6 +83,7 @@ export function resolveJudgeCreds(overrides?: {
  * @param p.maxTokens
  * @param p.timeoutMs
  * @param p.creds resolveJudgeCreds() 产出
+ * @param p.images v1.11.0: 可选图片 URL 列表 (仅 openai 格式生效)
  * @returns 模型返回文本; 失败抛错
  */
 async function callJudgeInner({
@@ -87,6 +93,7 @@ async function callJudgeInner({
   maxTokens = 300,
   timeoutMs = 5000,
   creds,
+  images,
 }: {
   model: string;
   userPrompt: string;
@@ -94,6 +101,13 @@ async function callJudgeInner({
   maxTokens?: number;
   timeoutMs?: number;
   creds: JudgeCreds;
+  /**
+   * v1.11.0 看图 (老板 2026-09-29 拍板): 待判定消息附带的图片 URL 列表。
+   * 只认 `http(s)://` 与 `data:image/` 两种前缀 —— 其余 (file://、内网地址、空串) 一律丢弃,
+   * 防止把本地路径或内网端点当成图片交给厂商端点。
+   * ⚠️ 仅 openai 格式端点生效 (anthropic 分支忽略, 文本照旧)。
+   */
+  images?: string[];
 }): Promise<string> {
   if (!creds?.apiKey) {
     throw new Error("judge: no apiKey (DEEPSEEK_API_KEY / MINIMAX_API_KEY both missing)");
@@ -102,9 +116,17 @@ async function callJudgeInner({
   const noThink = creds.noThink ?? true; // v1.6.1: judge 默认关思考 (打分任务不需要思维链)
   let resp: Response;
   if (format === "openai") {
-    const messages: Array<{ role: "system" | "user"; content: string }> = [];
+    // v1.11.0 看图: 有图时 user content 变内容块数组 (OpenAI 兼容多模态格式), 无图时保持纯字符串
+    // —— 纯文本路径的请求体逐字节不变, 老行为零回归。
+    const imgs = (images ?? []).filter((u) => typeof u === "string" && /^(https?:\/\/|data:image\/)/i.test(u));
+    const messages: Array<{ role: "system" | "user"; content: string | JudgeContentPart[] }> = [];
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-    messages.push({ role: "user", content: userPrompt });
+    messages.push({
+      role: "user",
+      content: imgs.length
+        ? [{ type: "text", text: userPrompt }, ...imgs.map((url) => ({ type: "image_url" as const, image_url: { url } }))]
+        : userPrompt,
+    });
     resp = await safeFetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
