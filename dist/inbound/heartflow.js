@@ -296,6 +296,46 @@ export function buildChatContextSummary(chatId, cfg, nowMs) {
         info += `\n回复效果: ${postReplyEngagement}`;
     return info;
 }
+/** 看图缺省表 (代码默认; schema default 与 accounts JSON 缺省保持一致) */
+export const HF_VISION_DEFAULTS = {
+    enabled: true,
+    // 只送 1 张: A/B 里翻盘的两条都只有 1 张图; 而一张原图已约 +1000 tokens,
+    // 多条图串 (群里常见连发) 会把 5s judge 超时和成本同时顶上去。
+    maxImages: 1,
+};
+/**
+ * v1.11.0 从消息文本里抠图片 URL (纯函数)。
+ *
+ * 形态来自 handler.ts enrich: `${content}\n[图片] ${mediaUrl}` (vendor v1 schema 分支尾部还可能跟
+ * 一句 "(注: …)" 说明 —— 正则按空白截断, 不会被它带歪)。
+ * 只认 `http(s)://` (生产是 OSS 直链; 实测匿名可 GET, 厂商端点取得到), 去重后按出现顺序截取 max 张。
+ * ⚠️ 边界 (不假装做到了): 这里按 **scheme** 过滤, 不解析主机 —— `http://127.0.0.1/…` 这种也放行。
+ *    来源本身可信 (URL 是自家 enrich 从 vendor 媒体数组取出来的, 不是群友手写的), 故不做 SSRF 级过滤;
+ *    真要收口, 该加在远端抓取侧 (厂商端点), 加在这里只是心理安慰。
+ */
+export function extractHfImageUrls(text, max = HF_VISION_DEFAULTS.maxImages) {
+    if (!text || max <= 0)
+        return [];
+    const out = [];
+    const seen = new Set();
+    for (const m of text.matchAll(/\[图片\]\s*(\S+)/g)) {
+        const url = m[1];
+        if (!url || !/^https?:\/\//i.test(url) || seen.has(url))
+            continue;
+        seen.add(url);
+        out.push(url);
+        if (out.length >= max)
+            break;
+    }
+    return out;
+}
+/** 解析看图配置 (缺省 → HF_VISION_DEFAULTS) */
+export function resolveHfVisionCfg(cfg) {
+    return {
+        enabled: cfg?.enabled ?? HF_VISION_DEFAULTS.enabled,
+        maxImages: Math.max(0, Math.floor(cfg?.maxImages ?? HF_VISION_DEFAULTS.maxImages)),
+    };
+}
 /**
  * 构造 5 维判断 prompt (移植自 Heartflow judge_prompt)。
  * 返回完整 user prompt。
@@ -440,6 +480,10 @@ export async function judgeHeartflow(input, cfg, opts) {
     const maxTokens = 300;
     const maxRetries = Math.max(0, cfg.maxRetries ?? 1); // v1.4.0 P0-fix 19:25: fallback 2→1 跟 defaultHeartflowConfig (line 154) 对齐 + 真实实现老板 14:55 C 方案 "5000ms × 2次重试 = 10秒总"
     const prompt = buildHeartflowPrompt(input, cfg);
+    // v1.11.0 看图: 只从**待判定消息**里取图 (不取上下文图, 成本可控 + 焦点清楚);
+    // 无图 / 关闭 / 端点不支持多模态 (非 openai 格式) 时 images 为空 ⇒ 请求体与本版之前逐字节一致。
+    const vision = resolveHfVisionCfg(cfg.vision);
+    const images = vision.enabled ? extractHfImageUrls(input.content, vision.maxImages) : [];
     const systemPrompt = (cfg.businessContext ? cfg.businessContext + "\n\n" : "") +
         "你是一个专业的群聊回复决策系统，能够准确判断消息价值和回复时机。\n" +
         "你必须严格按照JSON格式返回结果，不要包含任何其他内容！请不要进行对话，只返回JSON！";
@@ -453,6 +497,7 @@ export async function judgeHeartflow(input, cfg, opts) {
                 model,
                 userPrompt,
                 systemPrompt,
+                images,
                 maxTokens,
                 timeoutMs,
                 creds: {

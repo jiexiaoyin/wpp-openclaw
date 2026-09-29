@@ -58,9 +58,10 @@ export function resolveJudgeCreds(overrides) {
  * @param p.maxTokens
  * @param p.timeoutMs
  * @param p.creds resolveJudgeCreds() 产出
+ * @param p.images v1.11.0: 可选图片 URL 列表 (仅 openai 格式生效)
  * @returns 模型返回文本; 失败抛错
  */
-async function callJudgeInner({ model, userPrompt, systemPrompt = null, maxTokens = 300, timeoutMs = 5000, creds, }) {
+async function callJudgeInner({ model, userPrompt, systemPrompt = null, maxTokens = 300, timeoutMs = 5000, creds, images, }) {
     if (!creds?.apiKey) {
         throw new Error("judge: no apiKey (DEEPSEEK_API_KEY / MINIMAX_API_KEY both missing)");
     }
@@ -68,10 +69,18 @@ async function callJudgeInner({ model, userPrompt, systemPrompt = null, maxToken
     const noThink = creds.noThink ?? true; // v1.6.1: judge 默认关思考 (打分任务不需要思维链)
     let resp;
     if (format === "openai") {
+        // v1.11.0 看图: 有图时 user content 变内容块数组 (OpenAI 兼容多模态格式), 无图时保持纯字符串
+        // —— 纯文本路径的请求体逐字节不变, 老行为零回归。
+        const imgs = (images ?? []).filter((u) => typeof u === "string" && /^(https?:\/\/|data:image\/)/i.test(u));
         const messages = [];
         if (systemPrompt)
             messages.push({ role: "system", content: systemPrompt });
-        messages.push({ role: "user", content: userPrompt });
+        messages.push({
+            role: "user",
+            content: imgs.length
+                ? [{ type: "text", text: userPrompt }, ...imgs.map((url) => ({ type: "image_url", image_url: { url } }))]
+                : userPrompt,
+        });
         resp = await safeFetch(`${baseUrl}/chat/completions`, {
             method: "POST",
             headers: {
