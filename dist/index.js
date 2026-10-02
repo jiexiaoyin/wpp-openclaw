@@ -569,6 +569,7 @@ _agentId = "main") {
                 if (result.Code === 0) {
                     log.info(`setWebhook OK: account=${accountId} url=${url} authcode=${maskSecret(cfg.authcode)} attempt=${attempt}/${maxAttempts}`);
                     SetWebhookMetrics.incSetWebhookOk();
+                    state.setVendorAuth(cfg.selfWxid, cfg.authcode); // vendor 鉴权通过 -> 消除 lastError 假告警
                     ok = true;
                     break;
                 }
@@ -601,6 +602,7 @@ _agentId = "main") {
                         if (r.Code === 0) {
                             log.info(`periodic setWebhook OK: account=${accountId} url=${url} authcode=${maskSecret(cfg.authcode)} (timer stopped)`);
                             SetWebhookMetrics.incPeriodicOk();
+                            state.setVendorAuth(cfg.selfWxid, cfg.authcode); // 周期重试成功同样标记已鉴权
                             state.clearRetryTimer(timer);
                         }
                         else {

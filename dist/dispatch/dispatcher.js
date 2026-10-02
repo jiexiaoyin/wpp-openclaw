@@ -472,7 +472,6 @@ function buildReferencedContextLines(msg, referencedMsg) {
  */
 function buildCtxPayload(msg, sessionKey, injectedContext, heartflowNote, moodNote, relayNote) {
     const isGroup = msg.peerKind === "group";
-    const toWxid = msg.toWxid ?? msg.accountId;
     // 引用消息注入结构化上下文: 解析 refermsg 块 → Body 追加说明 + 强制指令 (用户引用=期待引用回复)
     let body = msg.content || "";
     if (injectedContext) {
@@ -509,7 +508,16 @@ function buildCtxPayload(msg, sessionKey, injectedContext, heartflowNote, moodNo
         RawBody: msg.content || "",
         CommandBody: body,
         From: `${CHANNEL_ID}:${msg.fromWxid}`,
-        To: `${CHANNEL_ID}:${toWxid}`,
+        // framework 的 To 是「投递目标 / 对话端点」语义 (实证: bot-message-D_h8xVny.mjs:3046
+        //   以 To 构造出站 to; channel-BZonAecT.mjs:1097 用 To 解析目标通道), **不是**
+        //   收件人(self)。msg.peerId 指向真正的对话对象且方向已保证正确 ——
+        //   群聊 = chatroomId, 私聊 = 对方 wxid (parser.ts:98 赋值 + handler.ts:907 对
+        //   bot 自发私聊的 toWxid 修正)。
+        // 原实现填 msg.toWxid, 而 toWxid 是 receiver(self) 语义 (parser.ts:26 注释原文:
+        //   "toWxid / toUserName : receiver (self) wxid") → framework 据此推出
+        //   peer_id=机器人自己 + kind=channel, 同一会话因此分裂成 direct/channel 两条记录
+        //   (实测 conversations 表有 8 条此类重复)。
+        To: `${CHANNEL_ID}:${msg.peerId}`,
         SessionKey: sessionKey,
         AccountId: msg.accountId,
         ChatType: isGroup ? "group" : "direct",

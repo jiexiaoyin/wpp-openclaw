@@ -108,7 +108,8 @@ export const parseInbound = payloadToInboundMessage;
  * 解析 vendor v1 消息格式 (schema=wechatpad.message.v1):
  *   { content, conversation_id, created_at, direction, id, is_group, kind,
  *     local_id, recipient_id, sender_id, status, type }
- * 过滤规则 (只保留可交互入站): 非 incoming / kind=status / sender_id 以 gh_ 开头 / type=51 → null
+ * 过滤规则 (只保留可交互入站): 非 incoming / kind=status / sender_id 以 gh_ 开头 / type=51 → drop
+ *   返回 ParseV1Outcome: 丢弃时带上结构化 reason, 供上层 "inbound parse dropped" 告警归因。
  */
 function parseV1Message(accountId, msg) {
     const str2 = (v) => {
@@ -137,16 +138,17 @@ function parseV1Message(accountId, msg) {
     //   老板在机器人手机的文件传输助手里发命令 (/genpair 等) → 放行; 普通消息不放行 (不进 AI)
     const isFileHelper = recipientId === "filehelper" || conversationIdOrFileHelper(msg) === "filehelper";
     const isFileHelperCommand = isFileHelper && /^\s*\//.test(content);
+    const dropInfo = { reason: "", kind, msgType, direction, senderId };
     if (direction && direction !== "incoming" && !isOutgoingImage && !isFileHelperCommand)
-        return null;
+        return { drop: { ...dropInfo, reason: "outgoing-echo" } };
     if (kind === "status")
-        return null;
+        return { drop: { ...dropInfo, reason: "kind-status" } };
     if (!senderId)
-        return null;
+        return { drop: { ...dropInfo, reason: "no-sender" } };
     if (senderId.startsWith("gh_"))
-        return null;
+        return { drop: { ...dropInfo, reason: "gh-official" } };
     if (msgType === 51)
-        return null;
+        return { drop: { ...dropInfo, reason: "type-51" } };
     // 群聊必须按 groupId 建 session (否则按人拆, 群上下文串台): 优先级 conversation_id > recipient_id > sender_id
     const conversationId = str2(msg.conversation_id);
     const groupCandidates = [conversationId, recipientId, senderId].filter((v) => typeof v === "string" && v.endsWith("@chatroom"));
@@ -161,61 +163,91 @@ function parseV1Message(accountId, msg) {
     const ts = Math.floor(createdAt);
     // content 是 XML 时保留原文 (上层 quoteBot / XML 解析处理)
     return {
-        accountId,
-        msgId: rawMsgId || `${ts}-${Math.random().toString(36).slice(2, 10)}`,
-        newMsgId: v1NewMsgId,
-        fromWxid: senderId,
-        fromNickname: undefined,
-        chatroomId: chatroomWxid,
-        toWxid: recipientId,
-        msgType,
-        content,
-        ts,
-        raw: msg,
-        peerKind,
-        peerId,
-        // v1.3.21 REVOKE-FIX: 透传 direction (outgoing 图片需标 outbound, enrich 入库方向才正确)
-        direction: direction === "incoming" ? "inbound" : "outbound",
-        trigger: "direct",
+        msg: {
+            accountId,
+            msgId: rawMsgId || `${ts}-${Math.random().toString(36).slice(2, 10)}`,
+            newMsgId: v1NewMsgId,
+            fromWxid: senderId,
+            fromNickname: undefined,
+            chatroomId: chatroomWxid,
+            toWxid: recipientId,
+            msgType,
+            content,
+            ts,
+            raw: msg,
+            peerKind,
+            peerId,
+            // v1.3.21 REVOKE-FIX: 透传 direction (outgoing 图片需标 outbound, enrich 入库方向才正确)
+            direction: direction === "incoming" ? "inbound" : "outbound",
+            trigger: "direct",
+        },
     };
 }
-export function payloadToAllInboundMessages(accountId, payload) {
+/** 把丢弃原因聚合成 `reason xN, ...` 摘要 (空数组 → "") */
+export function summarizeDrops(drops) {
+    const counts = new Map();
+    for (const d of drops)
+        counts.set(d.reason, (counts.get(d.reason) ?? 0) + 1);
+    return [...counts].map(([reason, n]) => `${reason}x${n}`).join(",");
+}
+/**
+ * 解析 payload, 同时回收**每一条被丢弃消息的原因** ——
+ * "inbound parse dropped" 告警用它归因 (按设计过滤 / 结构不识别 / parser 抛异常)。
+ * 旧实现吞掉异常且丢弃了过滤原因, 导致整批被丢时无法区分"vendor 推了空批"与"我们全过滤了"。
+ */
+export function parsePayloadDetailed(accountId, payload) {
+    const messages = [];
+    const drops = [];
     try {
         const obj = payload;
         // 业务回调逐条 parse, 支持两种 vendor 格式: v1 Data.messages[] / 旧 Data.Data.AddMsgs[]
         if (obj.EventType === "sync_message" && obj.Data) {
             const dataOuter = obj.Data;
-            const out = [];
             // v1 格式: Data.messages[] (wechatpad.message.v1 schema)
-            const messages = dataOuter.messages;
-            if (Array.isArray(messages)) {
-                for (const item of messages) {
-                    const m = parseV1Message(accountId, item);
-                    if (m)
-                        out.push(m);
+            const rawMessages = dataOuter.messages;
+            if (Array.isArray(rawMessages)) {
+                for (const item of rawMessages) {
+                    const outcome = parseV1Message(accountId, item);
+                    if ("msg" in outcome)
+                        messages.push(outcome.msg);
+                    else
+                        drops.push(outcome.drop);
                 }
-                return out;
+                return { messages, drops, reasonSummary: summarizeDrops(drops) };
             }
             // 旧格式: Data.Data.AddMsgs[]
             const dataInner = dataOuter.Data;
             const addMsgs = dataInner?.AddMsgs;
-            if (Array.isArray(addMsgs) && addMsgs.length > 0) {
+            if (Array.isArray(addMsgs)) {
                 for (const item of addMsgs) {
                     const m = parseBusinessCallbackMsg(accountId, item);
                     if (m)
-                        out.push(m);
+                        messages.push(m);
+                    else
+                        drops.push({ reason: "business-callback-filtered" });
                 }
-                return out;
+                return { messages, drops, reasonSummary: summarizeDrops(drops) };
             }
-            return [];
+            // sync_message 但既非 messages[] 也非 AddMsgs[] —— 结构不识别
+            drops.push({ reason: "sync-unrecognized-shape" });
+            return { messages, drops, reasonSummary: summarizeDrops(drops) };
         }
         // 其他格式走原 parser (取一条)
         const single = payloadToInboundMessage(accountId, payload);
-        return single ? [single] : [];
+        if (single)
+            messages.push(single);
+        else
+            drops.push({ reason: "single-parse-null" });
+        return { messages, drops, reasonSummary: summarizeDrops(drops) };
     }
-    catch {
-        return [];
+    catch (e) {
+        const exception = e instanceof Error ? e.message : String(e);
+        return { messages, drops, exception, reasonSummary: `exception:${exception}` };
     }
+}
+/** Backward-compat: 只要消息列表 (归因走 parsePayloadDetailed) */
+export function payloadToAllInboundMessages(accountId, payload) {
+    return parsePayloadDetailed(accountId, payload).messages;
 }
 /**
  * 解析 vendor business callback 单条消息
