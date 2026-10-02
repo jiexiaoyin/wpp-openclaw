@@ -22,7 +22,7 @@ import { parseRelayText, isRelayMessage } from "./relay.js";
 import { isMiniProgramCard, parseMiniProgramCard, formatMiniProgramCard, coverThumbToken, enrichMiniProgramAsset } from "./app-card.js";
 import { isRedPacketMessage, processRedPacket } from "./hongbao.js";
 import { extractAtUserList } from "./parser/mention.js";
-import { payloadToAllInboundMessages } from "./parser.js";
+import { parsePayloadDetailed } from "./parser.js";
 import { SeenTracker, buildDedupeKey } from "../webhook-receiver.js";
 import { enrichImageMessage, enrichImageMessageFromV1, enrichImageMessageFromV1Cdn, enrichFileMessage, enrichFileMessageFromV1Binary, enrichVideoMessage, enrichVideoMessageFromV1, isV1SchemaVideo, enrichVoiceMessage, enrichVoiceMessageFromV1, isV1SchemaVoice, enrichFileMessageViaMcp, isV1SchemaImage, isV1SchemaFile, type ImageEnrichResult, type MediaEnrichResult } from "./media-enrich.js";
 import { getDefaultAccountRegistry } from "../account-state.js";
@@ -901,8 +901,8 @@ export function createWppInboundHandler(
 
   return {
     handle: async (payload: WppWebhookPayload): Promise<void> => {
-      // business callback 可能是 AddMsgs[] 多条, 逐条 parse
-      const msgs = payloadToAllInboundMessages(opts.accountId, payload);
+      // business callback 可能是 AddMsgs[] 多条, 逐条 parse (同时回收丢弃原因, 供下方 dropped 归因)
+      const { messages: msgs, reasonSummary, exception } = parsePayloadDetailed(opts.accountId, payload);
 
       // 私聊 peerId 修正: bot 自己发的私聊 (fromWxid===selfWxid) → 对方是 toWxid, 否则是自己 (sessionKey 串位)
       try {
@@ -928,7 +928,11 @@ export function createWppInboundHandler(
         const payloadData = (payload as Record<string, unknown>)?.Data as Record<string, unknown> | undefined;
         const payloadMsgs = payloadData?.messages;
         const msgCount = Array.isArray(payloadMsgs) ? (payloadMsgs as unknown[]).length : undefined;
-        warn(`inbound parse dropped: account=${opts.accountId} payloadKeys=${Object.keys((payload ?? {}) as object).join(",")} dataKeys=${Object.keys(payloadData ?? {}).join(",")} messagesLen=${msgCount ?? "n/a"}`);
+        // reasons: 逐条丢弃原因聚合 (outgoing-echo / kind-status / gh-official / type-51 /
+        //   business-callback-filtered / sync-unrecognized-shape / single-parse-null / exception:<msg>)。
+        //   `none` 表示 vendor 推了空批 (无消息可过滤), 不是解析失败 —— 便于区分"空推"与"全被过滤"。
+        const reasons = reasonSummary || (exception ? `exception:${exception}` : "none");
+        warn(`inbound parse dropped: account=${opts.accountId} payloadKeys=${Object.keys((payload ?? {}) as object).join(",")} dataKeys=${Object.keys(payloadData ?? {}).join(",")} messagesLen=${msgCount ?? "n/a"} reasons=${reasons}`);
         return;
       }
       // v1.9.2 观测: 入站消息计数 (ws 直推 + webhook 的 4 个调用点全部汇聚到本函数)。
