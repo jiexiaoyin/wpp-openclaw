@@ -7,13 +7,60 @@
 //   - safeFetchWithCap: 在 safeFetch 基础上加 maxBytes 限制 (Content-Length 预检 + 流式累加兜底)
 //   - isHostAllowed: 暴露给测试, 也可由调用方自行判断 (e.g. 构造 URL 前)
 //
-// 白名单: OSS bucket + vendor 公网反代 (跟 enqueue/OSS 实际使用一致)
+// 白名单: OSS bucket + vendor 公网反代 + 第三方 AI 端点 (跟 enqueue/OSS/LLM 实际使用一致)
 //   - openclaw-a.oss-cn-hangzhou.aliyuncs.com (OSS)
 //   - WPP_VENDOR_HOST.example.com (vendor 反代, 即 API host)
+//   - judge 主端点 (静态默认 + 经 env 点名的那个, 见 JUDGE_BASE_URL_ENV)
+//   - judge 兜底端点 (v1.13.0, 见 JUDGE_FALLBACK_BASE_URL_ENV)
 //
 // 阻止列表: loopback / 私网 / link-local (含 cloud metadata 169.254.169.254) / localhost / IPv6 loopback
 
 import { URL } from "node:url";
+
+/**
+ * v1.12.0 (2026-10-03): judge 主端点所在的 host 允许经 env 声明 (值 = 完整 base URL, 例:
+ * https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1)。
+ *
+ * 为什么把它放进白名单: 换 judge 端点时若只改 baseUrl 而忘了改下面这张静态表, safeFetch 会对
+ * **每一条** judge 调用抛 `host not in whitelist`, 而 heartflow 把 judge 异常吞成"不回复"
+ * ⇒ 心流静默停摆, 日志里只留一条 warning (与 2026-09-11 那次"静默瘫 3 天"同族形态)。
+ * 所以「换端点」必须只有**一个旋钮**: 本常量既在这里被解析成白名单条目, 又是
+ * src/llm-judge.ts 的 baseUrl 来源 —— 两处共用同一个字符串常量, 结构性不会漂移。
+ *
+ * ⚠️ 白名单语义未变: 仍然是「只允许**运维点名**的主机」。env 由运维/配置层控制, 不是模型可写
+ * (prompt 注入改不了它); 值缺失/非法 URL/非 http(s) 一律忽略(不抛), 不在名单里的 host 一律拒绝。
+ */
+export const JUDGE_BASE_URL_ENV = "DEEPSEEK_BASE_URL";
+
+/**
+ * v1.13.0 (2026-10-03): judge **兜底**端点 (主端点故障时重试的那一个) 所在的 host, 同样经 env 声明。
+ * 与上一条**同一个理由, 但风险更高**: 兜底只在"主端点已经坏了"时才走, 是整条链上最没人看的一跳 ——
+ * 少一个白名单条目 = 兜底从未生效过, 而现场表现只是"主端点一挂, 心流就还是不回复"
+ * (兜底自己抛 host not in whitelist, 被 heartflow 吞成"不回复", 与 v1.6.1 那次静默瘫同族)。
+ */
+export const JUDGE_FALLBACK_BASE_URL_ENV = "JUDGE_FALLBACK_BASE_URL";
+
+/** 允许经 env 声明 host 的变量名 (将来新增 AI 端点只需往这里追加一个) */
+const ENV_DECLARED_HOST_VARS = [JUDGE_BASE_URL_ENV, JUDGE_FALLBACK_BASE_URL_ENV] as const;
+
+/**
+ * 读取 ENV_DECLARED_HOST_VARS 各变量声明的 hostname.
+ * 值缺失 / 不是合法 URL / 非 http(s) → 跳过 (不抛): 非法值由 judge 那边给出更准的报错。
+ */
+function getEnvDeclaredHosts(): string[] {
+  const hosts: string[] = [];
+  for (const name of ENV_DECLARED_HOST_VARS) {
+    const raw = (process.env[name] ?? "").trim();
+    if (!raw) continue;
+    try {
+      const u = new URL(raw);
+      if (/^https?:$/.test(u.protocol) && u.hostname) hosts.push(u.hostname);
+    } catch {
+      /* 值不是合法 URL → 忽略 */
+    }
+  }
+  return hosts;
+}
 
 /**
  * v1.3.19 RELEASE: vendor host 可经 env WPP_VENDOR_HOST 覆盖 (发布版不含默认域名, 接收方设自己 vendor host).
@@ -23,6 +70,8 @@ import { URL } from "node:url";
 function getAllowedHosts(): Set<string> {
   const vendorHost = process.env.WPP_VENDOR_HOST || "WPP_VENDOR_HOST.example.com";
   return new Set([
+    // v1.12.0: judge 端点经 env 点名的 host (换端点只改 DEEPSEEK_BASE_URL, 见 JUDGE_BASE_URL_ENV)
+    ...getEnvDeclaredHosts(),
     // OSS bucket
     "openclaw-a.oss-cn-hangzhou.aliyuncs.com",
     // vendor 公网反代 (可配置)
@@ -31,7 +80,8 @@ function getAllowedHosts(): Set<string> {
     //   裸 fetch → safeFetch, 仍拦截内网/loopback/metadata, 防 prompt 注入 → URL 操控)
     "dashscope.aliyuncs.com",     // 阿里 embedding (intent-embed)
     "api.minimaxi.com",           // MiniMax LLM (intent-llm)
-    "api.deepseek.com",           // v1.6.0 DeepSeek LLM (llm-judge: heartflow/jargon/affection/enrich/intent-llm 主路径)
+    "api.deepseek.com",           // v1.6.0 judge 主端点默认值 (llm-judge: heartflow/jargon/affection/enrich);
+                                  //   v1.12.0 起实际端点可被 DEEPSEEK_BASE_URL 覆盖 → 上面 getEnvDeclaredHosts()
     "api.siliconflow.cn",         // SiliconFlow STT (storage/stt)
   ]);
 }
