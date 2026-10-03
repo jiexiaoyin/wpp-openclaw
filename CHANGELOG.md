@@ -4,6 +4,89 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.13.0] judge 二级端点兜底: 保留 DeepSeek 作兜底 (2026-10-03)
+
+> **起因**: 老板 2026-10-03 追问「心流策略能否保留 deepseek 作为兜底?」——
+> v1.12.0 切到阿里云端点后, 判分从"DeepSeek 单点"变成"阿里云单点",
+> 主端点一旦超时/5xx/返回空正文, 心流就整段停摆 (heartflow 把 judge 异常吞成"不回复", 现场只剩一条 warning)。
+> 本次按老板选定的 **B 方案 (判分层二级端点)** 落地: `callJudge` 主端点失败后**自动**用 DeepSeek 重试一次。
+
+### Added / 判分层兜底
+- **二级端点**: 主端点 (`DEEPSEEK_BASE_URL` + `DEEPSEEK_API_KEY` + 账号文件 `model`) **任何**抛错后,
+  自动改用兜底端点 (`JUDGE_FALLBACK_BASE_URL` + `JUDGE_FALLBACK_API_KEY` + `JUDGE_FALLBACK_MODEL`) 重试一次。
+  兜底格式恒为 `openai` (既定用途就是 DeepSeek 系, 与主端点同协议)。
+- **三项 env 缺一不生效**: 模型名**不硬编码** (v1.4.0「消除 hardcode」), 所以 baseUrl/key/model 必须**同时**给全。
+  三项全缺 = `off` (正常的"没打算要兜底", 行为与 v1.12.0 逐字一致); 缺一两项 = `partial`
+  ⇒ **启动时 WARNING 点明缺的是哪一个**, 且**不重试** —— 半配静默当没配就是本仓反复在防的"配了却不生效"。
+- **接线在 `callJudge` 内部、按 env 现读**: heartflow / affection / jargon 三条机制**各自** new 一个
+  `JudgeCreds` 字面量 (heartflow 的 `format` 兜底还是 `"anthropic"`), 从 `resolveJudgeCreds()` 带新字段会被它们丢掉
+  ⇒ 只有把解析放在这一层, 三条机制才能**零改动**同时拿到兜底。
+
+### Changed / ⚠️ 指标语义
+- `judge_failures_total` 从"callJudge 抛错次数"**收紧为"最终失败次数"**: 主端点挂了但兜底救回来的那次**不再计失败**
+  (它没失败)。兜底未配时两者恒等 ⇒ 不开兜底的部署读数不变。
+- 新增 `judge_fallback_total` (兜底被启用次数) / `judge_fallback_ok_total` (兜底**救回来**次数) ——
+  后者直接回答"兜底到底有没有用"。
+
+### 边界 (有意如此, 不是遗漏)
+- **只兜"端点故障", 不兜"分数不好"**: `callJudgeInner` 的每一处 throw 都是端点级
+  (无 key / HTTP 非 2xx / 空正文 / 网络 / 超时), 没有一处因判分结果而抛 ⇒ "任何 throw 就重试" 恰好等于
+  "只兜端点故障"。**判分好坏永远不触发重试** (否则会变成刷分 / 掩盖调阈问题)。
+- **不重试第三次**: 兜底只重试一次, 不递归 (两段都坏时递归就是死循环)。最坏延迟从 `1×timeoutMs` 变 `2×timeoutMs`
+  (judge 默认 5000ms ⇒ 最坏 10s), 仅在主端点已经坏掉时才发生。
+- 兜底触发**必须 WARNING** 出声 (`journald` 只采 WARNING+), 内容含主端点病因 + 兜底端点/模型, **不含任何 key**;
+  两段都失败时抛合并报错, 同时点名两个端点 (`primary(...) = … | fallback(...) = …`), 堆栈只进 WARNING 不进这条。
+
+### Fixed / 安全
+- **兜底 host 与主端点走同一套 env 白名单**: `JUDGE_FALLBACK_BASE_URL_ENV` 加进 `safe-fetch` 的
+  `ENV_DECLARED_HOST_VARS` (就是那份"将来新增 AI 端点只需往这里追加一个"的表) ⇒ 换兜底端点只有一个旋钮。
+  少这一条 = 兜底**从未生效过**, 而现场表现只是"主端点一挂, 心流还是不回复"。
+  **白名单语义未变**: 未点名进不来 / 私网·回环·metadata 一律拒 (黑名单优先) / 非法值不抛不污染。
+
+### 验证 (2026-10-03)
+- `tests/unit/judge-fallback-v1130.test.mjs` **22 条**: 三种配置态分得开 · 重试的形状 (端点/model/key 全换,
+  且 images 看图 / 关思考 / system / max_tokens **一个不少**) · 网络抛错与空正文都兜 · 主端点成功一次不重试 ·
+  两段都失败点名两个端点且无 key · WARNING 出声且无 key · off 时不发噪声 WARNING · 三个计数器语义 ·
+  白名单同源正反两条 + 私网/metadata 拒绝 + 非法值不抛 · dist 产物防回退 (含"兜底模型名不许硬编码")。
+- 全量单测 `661 pass / 1 fail / 2 skip` —— 唯一那条红是 `P2-4.2` (部署端 plugin.json 还是 v1.12.0),
+  部署后转绿, 属预期的"没重新部署"。
+
+## [v1.12.0] judge 换模型: deepseek-flash → qwen3.8-flash @ 阿里云 token-plan (2026-10-03)
+
+> **起因**: 老板 2026-10-03 拍板把心流判分从 `deepseek-flash` 切到
+> `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` 下的 `qwen3.8-flash`
+> (全家切: heartflow / affection / jargon / heartflow-profile 共用同一条 judge 凭证链)。
+
+### Changed / JUDGE
+- **端点可配**: judge 主端点改由 env `DEEPSEEK_BASE_URL` 指定 (未设 → 默认 `https://api.deepseek.com`,
+  不设 env 时行为与 v1.11.0 完全一致)。优先级: 调用方 `overrides.deepseekBaseUrl` > env > 默认; 尾部斜杠统一去掉。
+  该端点与 DeepSeek 同走 openai 格式 ⇒ 凭证链、请求体、`thinking:{type:"disabled"}` 关思考参数**全部照旧**。
+- **模型名**: `accounts/default.json` 的 `heartflow.model` / `affection.model` / `jargon.model`
+  → `qwen3.8-flash`。⚠️ 端点与模型名是**一对**, 回滚要一起退 (账号文件的 `_model_note` 里写了回滚法)。
+- ⚠️ **只切了这三条**: `llmIntentModel` 走的是**另一条链** (`dispatcher.resolveMinimaxApiKey` →
+  `api.minimaxi.com` 的 anthropic 格式), 它今天本来就不通 (把 DeepSeek key 发给了 MiniMax ⇒ 401 降级),
+  与本端点无关, 不在本次范围 (待老板单独拍)。
+
+### Fixed / 安全
+- **SSRF 白名单与 judge 端点变成同一个旋钮**: `safe-fetch` 的静态 host 表原不含新端点 ⇒ 只改 baseUrl
+  会让**每一条** judge 调用抛 `host not in whitelist`, 而 heartflow 把 judge 异常吞成"不回复"
+  ⇒ 心流静默停摆 (与 2026-09-11 那次"静默瘫 3 天"同族)。现在 `JUDGE_BASE_URL_ENV` 由 `safe-fetch`
+  导出、被 `llm-judge` 导入: 同一个字符串常量既是 baseUrl 来源, 又经 `getEnvDeclaredHosts()` 进白名单
+  ⇒ 两处结构性不会漂移。**白名单语义未变** (仍只允许运维点名的主机; `BLOCKED_HOST_PATTERNS` 仍优先,
+  值缺失/非法 URL 一律忽略)。
+
+### Added / 可观测
+- **启动自述一行**: `[WPP <ver> JUDGE] openai https://host/path key=set models=heartflow:…,affection:…,jargon:…`
+  —— 只含 format / host / 路径 / 模型名 / key 有无, **不含 key 本身**。judge 成功调用本身不写日志,
+  这行是「到底在打哪个端点」唯一的正面证据 (端点拼错 / env 没生效 / key 没读到, 三种失败一眼分开)。
+
+### 验证 (2026-10-03, 真实代码探针)
+- 走插件自己的 `callJudge` + 逐字照抄的 `buildHeartflowPrompt`: **11/11 合法 JSON**,
+  p50 **1.3s** / max **1.5s** (5s 超时), 回/不回判定与 `deepseek-flash` **同序**
+  (A 0.850 vs 0.800 / B 0.285 vs 0.325 / C 0.785 vs 0.730 —— 同档, 略高)。
+- **请求体零改动**: 新端点接受并**遵守** `thinking:{type:"disabled"}` (无 `reasoning_content`,
+  5 vs 34 completion tokens) ⇒ judge 不会被思考吃光 max_tokens。
+
 ## [v1.11.0] 心流看图: 判分由"瞎猜"变"实读" (2026-09-29)
 
 > **起因**: 群里的图片进到裁判眼里只有一行 `[图片] https://…jpg` 文本 —— 模型看不到图,
