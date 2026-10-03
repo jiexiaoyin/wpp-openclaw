@@ -132,6 +132,8 @@ declareCounter("ws_disconnects_total");
 declareCounter("ws_reconnects_total");
 declareCounter("judge_calls_total");
 declareCounter("judge_failures_total");
+declareCounter("judge_fallback_total");
+declareCounter("judge_fallback_ok_total");
 declareCounter("messages_in_total");
 export const WsMetrics = {
     /** ws 连接关闭 (含 vendor idle 断连 / 网络抖动 / 主动 stop) */
@@ -148,8 +150,15 @@ export const WsMetrics = {
 export const JudgeMetrics = {
     /** callJudge 调用次数 (四机制公共入口) */
     incCall: () => incCounter("judge_calls_total"),
-    /** callJudge 抛错次数 (无 apiKey / HTTP 非 2xx / 空正文 / 超时) */
+    /**
+     * callJudge **最终**失败次数 (无 apiKey / HTTP 非 2xx / 空正文 / 超时)。
+     * v1.13.0 语义收紧: 主端点抛错但兜底救回来的那次**不计** (它没失败) —— 兜底没配时与旧值恒等。
+     */
     incFailure: () => incCounter("judge_failures_total"),
+    /** v1.13.0: 兜底端点被启用（= 主端点抛错且兜底已配）的次数 */
+    incFallback: () => incCounter("judge_fallback_total"),
+    /** v1.13.0: 兜底端点**救回来**的次数 ⇐ 直接回答"兜底到底有没有用" */
+    incFallbackOk: () => incCounter("judge_fallback_ok_total"),
 };
 export const InboundMetrics = {
     /** 解析成功、进入流水线的入站消息条数 (计在去重之前, 故可能包含被去重丢弃的) */

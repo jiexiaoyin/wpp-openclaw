@@ -24,6 +24,7 @@ import { watchOpenClawChannelConfig, publishAccountCoreFieldsToChannelConfig } f
 import { redeemPairingCode, generatePairingCode, readPairingCode } from "./pairing-store.js";
 import { resolveGlobalConfig, resolveSyncConfig } from "./core/runtime-config.js";
 import { resolveAiConfig } from "./config-ai.js";
+import { resolveJudgeCreds, describeJudgeEndpoint, resolveJudgeFallback, describeJudgeFallback, JUDGE_FALLBACK_VARS, } from "./llm-judge.js";
 import { defaultHeartflowConfig } from "./inbound/heartflow.js";
 import { loadLearnedThresholds, loadHfBudgetSeed, startHeartflowSweep, } from "./inbound/heartflow-learn.js";
 import { loadHfLayerStats, } from "./inbound/heartflow-layer.js";
@@ -438,6 +439,20 @@ _agentId = "main") {
     const inboundHandler = runtimeInboundHandlers.get(accountId);
     // shutdown 时 flush 缓冲消息 (幂等: 只 attach 一次, 复用同 handler)
     state.attachInboundFlush(() => inboundHandler.flushAll());
+    // v1.12.0 换 judge 端点: 启动即留一行"这次到底打哪个端点 + 用哪个模型"的自述 ——
+    //   这是「judge 真的在打新端点」唯一的正面证据 (成功调用本身不写日志)。
+    //   只打 format/host/路径/模型名 + key 有无, **绝不打 key 本身**。
+    // v1.13.0: 同一行补兜底端点自述 (fallback=none / MISCONFIGURED(缺…) / 端点+模型);
+    //   半配 (缺一两个 env) 另发一条 WARNING —— 半配的现场表现与"没配"完全一样,
+    //   不吭声就等于让人以为兜底已经生效 (本文件反复在防的那种失败形态)。
+    const fbState = resolveJudgeFallback();
+    log.info(`[WPP v${PLUGIN_VERSION} JUDGE] ${describeJudgeEndpoint(resolveJudgeCreds())}` +
+        ` models=heartflow:${hfCfg.model ?? "-"},affection:${afCfg.model ?? "-"},jargon:${jgCfg.model ?? "-"}` +
+        ` fallback=${describeJudgeFallback(fbState)}`);
+    if (fbState.kind === "partial") {
+        log.warn(`[WPP JUDGE] 兜底端点配置不完整 (缺 ${fbState.missing.join(", ")}) ⇒ 兜底未启用; ` +
+            `三项 (${JUDGE_FALLBACK_VARS.baseUrl} / ${JUDGE_FALLBACK_VARS.apiKey} / ${JUDGE_FALLBACK_VARS.model}) 都给全才生效`);
+    }
     // v1.6.x HEARTFLOW-FEEDBACK: 加载 per-群 learned 阈值进内存 + 启动每账号 sweep (幂等; stop 时 state 统一 clear)
     //   幂等性由 startHeartflowSweep 内部 clear-then-reschedule 保证 (含 in-flight race 已启动再进)
     void loadLearnedThresholds(accountId).then((n) => {
