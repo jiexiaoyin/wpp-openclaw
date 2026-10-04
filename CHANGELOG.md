@@ -4,6 +4,68 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.15.1] 针对 v1.15.0 带来的 doctor 假报「群白名单为空」: 加抑制钩子 (⚠️ 对 openclaw doctor 无效, 见下) (2026-10-04)
+
+> **起因 (v1.15.0 的副作用)**: v1.15.0 让 `channels.wechatpadpro.groupAllowFrom` / `allowFrom` 在
+> 顶层块里变成**逗号串** (Channel 页单框所必需)。框架自己的通用判据只认数组 ——
+> `empty-allowlist-scan-QxhNaDKI.mjs` 的 `hasAllowFromEntries(list) = Array.isArray(list) && …`
+> ⇒ 那两个值**恒被判成"空"**, 于是每次 `openclaw doctor` 都报
+> `channels.wechatpadpro.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty …`
+> **纯假报**: 真实群白名单在 `accounts/<id>.json` (SSOT), 框架看不到那个文件, 群消息不会掉。
+
+### ⚠️ 实测结论: 本版的钩子**拦不住 `openclaw doctor` 那条告警**, 且无法从插件侧拦住
+
+上线后复测: `openclaw doctor` 仍打印该告警。三条独立证据说明原因 —— **`openclaw doctor` 是独立
+CLI 进程, 它不加载第三方 (extension) channel 插件代码**:
+
+1. 该进程里 `normalizeAnyChannelId("wechatpadpro")` → `null`
+   (`registry-normalize-BnQO61Jh.mjs:8` = 查运行时注册表), 于是 `getDoctorChannelCapabilities`
+   落到 `DEFAULT_DOCTOR_CHANNEL_CAPABILITIES` —— 其 `groupAllowFromFallbackToAllowFrom: true`,
+   与 doctor 实际打印的措辞「**(and allowFrom)** is empty / …or …allowFrom」逐字吻合; 而本契约
+   声明的 `false` **从未生效** ⇒ 证明该进程里 `getChannelPlugin("wechatpadpro")` 是空的。
+2. `openclaw doctor` 输出里**零**条插件自身日志 (本插件 register 必打
+   `plugin.register: wppChannelPlugin registered`; 同进程也没有任何别的扩展插件日志)。
+3. 框架设计如此: doctor 侧走 `read-only-Dwh541LY.mjs` 的 manifest 元数据路径, read-only 插件对象
+   **没有 `doctor` 字段**; `listChannelDoctorEntries` 的 doctor 适配器只可能来自
+   `getLoadedChannelPlugin` / bundled 插件。`doctorCapabilities` 全 dist 只出现在 **bundled catalog**
+   (`official-external-plugin-bundled-catalogs-*.mjs`), docs 0 命中 ⇒ 第三方 extension **没有
+   manifest 级开关**。
+
+⇒ 结论: **本契约 (含 2026-09-27 那批 `dmAllowFromMode` / `groupModel` / `legacyConfigRules` /
+`collectEmptyAllowlistExtraWarnings`) 对 `openclaw doctor` 而言全是空转**; 那条 CLI 假报在插件侧
+无法消除 (只剩"把顶层 `groupPolicy` 从 openclaw.json 删掉"这种改语义的办法 —— 而 `groupPolicy`
+是 16 个 Channel 页核心镜像字段之一, 桥会按账号文件把它写回来, 故不可行)。本版钩子保留的理由:
+**语义正确、零副作用**, 一旦框架改为在 doctor 里加载插件代码即自动生效。
+
+### Fixed
+
+- **`doctor.shouldSkipDefaultEmptyGroupAllowlistWarning`** (v1.15.1 新增): 框架在白名单
+  `channelDoctorFunctionKeys` 里留了这个钩子, 调用点 `channel-doctor-6TyVVqIn.mjs:125`
+  (`entry.doctor.shouldSkip…(ctx) === true`), 位置在「groupPolicy==="allowlist" 且
+  `warnOnEmptyGroupSenderAllowlist`」**之后**、计算群名单是否为空**之前** ⇒ 返回 `true` 即短路掉
+  **该记录**的这条默认警告。
+  - 按记录 `prefix` 反解账号 (`channels.wechatpadpro` = 隐式 default;
+    `channels.wechatpadpro.accounts.<id>` = 具名), 用仓库既有的 **sync** `resolveAccount()` 读
+    `accounts/<id>.json` 的 `groupAllowFrom`, 经**同一个** `coerceStringArrayList` 归一
+    (数组或逗号串两种磁盘形态都算"有名单")。
+  - ⚠️ **只在真值非空时返回 `true`**。真为空 / 文件缺失 / 非法 JSON / 非法 id / 其它 channel
+    → 一律 `false`, 让框架照旧告警 (那时那条警告**有价值**: 群名单真空 ⇒ 群消息确实会被全拒)。
+    绝不做无条件抑制, 也**没有**把 `warnOnEmptyGroupSenderAllowlist` 改成 `false`。
+  - 失败方向安全: 读账号出错时只打一条 warn 并返回 `false` (宁可多报, 不可漏报)。
+
+### Added
+
+- `tests/unit/doctor-empty-group-allowlist-v1151.test.mjs` (9 例): 契约接线 / 数组非空 / 逗号串非空 /
+  空数组 / 空串与纯分隔符 / 文件缺失 / 非法 JSON / 路径穿越 id / 别的 channel / 无 `accounts` 段
+  走 default 分支 (现读现算期望值, 不钉内容)。只碰 scratch 账号, 不读写 `accounts/default.json`。
+
+### Changed
+
+- `tests/unit/channel-list-comma-v1150.test.mjs` V1: 不再钉死 `manifest.version === "1.15.0"`, 改成
+  钉**不变量** —— manifest 与 `package.json` 版本必须一致, 且不得低于 `1.15.0` (回退 = 本改造被回滚)。
+
+> 无 schema / 配置迁移, 无停机窗口要求 (除部署本身那次网关重启)。
+
 ## [v1.15.0] Channel 页五个 wxid 列表改成「逗号分隔单框」 (2026-10-04)
 
 > **起因 (老板反馈)**: OpenClaw webui 的 **Channel 配置页**里, `adminUsers` / `allowFrom` /

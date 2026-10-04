@@ -18,7 +18,10 @@
 
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { logObj as log, formatErr } from "./core/logger.js";
-import { CHANNEL_ID } from "./core/constants.js";
+import { CHANNEL_ID, DEFAULT_ACCOUNT_ID } from "./core/constants.js";
+// v1.15.1: doctor 抑制钩子要读账号文件里的群白名单 -> 复用 config.ts 的**同一**归一函数
+//   (单一收口: 逗号串/数组两种磁盘形态在这里都是"有名单")。config.ts 不反向 import 本文件, 无环。
+import { coerceStringArrayList } from "./config.js";
 import { getDefaultAccountRegistry } from "./account-state.js";
 import {
   listAccountIds as helperListAccountIds,
@@ -518,6 +521,73 @@ export function createChannelContract(deps: ChannelContractDeps) {
           );
         }
         return out;
+      },
+      // 2026-10-04 v1.15.1 OPENCLAW-DOCTOR: 抑制框架的**假**「群白名单为空」告警。
+      //
+      // 问题: v1.15.0 把这五个 wxid 列表的 manifest channel schema 改成 string (Channel 页渲染成
+      //   逗号分隔单框所必需)。框架自己的通用判据只认数组 ——
+      //   `empty-allowlist-scan-QxhNaDKI.mjs` 的
+      //     hasAllowFromEntries(list) = Array.isArray(list) && normalizeStringEntries(list).length > 0
+      //   ⇒ 顶层块里的 `groupAllowFrom: "a@chatroom,b@chatroom"` 恒被判成"空" ⇒
+      //     groupPolicy==="allowlist" 时每次 doctor 都报
+      //     "groupPolicy is "allowlist" but groupAllowFrom is empty — ... all group messages will be
+      //      silently dropped"。而**真实**群白名单在 accounts/<id>.json (SSOT), 框架看不到那个文件
+      //   ⇒ 这是纯假报, 与收发无关 (doctor 只是建议性的, --fix 亦为 noop)。
+      //
+      // 修法: 框架在 channelDoctorFunctionKeys 白名单里留了本钩子, 调用点
+      //   `channel-doctor-6TyVVqIn.mjs:125` `entry.doctor.shouldSkip...(ctx) === true`, 在
+      //   `empty-allowlist-scan` 里位于「groupPolicy==="allowlist" 且 warnOnEmptyGroupSenderAllowlist」
+      //   **之后**、计算 groupAllowFrom 是否为空**之前** ⇒ 返回 true 即短路掉**该记录**的这一条警告。
+      //
+      // ⚠️ 只在 truth 非空时返回 true。真为空/读不到文件一律 false —— 那时框架的告警**有价值**
+      //    (群名单真空 ⇒ 群消息确实会被全拒), 绝不能无条件抑制 (那会把真问题的信号一起闷掉)。
+      //
+      // 记录 → 账号的映射: 框架对**每条记录**调用一次, prefix 形如
+      //   `channels.wechatpadpro` (= 隐式 default 账号) 或 `channels.wechatpadpro.accounts.<id>`
+      //   (桥会把非默认账号核心字段写进 block.accounts.<id>, 见 channel-ui-bridge)。
+      //   `params.account` 是**块**里的记录 (看不到磁盘), 故只能按 prefix 反解 id 再读盘。
+      // ⚠️ 实测结论 (2026-10-04, v1.15.1 上线后): 本钩子**在 `openclaw doctor` 里不会被调用**,
+      //   因为那是个独立 CLI 进程, 它**不加载第三方 channel 插件代码** —— 证据 (三条独立):
+      //     ① 该进程里 `normalizeAnyChannelId("wechatpadpro")` 返回 null
+      //        (registry-normalize-BnQO61Jh.mjs:8 = `findRegisteredChannelPluginEntry(key)?.plugin.id ?? null`,
+      //         查的就是运行时注册表), 于是 getDoctorChannelCapabilities 落到
+      //        DEFAULT_DOCTOR_CHANNEL_CAPABILITIES (groupAllowFromFallbackToAllowFrom: **true**) ——
+      //         与 doctor 实际打印的措辞「(and allowFrom) is empty / …or …allowFrom」完全吻合,
+      //         而本契约声明的 false 从未生效 ⇒ 说明 getChannelPlugin("wechatpadpro") 是空的。
+      //     ② `openclaw doctor` 输出里**零**条插件自身日志 (本插件 register 时必打
+      //        `plugin.register: wppChannelPlugin registered`; 同进程也没有任何别的扩展插件日志)。
+      //     ③ 框架设计如此: doctor 侧走 read-only-Dwh541LY.mjs 的 manifest 元数据路径,
+      //        `listChannelDoctorEntries` 的 doctor 适配器只可能来自
+      //        `getLoadedChannelPlugin` / bundled 插件; read-only 对象**没有 doctor 字段**。
+      //   ⇒ 本契约 (含 2026-09-27 那批 dmAllowFromMode/groupModel/legacyConfigRules/
+      //     collectEmptyAllowlistExtraWarnings) 对 `openclaw doctor` 而言**全是空转**。
+      //     bundled/官方外部插件 (有 catalog metadata: `doctorCapabilities`) 才生效 ——
+      //     第三方 extension 没有 manifest 级开关 (dist 里 `doctorCapabilities` 只出现在
+      //     bundled catalog, 全 docs 0 命中)。
+      //   保留本钩子的理由: 语义正确、零副作用, 且一旦框架改为在 doctor 里加载插件代码
+      //     (或某条 in-process 路径调用 scanEmptyAllowlistPolicyWarnings) 立即生效。
+      //     那条 CLI 假报**无法从插件侧消除** —— 已在 CHANGELOG v1.15.1 与记忆里记档。
+      shouldSkipDefaultEmptyGroupAllowlistWarning: (params: {
+        channelName: string;
+        prefix: string;
+      }): boolean => {
+        if (params.channelName !== CHANNEL_ID) return false; // 防御: 不该被别的 channel 调到
+        const marker = `channels.${CHANNEL_ID}.accounts.`;
+        const accountId = params.prefix.startsWith(marker)
+          ? params.prefix.slice(marker.length)
+          : DEFAULT_ACCOUNT_ID;
+        // resolveAccount = 仓库既有的 sync 账号读取 (与运行期同一路径/同一文件, 含 id 合法性校验);
+        //   读不到/非法 → null → 不抑制。
+        let acct: { groupAllowFrom?: unknown } | null = null;
+        try {
+          acct = resolveAccount(undefined, accountId) as { groupAllowFrom?: unknown } | null;
+        } catch (err) {
+          log.warn(
+            `[doctor] shouldSkipDefaultEmptyGroupAllowlistWarning 读账号 ${accountId} 失败, 不抑制告警: ${formatErr(err)}`,
+          );
+          return false;
+        }
+        return coerceStringArrayList(acct?.groupAllowFrom).length > 0;
       },
     },
     // 2026-09-28 契约对齐 (E7): 契约要求 `configPrefixes: string[]` 为**必填** (types.plugin-DWwKnMgs.d.ts:40-44)。

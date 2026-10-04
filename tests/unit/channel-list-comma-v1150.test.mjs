@@ -73,7 +73,14 @@ test('V1 dev manifest: 五个列表字段 = string, 无 items, 描述含逗号�
   }
   // 顶层 configUiHints 是 **plugin 配置页** (plugins.entries.*) 的提示, 那条路本来就是逗号串口径 —— 不碰
   assert.equal(m.configUiHints.allowFrom.label, '私聊白名单 (逗号分隔)', '顶层 configUiHints 未被顺手改掉');
-  assert.equal(m.version, '1.15.0');
+  // 版本: 不钉死具体号 (v1.15.1 起本判据仍成立), 钉**不变量** —— manifest 与 package.json 必须同步,
+  //   且类型改造后的版本不能回退到 1.15.0 之前 (那意味着本改造被回滚了)。
+  const pkg = JSON.parse(fs.readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  assert.equal(m.version, pkg.version, 'dev manifest.version 必须 = dev package.json.version (双份版本号漂移)');
+  assert.ok(
+    /^1\.\d+\.\d+$/.test(m.version) && m.version.localeCompare('1.15.0', undefined, { numeric: true }) >= 0,
+    `manifest.version(${m.version}) 必须 >= 1.15.0 (本改造所在版本)`,
+  );
 });
 
 test('V1b 部署副本同判据 (部署前故意红, 与 P2-4.2 同族门禁)', () => {
