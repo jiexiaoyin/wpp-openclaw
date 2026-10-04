@@ -90,7 +90,7 @@ test('L1/L2 judge 模型 = qwen3.8-flash 切档 (2026-10-03 老板拍板: 阿里
   assert.strictEqual(d1.heartflow.model, 'qwen3.8-flash', 'L1 heartflow.model must be qwen3.8-flash');
   assert.strictEqual(d1.affection.model, 'qwen3.8-flash', 'L1 affection.model must be qwen3.8-flash');
   assert.strictEqual(d1.jargon.model, 'qwen3.8-flash', 'L1 jargon.model must be qwen3.8-flash');
-  // ⚠️ 端点与模型名是**一对**: 模型名换了而端点在别处 (env DEEPSEEK_BASE_URL) ——
+  // ⚠️ 端点与模型名是**一对**: 模型名换了而端点在别处 (env JUDGE_BASE_URL, v1.14.0 前叫 DEEPSEEK_BASE_URL) ——
   //    只改 names 不设 env ⇒ 名字打到 api.deepseek.com 必然 404; 只设 env 不改名 ⇒ deepseek-flash
   //    打到新端点也是 404。这条断言钉模型名, endpoints 由 src/llm-judge.ts 的 env 常量钉 (见
   //    tests/unit/judge-endpoint-v1120.test.mjs)。

@@ -1,7 +1,7 @@
 /**
  * v1.13.0 judge 兜底端点 (判分层二级端点) — 2026-10-03 老板拍板「心流策略保留 deepseek 作兜底」
  *
- * 形状: 主端点 (env DEEPSEEK_BASE_URL, 现为阿里云 token-plan MaaS 的 qwen3.8-flash) **任何**抛错后,
+ * 形状: 主端点 (env JUDGE_BASE_URL, 现为阿里云 token-plan MaaS 的 qwen3.8-flash; v1.14.0 前叫 DEEPSEEK_BASE_URL) **任何**抛错后,
  *   callJudge 自动换 DEEPSEEK 那套 (JUDGE_FALLBACK_*) 重试一次; 兜底被用到时 WARNING 出声。
  *
  * 本测试锁五类判据 (任一去牙即 FAIL):
@@ -417,11 +417,11 @@ test('v1.13.0 安全: 非法兜底 env 不抛、不污染白名单 (主端点默
 
 test('v1.13.0: 兜底端点与账号文件里的模型名互不干扰 (resolveJudgeCreds 一个字都没变)', async () => {
   await withEnvs(
-    { DEEPSEEK_API_KEY: 'sk-main-test', DEEPSEEK_BASE_URL: undefined, MINIMAX_API_KEY: undefined },
+    { JUDGE_API_KEY: 'sk-main-test', JUDGE_BASE_URL: undefined, MINIMAX_API_KEY: undefined },
     async () => {
       await withFallback({ baseUrl: FB_BASE, apiKey: FB_KEY, model: FB_MODEL }, async () => {
         const c = resolveJudgeCreds();
-        assert.strictEqual(c.apiKey, 'sk-main-test', '主端点 key 仍只认 DEEPSEEK_API_KEY');
+        assert.strictEqual(c.apiKey, 'sk-main-test', '主端点 key 仍只认 JUDGE_API_KEY');
         assert.strictEqual(c.baseUrl, PRIMARY_BASE);
         assert.strictEqual(c.format, 'openai');
         // 兜底模型名不许回流到主端点 (它是兜底专用的 env, 不是账号文件的 model)

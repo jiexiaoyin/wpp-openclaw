@@ -42,6 +42,8 @@ import {
   resolveJudgeFallback,
   describeJudgeFallback,
   JUDGE_FALLBACK_VARS,
+  JUDGE_MAIN_VARS,
+  lingeringLegacyJudgeVars,
 } from "./llm-judge.js";
 import { defaultHeartflowConfig } from "./inbound/heartflow.js";
 import {
@@ -546,6 +548,17 @@ export async function startAccountById(
     log.warn(
       `[WPP JUDGE] 兜底端点配置不完整 (缺 ${fbState.missing.join(", ")}) ⇒ 兜底未启用; ` +
         `三项 (${JUDGE_FALLBACK_VARS.baseUrl} / ${JUDGE_FALLBACK_VARS.apiKey} / ${JUDGE_FALLBACK_VARS.model}) 都给全才生效`,
+    );
+  }
+  // v1.14.0 env 改名 (DEEPSEEK_BASE_URL/_API_KEY → JUDGE_BASE_URL/_API_KEY, 老板拍板「阿里的那个不能使用 deepseek*」):
+  //   旧名**不再被读取**, 所以还留着旧名的环境会表现为"心流一条都不判分" —— 那种静默正是本文件反复在防的形态。
+  //   这一行让根因在第一眼就写出来 (且不打印任何值, 只说名字)。
+  const legacyJudgeVars = lingeringLegacyJudgeVars();
+  if (legacyJudgeVars.length > 0) {
+    log.warn(
+      `[WPP JUDGE] 检测到已废弃的 env 名: ${legacyJudgeVars.join(", ")} —— v1.14.0 起**不再读取**; ` +
+        `请改用 ${JUDGE_MAIN_VARS.baseUrl} / ${JUDGE_MAIN_VARS.apiKey} (改名原因: 它们装的是阿里云 token-plan 凭证, ` +
+        `挂 DeepSeek 名会与框架自家 deepseek provider 的 env 兜底撞名)`,
     );
   }
 

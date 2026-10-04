@@ -48,6 +48,11 @@ SANITIZER="$DEV_DIR/tools/sanitize-source.sh"   # 绝对路径: 后面会 cd 到
 SOURCE_EXCLUDES=(--exclude='.git/' --exclude='node_modules/' --exclude='coverage/'
                  --exclude='release/' --exclude='dist-release/' --exclude='accounts/default.json'
                  --exclude='dist/' --exclude='**/*.map'
+                 # .pytest_cache/ (2026-10-04 加): 本地 pytest 状态目录. 与 dist/ 同族 ——
+                 #   rsync 不读 .gitignore, 而本仓 .gitignore 里也没有它 ⇒ 它会原样进公开 master 快照
+                 #   (2026-10-04 dry-run 实测: 4 个文件待新增; 内容只有 CACHEDIR.TAG/README/空 nodeids).
+                 #   发布面只该有源码, 本地工具状态留在本地.
+                 --exclude='.pytest_cache/'
                  # src 下 35 个 .js 全部有对应 .ts (实测 0 孤儿) = 纯编译残留;
                  #   两行都要: rsync 的 '**' 要求中间夹目录, 只写 src/**/*.js 会漏掉 src/ 根层 6 个
                  #   (实测漏 config.js/llm-judge.js/db.js/api-client.js/account-state.js/types.js).

@@ -4,7 +4,35 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
-## [v1.13.0] judge 二级端点兜底: 保留 DeepSeek 作兜底 (2026-10-03)
+## [v1.14.0] judge env 改名: DEEPSEEK_BASE_URL/_API_KEY → JUDGE_BASE_URL/_API_KEY (2026-10-04)
+
+> **起因 (老板拍板)**: 「1 改名处理, 2 阿里的那个不能使用 deepseek*」。
+> 2026-10-04 一天里, 框架日志攒了 **62 条** `Your api key: ****… is invalid` (全在 03:00–08:50 之间),
+> 另有每次阿里端点 `403` 把整条模型链拖成 `All models failed` —— 根因是**同一个名字有三个消费者**:
+> ① 插件 judge 主端点 (设计如此、正确, 它打的就是阿里云 token-plan);
+> ② 框架 `models.providers.deepseek` 的 env 兜底 —— 读到同名 key, 把**阿里 key** POST 到 `api.deepseek.com`;
+> ③ 插件 llmIntent (`resolveMinimaxApiKey`) —— 读到同名 key, 打到硬编码的 MiniMax。
+> 名字指向 deepseek、值却是阿里云套餐凭证 ⇒ 只要还叫这个名字, ② ③ 两条路就永远开着。
+
+### Changed / 改名 (破坏性)
+- `DEEPSEEK_BASE_URL` → **`JUDGE_BASE_URL`**; `DEEPSEEK_API_KEY` → **`JUDGE_API_KEY`**。
+  与既有 `JUDGE_FALLBACK_BASE_URL` / `JUDGE_FALLBACK_API_KEY` / `JUDGE_FALLBACK_MODEL` 对称。
+- **旧名彻底作废, 不留兼容别名**: 全树没有任何一条路读它 (`command grep -rn` 只剩告警名单里那两个字面量)。
+  兼容别名哪怕只留一条, 撞名那条路就原样开着 —— 那正是这次要关掉的东西。
+- `resolveJudgeCreds()` 的参数 `deepseekBaseUrl` → `judgeBaseUrl` (它覆盖的是主端点, 而主端点
+  自 v1.12.0 起已经是阿里云 token-plan)。
+- `dispatcher.resolveMinimaxApiKey()` → `resolveIntentLlmApiKey()`。
+  ⚠️ 只改名, **没改端点**: 这条链的端点仍是 `intent-llm.ts` 里硬编码的 `api.minimaxi.com/anthropic`,
+  拿新名里的阿里 key 打过去必然 401 ⇒ 静默降级成规则 (改端点属另一次改动, 待老板单独拍)。
+- ⚠️ **`.env` 与 dist 都要重启网关才生效**: `.env` 只在网关启动时读一次 (无 watch/reload)。
+  改名本身可以在不重启的情况下安全落地 (运行中的进程 env 与 dist 都是旧的, 自洽)。
+
+### Added / 旧名残留告警
+- 启动时 `lingeringLegacyJudgeVars()` 检查旧名: 谁还设着, 就打一条 WARNING **点名**并告诉运维改成什么
+  (只点名, 不打印值); 白名单值按"没设"处理 —— **绝不拿它当凭证**。
+- 新增 `tests/unit/judge-env-rename-v1140.test.mjs`: 判据一律**反向** —— 「只设旧名 ⇒ 拿不到凭证 /
+  进不了 SSRF 白名单」, 外加"全 dist 代码里旧名只许出现在告警名单那一行"。
+
 
 > **起因**: 老板 2026-10-03 追问「心流策略能否保留 deepseek 作为兜底?」——
 > v1.12.0 切到阿里云端点后, 判分从"DeepSeek 单点"变成"阿里云单点",

@@ -3,7 +3,7 @@
  *
  * 背景: 老板拍板把心流判分从 deepseek-flash 切到阿里云 token-plan MaaS 的 qwen3.8-flash。
  *   换端点这一动作有两个**必须同时做**的一半:
- *     ① llm-judge 的 baseUrl (env DEEPSEEK_BASE_URL)
+ *     ① llm-judge 的 baseUrl (env JUDGE_BASE_URL —— v1.14.0 前叫 DEEPSEEK_BASE_URL)
  *     ② safe-fetch 的 SSRF host 白名单
  *   只做①不做② ⇒ 每条 judge 调用抛 `host not in whitelist`, 而 heartflow 把 judge 异常
  *   吞成"不回复" ⇒ 心流静默停摆 (与 2026-09-11 那次瘫 3 天同族形态)。
@@ -27,7 +27,9 @@ const { resolveJudgeCreds, resolveJudgeBaseUrl, describeJudgeEndpoint, DEFAULT_J
 const { isHostAllowed, JUDGE_BASE_URL_ENV } =
   await import(new URL('../../dist/util/safe-fetch.js', import.meta.url).href);
 
-const ENV = 'DEEPSEEK_BASE_URL';
+// v1.14.0 (2026-10-04) 改名: 老板拍板「阿里的那个不能使用 deepseek*」⇒ 本常量名随源码一起换了
+// (旧名 DEEPSEEK_BASE_URL 已不再被任何代码读取; 反向判据见 judge-env-rename-v1140.test.mjs)。
+const ENV = 'JUDGE_BASE_URL';
 /** 新端点 (阿里云 token-plan MaaS, 老板 2026-10-03 拍板) */
 const NEW_BASE = 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
 const NEW_HOST = 'token-plan.cn-beijing.maas.aliyuncs.com';
@@ -39,7 +41,7 @@ function withEnv(value, fn) {
 
 /**
  * 同时设多个 env 并还原。
- * ⚠️ 必须连 `DEEPSEEK_API_KEY` 一起控制: `resolveJudgeCreds` 的 openai 分支**只在有 key 时**走,
+ * ⚠️ 必须连 `JUDGE_API_KEY` 一起控制: `resolveJudgeCreds` 的 openai 分支**只在有 key 时**走,
  * 没 key 就落到 minimax 分支 (baseUrl=api.minimaxi.com/anthropic) —— 测试环境里没有生产 env,
  * 不显式设 key 就会"基线路径根本没被行使"而误判 (第一版就是这么红的)。
  */
@@ -62,7 +64,7 @@ function withEnvs(vars, fn) {
 
 /** judge 完整链路 (有 key, 走 openai 分支) */
 function withJudgeEnv(value, fn) {
-  return withEnvs({ DEEPSEEK_API_KEY: 'sk-test-fake', MINIMAX_API_KEY: undefined, [ENV]: value }, fn);
+  return withEnvs({ JUDGE_API_KEY: 'sk-test-fake', MINIMAX_API_KEY: undefined, [ENV]: value }, fn);
 }
 
 // ===== 1. baseUrl 来源优先级 =====
@@ -79,7 +81,7 @@ test('v1.12.0: env 生效 (含 /compatible-mode/v1 路径与尾斜杠归一化)'
   withJudgeEnv(NEW_BASE, () => {
     assert.strictEqual(resolveJudgeCreds().baseUrl, NEW_BASE);
     assert.strictEqual(resolveJudgeCreds().format, 'openai', '新端点走 openai 格式');
-    assert.strictEqual(resolveJudgeCreds().apiKey, 'sk-test-fake', 'key 仍来自 DEEPSEEK_API_KEY');
+    assert.strictEqual(resolveJudgeCreds().apiKey, 'sk-test-fake', 'key 仍来自 JUDGE_API_KEY');
   });
   withJudgeEnv(`${NEW_BASE}/`, () => {
     assert.strictEqual(resolveJudgeBaseUrl(), NEW_BASE, '尾部斜杠必须去掉 (否则拼出 //chat/completions)');
@@ -97,7 +99,7 @@ test('v1.12.0: 空串/纯空白 env 按"没设"处理 (回默认, 不许拼出�
 test('v1.12.0: 调用方 override 优先于 env (旧签名语义不变)', () => {
   withJudgeEnv(NEW_BASE, () => {
     assert.strictEqual(
-      resolveJudgeCreds({ deepseekBaseUrl: 'https://example.deepseek.com' }).baseUrl,
+      resolveJudgeCreds({ judgeBaseUrl: 'https://example.deepseek.com' }).baseUrl,
       'https://example.deepseek.com',
     );
   });
@@ -188,7 +190,7 @@ test('v1.12.0: dist 产物含 env 常量与自述 (防回退成硬编码端点)'
   const sf = fs.readFileSync(`${DIST}util/safe-fetch.js`, 'utf-8');
   assert.match(judge, /JUDGE_BASE_URL_ENV/, 'llm-judge 必须读 safe-fetch 导出的 env 常量');
   assert.match(judge, /describeJudgeEndpoint/, '启动自述必须编进产物');
-  assert.match(sf, /JUDGE_BASE_URL_ENV\s*=\s*"DEEPSEEK_BASE_URL"/, 'safe-fetch 必须导出同一个 env 名');
+  assert.match(sf, /JUDGE_BASE_URL_ENV\s*=\s*"JUDGE_BASE_URL"/, 'safe-fetch 必须导出同一个 env 名');
   assert.match(sf, /getEnvDeclaredHosts/, 'safe-fetch 必须把 env 声明的 host 解析进白名单');
   // 反向 (只查**代码**行, 注释里的举例 URL 不算 —— 否则这条会变成"注释里不许写文档"):
   //   不许把生产端点烤成可执行字面量 (发布版不含私域端点, 端点必须来自运维的 env)
