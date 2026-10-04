@@ -4,6 +4,55 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [Unreleased] 修复: 两个测试用例把临时目录泄漏到 /tmp (2026-10-04)
+
+> **只改 `tests/` 两个文件, 零 src / 零 manifest / 零配置变更 ⇒ 不需要部署, 不需要重启网关。
+> 版本号保持 v1.15.1。**
+
+### Fixed
+
+- `tests/unit/plugin-capture-paths.test.mjs` 与 `tests/unit/sanitize-rules.test.mjs` 的
+  `mkdtempSync` (前缀 `wpp-capture-` / `wpp-sanitize-`) **只建不删**。两文件每次运行都会各造若干棵
+  临时树 (capture 那棵还含一份 `dist/` 拷贝), 跑完即弃。
+- **实测后果 (2026-10-04 服务器巡检)**: 自 2026-09-26 起累计约 **3089 个 `wpp-capture-*` (5.9G)**
+  + **2461 个 `wpp-sanitize-*` (101M)** 堆在 `/tmp`, 且仍在增长 (~240 目录/天)。
+  已在本次清理中删除, 并按下述方式根治。
+- **修法**: 两文件各加一个模块级 `TEMP_DIRS` 登记表 + `node:test` 的 `after()` 钩子,
+  用例结束时 `rmSync(dir, { recursive: true, force: true })` 统一清理 (单条失败不影响测试结论)。
+- **验收**: `node --test` 跑完两文件后 `/tmp/wpp-capture-*` 与 `/tmp/wpp-sanitize-*` 残留 = **0**;
+  全量 `npm test` = **721 passed / 0 failed / 2 skipped** (两条 `{ skip: true }` 为 v1.5.1 遗留,
+  非本次引入), `npm run lint` 干净。
+
+## [Unreleased] 文档: 明确 Communications→Messages 各字段对 WPP 是否生效 (2026-10-04)
+
+> **纯文档, 零代码 / 零配置变更 ⇒ 不需要部署, 不需要重启网关。版本号保持 v1.15.1。**
+
+### Docs
+
+- 新增 `docs/openclaw-messages-config-scope.md` —— 判定框架顶层 `messages.*` 各字段
+  (即 Control UI Settings → Communications → Messages 页) 对 **本通道** 是否生效, 附消费点
+  file:line 与复现命令。结论:
+  - **生效 4 组**: `messages.visibleReplies` / `messages.groupChat.visibleReplies` (回合核心
+    `resolveSourceReplyDeliveryMode`, 按 `ChatType` 取值)、`messages.queue.{mode,cap,drop,debounceMs}`
+    (`get-reply-fCAtF3T_.mjs: resolveQueueSettings`, 走 `sessionCtx.Provider` ⇒ 支持 `byChannel`)、
+    `messages.responsePrefix` (`delivery.runtime-*` 施加)、`messages.responseUsage` / `usageTemplate`。
+    ⇒ 这几项**今天已在管 WPP**, 无需任何改动。
+  - **空转 5 项**: `groupChat.mentionPatterns` / `groupChat.unmentionedInbound` /
+    `groupChat.historyLimit` / `inbound.debounceMs` / `ackReaction(.Scope)`。共同原因: 消费点全在框架
+    **入站入口层** (`buildChannelInboundEventContext` / `runChannelInboundEvent` / 框架自带通道处理器),
+    而本插件入站只做 `recordInboundSession` 登记, 不把入站交给框架 ⇒ 框架拿不到
+    `InboundEventKind` / `InboundHistory` / `SessionTranscriptContext` / `WasMentioned` (插件 `src/`
+    对这四个符号 0 命中)。
+  - **结构性不可实现**: `ackReaction` —— 微信消息没有 reaction 这个动作, vendor 只有
+    `/Msg/SendEmoji` (`src/send/msg.ts:653`) 是**发一条表情消息**, 不是贴回应。
+- **为何不做"改插件适配 Communications"**: 生效项已生效 (改=重复实现); 空转项本插件都有**更强**的
+  自研等价物 (per-account 提及判定 / 心流自决插话 / `groupContextWindow`+语境过滤 / per-sender
+  debounce), 接入反而变弱; 且 `groupChat.unmentionedInbound: "room_event"` 会**压掉心流的自动回复**,
+  与需求相反。要真让空转项生效只能把入站改走框架入站管线 = 换架构, 代价是接受框架 sessionKey 约定
+  (参见 `src/session-key.ts` 记录的漂移事故) + 双份去重/debounce 把关 + 停机窗口。
+  ⇒ 判定: **负收益, 不做**。真需要的只有框架独有能力 (入站 hooks / bot-pair loop guard /
+  session-init conflict retry), 做法是单点照抄语义自研。
+
 ## [v1.15.1] 针对 v1.15.0 带来的 doctor 假报「群白名单为空」: 加抑制钩子 (⚠️ 对 openclaw doctor 无效, 见下) (2026-10-04)
 
 > **起因 (v1.15.0 的副作用)**: v1.15.0 让 `channels.wechatpadpro.groupAllowFrom` / `allowFrom` 在

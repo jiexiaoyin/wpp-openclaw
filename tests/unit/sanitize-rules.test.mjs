@@ -12,10 +12,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 
 const ROOT = path.resolve(new URL('../../', import.meta.url).pathname);
 const SANITIZER = path.join(ROOT, 'tools', 'sanitize-source.sh');
+
+// 每个 case 建一棵假树 (含规则文件) ⇒ 登记后统一清理。
+// 2026-10-04 事故: 本文件自 09-26 起只建不删, 三周在 /tmp 累积 2461 个 wpp-sanitize-* 目录 (~101M)。
+const TEMP_DIRS = [];
+after(() => {
+  for (const dir of TEMP_DIRS) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败不得影响测试结论 */ }
+  }
+  TEMP_DIRS.length = 0;
+});
 
 // 假规则: 一条字面量 + 一条手机号(前后视) + 一条群ID + 一条只查不改
 const RULE_LINES = [
@@ -28,6 +38,7 @@ const RULE_LINES = [
 
 function fixture(ruleLines = RULE_LINES) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpp-sanitize-'));
+  TEMP_DIRS.push(dir);
   const rules = path.join(dir, 'rules.txt');
   fs.writeFileSync(rules, ruleLines.join('\n') + '\n');
   const tree = path.join(dir, 'tree');
