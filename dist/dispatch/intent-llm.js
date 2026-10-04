@@ -4,9 +4,18 @@
 // 方案: 规则预筛 (纯@/极短不调 LLM) → LLM 判断注入哪些候选 → 失败降级注入全部。
 // 语音当文本: STT 转写文本在 content `\n[转写] <text>`, 当普通文本处理 (老板观点)。
 //
-// LLM 调用: MiniMax anthropic-messages (POST {baseUrl}/v1/messages + x-api-key + anthropic-version)
+// LLM 调用: **端点与格式一律跟 judge 主端点走** (v1.14.1, 见 resolveIntentLlmTarget) ——
+//   有 key 时 openai 格式 (POST {baseUrl}/chat/completions + Authorization: Bearer), 与 heartflow/
+//   affection/jargon 同一条凭证链; 只有显式传 opts.baseUrl/opts.format 才会偏离。
+//
+// ⚠️ v1.14.0 及以前这里**硬编码** `https://api.minimaxi.com/anthropic` 且格式按 host 猜,
+//   而 key 早就是阿里 token-plan 的那把 ⇒ 阿里 token 被 POST 到 api.minimaxi.com 的 x-api-key 头,
+//   必然 401 ⇒ 静默降级回规则。这既是"功能从未生效", 又是**凭据外发给第三方**。
+//   v1.14.1 把端点收口到 judge 的同一个解析器 (resolveJudgeCreds), 两种"换端点只做一半"
+//   不再可能 (与 safe-fetch 白名单共用常量的那条教训同族)。
 import { logObj as log, warn } from "../core/logger.js";
 import { safeFetch } from "../util/safe-fetch.js"; // v1.3.27 P3-safe-fetch: 白名单化防 SSRF
+import { resolveJudgeCreds } from "../llm-judge.js"; // v1.14.1: 端点/格式/凭证唯一来源
 /**
  * 判断群聊触发消息意图 (简单规则, 不用 LLM):
  * - no-op: 纯 @ / 极短 (≤4字, 如 "你好" "在吗") → 不注入上下文
@@ -95,6 +104,30 @@ export function toIntentCandidate(m) {
         isVoice,
     };
 }
+/**
+ * v1.14.1: 解析 intent 该打哪个端点、用什么格式 —— **唯一来源是 judge 凭证链**
+ * (`resolveJudgeCreds()`: 有 JUDGE_API_KEY ⇒ openai + env JUDGE_BASE_URL/默认 deepseek;
+ * 否则 MINIMAX_API_KEY ⇒ anthropic + api.minimaxi.com/anthropic)。
+ *
+ * 为什么必须共用: 端点和 key 是**一对**。分成两处解析就一定会出现"key 换了、端点没换"
+ * (v1.14.0 之前的实况: 阿里 token + MiniMax 端点 ⇒ 401 + 凭据外发)。
+ * 与 llm-judge/safe-fetch 共用 JUDGE_BASE_URL_ENV 常量是同一类结构修复。
+ *
+ * 显式覆盖 (`opts.baseUrl`) 仍支持, 但格式的**兜底方向反过来了**: 只有认得出是
+ * anthropic-messages 的 host (minimaxi / anthropic) 才猜 anthropic, 其余一律 openai。
+ * 旧写法 (`includes("deepseek") ? "openai" : "anthropic"`) 的失败方向最坏 ——
+ * 认不出的 host 会拿到 `x-api-key`, 而 openai 兼容端点是绝大多数。
+ */
+export function resolveIntentLlmTarget(opts) {
+    const override = (opts?.baseUrl ?? "").trim();
+    if (override) {
+        const baseUrl = override.replace(/\/+$/, "");
+        const looksAnthropic = /minimaxi|anthropic/i.test(baseUrl);
+        return { baseUrl, format: opts?.format ?? (looksAnthropic ? "anthropic" : "openai") };
+    }
+    const creds = resolveJudgeCreds();
+    return { baseUrl: creds.baseUrl, format: creds.format };
+}
 /** 解析 LLM 响应文本 → IntentDecision (剥 ```json 围栏 + 校验) */
 export function parseIntentResponse(text) {
     if (!text)
@@ -124,10 +157,14 @@ export function parseIntentResponse(text) {
 export async function decideIntentWithLlm(input, opts) {
     const apiKey = opts.apiKey;
     if (!apiKey) {
-        warn("[WPP v1.3.1 LLM-INTENT] missing MINIMAX_API_KEY, skip LLM intent (rule fallback)");
+        // v1.14.1: 文案与真实读取顺序对齐 —— 读的是 JUDGE_API_KEY (v1.14.0 前叫 DEEPSEEK_API_KEY),
+        //   MINIMAX_API_KEY 只是兜底。旧文案只提 MINIMAX_API_KEY, 照它去配会配错那把 key
+        //   (而且那把 key 装的是阿里 token-plan, 见文件头)。
+        warn("[WPP v1.14.1 LLM-INTENT] missing JUDGE_API_KEY (fallback MINIMAX_API_KEY), skip LLM intent (rule fallback)");
         return null;
     }
-    const baseUrl = (opts.baseUrl ?? "https://api.minimaxi.com/anthropic").replace(/\/$/, "");
+    // v1.14.1: 端点+格式跟 judge 走 (不传 opts.baseUrl 时) —— 见 resolveIntentLlmTarget
+    const { baseUrl, format } = resolveIntentLlmTarget(opts);
     // v1.5.0 P2-fix 20:41 老板拍 A: 4 项 P2 全收口 - 3 处 intent-llm/dispatcher hardcode 消除
     //   v1.4.0 心流消除 hardcode 时漏了这里, 现在补上
     //   链: opts.model (从 accounts cfg 注入) → schema default (openclaw.plugin.json llmIntentModel.default)
@@ -161,7 +198,6 @@ export async function decideIntentWithLlm(input, opts) {
         messages: [{ role: "user", content: userPrompt }],
     };
     try {
-        const format = opts.format ?? (opts.baseUrl?.includes("deepseek") ? "openai" : "anthropic");
         if (format === "openai") {
             const resp = await safeFetch(`${baseUrl}/chat/completions`, {
                 method: "POST",
