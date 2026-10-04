@@ -70,6 +70,31 @@ export function isValidAccountId(accountId: string): boolean {
   return typeof accountId === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(accountId);
 }
 
+// ============ v1.15.0 CHANNEL-UI-COMMA-LIST ============
+// 背景: Channel 页那五个 wxid 列表 (allowFrom/groupAllowFrom/blacklistGroups/adminUsers/
+// friendCirclePublishAllowFrom) 在 manifest schema 里声明成 type:"string" —— 唯一目的是让
+// OpenClaw 的 Channel 页把它们渲染成**单行逗号输入框** (框架没有控件开关, 类型是唯一杠杆)。
+// 块侧 (openclaw.json#channels.wechatpadpro) 因此存逗号串; 但账号文件 (唯一真值) 与**所有
+// 运行期消费点**仍是 string[]。手改账号文件写 "a,b" 也必须生效 ⇒ 读时一律归一。
+// 为什么必须收口: 值一旦以字符串形态漏给消费点, `.includes(x)` 会退化成**子串匹配**且不报错
+// = 静默误授权 (如 "wxid_a,wxid_b".includes("wxid_a") 恰为 true, 但 .length 变成字符数)。
+export const COMMA_LIST_KEYS = [
+  "allowFrom",
+  "groupAllowFrom",
+  "blacklistGroups",
+  "adminUsers",
+  "friendCirclePublishAllowFrom",
+] as const;
+
+/** 列表字段容错归一: 数组 → 清洗后的 string[]; 逗号串 → 拆分; 其它 → []。 */
+export function coerceStringArrayList(v: unknown): string[] {
+  if (Array.isArray(v)) {
+    return v.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean);
+  }
+  if (typeof v === "string") return v.split(",").map((s) => s.trim()).filter(Boolean);
+  return [];
+}
+
 // ============ v1.3.62 OPENCLAW-GUIDED-SETUP ============
 // OpenClaw `configure --section plugins` 引导写 plugins.entries.wechatpadpro.config。
 // 插件从该配置读兜底 (default 账号, 字段级 merge: OpenClaw 引导值优先, 文件已有值保留)。
@@ -146,6 +171,13 @@ export async function loadAccountConfig(accountId: string = DEFAULT_ACCOUNT_ID):
   } catch (e) {
     const err = e as NodeJS.ErrnoException; if (err.code === "ENOENT") throw new Error(`account config not found: ${p}`);
     throw e;
+  }
+  // v1.15.0: 列表字段归一 (必须在 guided merge 之前, 也必须在 configCache.set 之前 —— 缓存里存的
+  //   必须是归一后的对象, 否则命中缓存的分支会把字符串原样发出去)。手改文件写逗号串从此合法。
+  for (const k of COMMA_LIST_KEYS) {
+    const box = raw as unknown as Record<string, unknown>; // 同一对象; raw 在 guided merge 之前不回绑
+    const cur = box[k];
+    if (cur !== undefined) box[k] = coerceStringArrayList(cur);
   }
   // v1.3.62 OPENCLAW-GUIDED-SETUP (2026-08-13 老板拍板): OpenClaw `configure --section plugins` 引导写
   //   plugins.entries.wechatpadpro.config。对 default 账号, 从该配置兜底填充缺失字段 (OpenClaw 引导优先, 文件已有值保留)。
@@ -428,7 +460,8 @@ export async function appendAllowFrom(
   }
 
   // 合并 allowFrom (缺省 [], 已包含则 no-op)
-  const allowFrom: string[] = Array.isArray(raw.allowFrom) ? (raw.allowFrom as string[]) : [];
+  // v1.15.0: 用 coerceStringArrayList —— 旧写法遇到手写的逗号串会当成空数组, 下次 append 就把原条目全截断
+  const allowFrom: string[] = coerceStringArrayList(raw.allowFrom);
   if (allowFrom.includes(wxid)) {
     return { ok: true, allowFrom, filePath }; // 已配对, 无变化
   }
@@ -471,7 +504,7 @@ export async function appendGroupAllowFrom(
   }
 
   // 合并 groupAllowFrom (缺省 [], 已包含则 no-op)
-  const groupAllowFrom: string[] = Array.isArray(raw.groupAllowFrom) ? (raw.groupAllowFrom as string[]) : [];
+  const groupAllowFrom: string[] = coerceStringArrayList(raw.groupAllowFrom); // v1.15.0: 逗号串容错
   if (groupAllowFrom.includes(chatroomId)) {
     return { ok: true, groupAllowFrom, filePath }; // 已包含, 无变化
   }
@@ -511,7 +544,7 @@ export async function removeAllowFrom(
     log.error(`removeAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { ok: false, allowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
   }
-  const allowFrom: string[] = Array.isArray(raw.allowFrom) ? (raw.allowFrom as string[]) : [];
+  const allowFrom: string[] = coerceStringArrayList(raw.allowFrom); // v1.15.0: 逗号串容错
   const idx = allowFrom.indexOf(wxid);
   if (idx === -1) {
     return { ok: true, allowFrom, filePath }; // 不在白名单, 无变化
@@ -549,7 +582,7 @@ export async function removeGroupAllowFrom(
     log.error(`removeGroupAllowFrom: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { ok: false, groupAllowFrom: [], filePath, reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
   }
-  const groupAllowFrom: string[] = Array.isArray(raw.groupAllowFrom) ? (raw.groupAllowFrom as string[]) : [];
+  const groupAllowFrom: string[] = coerceStringArrayList(raw.groupAllowFrom); // v1.15.0: 逗号串容错
   const idx = groupAllowFrom.indexOf(chatroomId);
   if (idx === -1) {
     return { ok: true, groupAllowFrom, filePath }; // 不在白名单, 无变化
@@ -723,8 +756,8 @@ export async function updateHeartflowGroups(
 
   // heartflow 对象 (不存在则默认 {enabled:false})
   const hfRaw = (raw.heartflow as Record<string, unknown> | undefined) ?? {};
-  let wl: string[] = Array.isArray(hfRaw.whitelistGroups) ? (hfRaw.whitelistGroups as string[]) : [];
-  let gal: string[] = Array.isArray(raw.groupAllowFrom) ? (raw.groupAllowFrom as string[]) : [];
+  let wl: string[] = coerceStringArrayList(hfRaw.whitelistGroups); // v1.15.0: 逗号串容错
+  let gal: string[] = coerceStringArrayList(raw.groupAllowFrom); // v1.15.0: 逗号串容错
 
   if (action === "add") {
     if (!wl.includes(chatroomId)) wl = [...wl, chatroomId];
@@ -772,7 +805,7 @@ export async function updateBlacklistGroups(
     log.error(`updateBlacklistGroups: read ${accountId}.json failed: ${err.code ?? String(e)}`);
     return { ok: false, blacklist: [], reason: err.code === "ENOENT" ? "account-not-found" : "read-failed" };
   }
-  let bl: string[] = Array.isArray(raw.blacklistGroups) ? (raw.blacklistGroups as string[]) : [];
+  let bl: string[] = coerceStringArrayList(raw.blacklistGroups); // v1.15.0: 逗号串容错
   if (action === "add") {
     for (const t of targets) if (!bl.includes(t)) bl = [...bl, t];
   } else if (action === "del") {

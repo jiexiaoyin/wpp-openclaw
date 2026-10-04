@@ -30,7 +30,8 @@ export const CHANNEL_UI_LOG_TAG = "[channel-ui]";
 // 核心字段集 (写回白名单)。必须与 manifest schema 一一对应。
 //   key    = openclaw.json#channels.wechatpadpro 侧字段名 (点号=嵌套)
 //   path   = accounts/<id>.json 侧字段路径 (与本文件键一致)
-//   kind   = 归一化/校验类型
+//   kind   = **账号文件/运行期** 的归一化类型 (v1.15.0 起 块侧形态由它派生:
+//            stringArray ⇒ 块里存逗号串, 见 COMMA_LIST_FIELDS / encodeChannelValue)
 // ---------------------------------------------------------------------------
 export type CoreFieldKind = "boolean" | "string" | "number" | "stringArray" | "enum";
 export interface CoreFieldSpec {
@@ -76,6 +77,25 @@ const CORE_FIELDS_FALLBACK: CoreFieldSpec[] = [
 // 防 schema 未来误引入明文 secret 属性 (双保险; schema 现已无)
 const SECRET_KEY_RE = /^(tokenKey|authcode|webhookSecret|webhookPathToken)$/;
 
+// v1.15.0 (2026-10-04 老板: Channel 页这五项一个 wxid 一个框太复杂, 要逗号分隔单框):
+// 这五个 wxid 列表字段的 manifest schema 现声明 type:"string" —— 唯一目的是让 Channel 页
+// 渲染成**单行逗号输入框** (框架没有控件开关, 类型是唯一杠杆)。但账号文件 (唯一真值) 与
+// 所有运行期消费点 (dm-policy/triggers/friendcircle/index) 仍然是 string[],
+// 所以桥在运行期一律按 stringArray 处理:
+//   block→file: "a,b" 解码成 ["a","b"]  (normalizeSpecValue)
+//   file→block: ["a","b"] 编码成 "a,b"  (encodeChannelValue)
+// ⚠️ 为什么用插件内常量而不是 manifest 里的自定义标记键: manifest 里的自定义键今天能活下来
+// 只是因为 host 原样透传 property schema, 一旦某版把它规范化掉, marker 会静默消失 →
+// kind 退回 "string" → 桥就会往账号文件写**逗号字符串** → 所有 .includes() 退化成子串匹配
+// (静默误授权)。常量只活在插件代码里, 唯一风险是与 manifest 漂移, 由单测锁死。
+export const COMMA_LIST_FIELDS: ReadonlySet<string> = new Set([
+  "adminUsers",
+  "allowFrom",
+  "groupAllowFrom",
+  "blacklistGroups",
+  "friendCirclePublishAllowFrom",
+]);
+
 /**
  * manifest 所在插件根 (dist/ 的上一级; src 下同理向上找含 openclaw.plugin.json 的目录)。
  *
@@ -111,7 +131,8 @@ function deriveCoreFields(props: Record<string, unknown>, prefix = "", out: Core
       }
       continue; // 空容器无叶子 → 无字段
     }
-    out.push({ key: dot, path: dot, ...schemaNodeToKind(raw), ...(raw.readOnly === true ? { readOnly: true } : {}) });
+    // v1.15.0: COMMA_LIST_FIELDS 在 manifest 里是 string (为了 UI 单框), 运行期必须仍是 stringArray
+    out.push({ key: dot, path: dot, ...(COMMA_LIST_FIELDS.has(dot) ? { kind: "stringArray" as const } : schemaNodeToKind(raw)), ...(raw.readOnly === true ? { readOnly: true } : {}) });
   }
   return out;
 }
@@ -214,10 +235,11 @@ function normalizeSpecValue(spec: CoreFieldSpec, raw: unknown): { ok: boolean; v
       return { ok: true, value: n };
     }
     case "stringArray": {
-      // 页面 JSON 数组; 兼容历史逗号串形态
+      // 页面形态: v1.15.0 起是逗号串 (单框); 兼容历史 JSON 数组形态
       let arr: unknown[] = [];
       if (Array.isArray(raw)) arr = raw;
-      else if (typeof raw === "string" && raw.trim()) arr = raw.split(",");
+      // v1.15.0: 空串 = **清空列表** (旧版按 null 处理会被跳过 ⇒ 清空输入框永远清不掉列表)
+      else if (typeof raw === "string") arr = raw.trim() ? raw.split(",") : [];
       else return { ok: false, reason: `expected string array, got ${JSON.stringify(raw)}` };
       const out = arr.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean);
       return { ok: true, value: out };
@@ -253,6 +275,24 @@ function setDeepPathMut(obj: Record<string, unknown>, dot: string, value: unknow
 function leafEquals(a: unknown, b: unknown): boolean {
   if (Array.isArray(a) && Array.isArray(b)) return JSON.stringify(a) === JSON.stringify(b);
   return a === b;
+}
+
+/**
+ * v1.15.0: 反镜像 (file→block) 的块侧编码。
+ * stringArray 的文件值 (string[]) 编码成逗号串 —— 因为块侧现在按 manifest 是 string,
+ * Channel 页单框要显示 "a,b" 而不是 JSON 数组。其它 kind 原样透传。
+ * 幂等性: 块里已是 "a,b" 时, 编码后仍得 "a,b" ⇒ leafEquals 相等 ⇒ 零写 (双向环仍断得住)。
+ */
+function encodeChannelValue(spec: CoreFieldSpec, fileValue: unknown): unknown {
+  if (spec.kind !== "stringArray") return fileValue;
+  if (Array.isArray(fileValue)) {
+    return fileValue
+      .filter((x): x is string => typeof x === "string")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .join(",");
+  }
+  return fileValue; // 已经是字符串 (或异常形态) → 原样
 }
 
 // ---------------------------------------------------------------------------
@@ -517,9 +557,11 @@ export async function publishAccountCoreFieldsToChannelConfig(accountId: string)
     for (const spec of CHANNEL_UI_CORE_FIELDS) {
       const fileValue = readDeepPath(fileCore, spec.key);
       if (fileValue === undefined) continue; // 文件没这键 → 不动
+      // v1.15.0: 块侧要的是逗号串 (stringArray 编码), 比较与写入都用编码后的值
+      const channelValue = encodeChannelValue(spec, fileValue);
       const cur = readDeepPath(target, spec.key);
-      if (leafEquals(cur, fileValue)) continue;
-      setDeepPathMut(target, spec.key, fileValue);
+      if (leafEquals(cur, channelValue)) continue;
+      setDeepPathMut(target, spec.key, channelValue);
       changed.push(spec.key);
     }
     if (changed.length === 0) {

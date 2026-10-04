@@ -51,6 +51,15 @@ test('L2 schema heartflow/affection/jargon 只暴露 enabled (maxRetries/timeout
   }
 });
 
+test('L2 deploy schema: 五个 wxid 列表 = string (v1.15.0 逗号单框; array ⇒ UI 又变逐行编辑器)', () => {
+  const d = JSON.parse(fs.readFileSync(`${DEPLOY}openclaw.plugin.json`, 'utf-8'));
+  const sc = d.channelConfigs.wechatpadpro.schema.properties;
+  for (const k of ['adminUsers', 'allowFrom', 'groupAllowFrom', 'blacklistGroups', 'friendCirclePublishAllowFrom']) {
+    assert.equal(sc[k].type, 'string', `L2 deploy schema.${k} 必须是 string`);
+    assert.equal(sc[k].items, undefined, `L2 deploy schema.${k} 不许留 items`);
+  }
+});
+
 test('L3 dev defaultHeartflowConfig/Affection/JargonConfig timeoutMs=5000', () => {
   for (const f of ['heartflow', 'affection', 'jargon']) {
     const src = fs.readFileSync(`${DEV}src/inbound/${f}.ts`, 'utf-8');

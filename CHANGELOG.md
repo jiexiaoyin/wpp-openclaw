@@ -4,6 +4,61 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.15.0] Channel 页五个 wxid 列表改成「逗号分隔单框」 (2026-10-04)
+
+> **起因 (老板反馈)**: OpenClaw webui 的 **Channel 配置页**里, `adminUsers` / `allowFrom` /
+> `groupAllowFrom` / `blacklistGroups` / `friendCirclePublishAllowFrom` 这五项是**一个 wxid 一个输入框**
+> (逐行增删), "太复杂了"; 而 manifest 的 `uiHints` 标签从 v1.3.x 起就写着"（逗号分隔）" ——
+> **文字与界面自相矛盾**。老板拍板走"改成逗号单框"(保留在 UI 里可编辑)。
+
+### Changed / 类型是唯一杠杆
+- 这五项的 **channel schema 类型 `array` → `string`** (连同 `items` 子块删除), `description` 改写成
+  "……列表, 逗号分隔 ……", 与 `uiHints` 标签第一次名副其实。
+  为什么只能改类型: 实测框架 `control-ui` 的 `config-form` 只按 schema 类型分派控件 ——
+  `type:"array"` 恒为逐行增删编辑器, `type:"string"` 恒为单行 `<input type=text>`;
+  `uiHints` 只认 `label/help/placeholder/…`, **没有** `widget`/`format`/`csv`/`separator` 这类开关,
+  未知键会被丢掉, 保存时也不做任何逗号↔数组转换。
+- **双形态**: schema/manifest/块侧 = `string` (逗号串); `accounts/<id>.json`(唯一真值) 与**所有运行期
+  消费点** = 仍是 `string[]`。两者由 `channel-ui-bridge` 双向转换, 运行期消费口径零改动。
+
+### Added / 桥与运行期收口
+- `channel-ui-bridge`: 新导出 `COMMA_LIST_FIELDS` + 新编码器 `encodeChannelValue` ——
+  块侧收/发逗号串, 账号文件侧收发 `string[]`; 写回循环改为"编码后比较", 故**幂等仍是零写**
+  (块里 `a,b` 与文件里 `["a","b"]` 判等), 且迁移前遗留的数组块会被**自愈**成逗号串。
+  用**插件代码常量**而不是 manifest 自定义标记键: 自定义键今天活下来只因为 host 恰好原样透传
+  property schema (不受我们控制), 一旦将来某版把它规范化掉, 形态会静默退回 `string`,
+  桥就会往账号文件里写逗号**字符串**, 于是所有 `.includes()` 退化成**子串匹配** ⇒ 静默误授权。
+  风险改为"常量与 manifest 漂移", 用单测锁死。
+- `config.ts`: 新增 `COMMA_LIST_KEYS` + 导出 `coerceStringArrayList(v)` (数组→清洗;
+  字符串→`split(",")`; 其它→`[]`), 在 `loadAccountConfig()` 紧跟 `JSON.parse` 之后对五个键归一 ——
+  **单一收口**: 手改账号文件写逗号串也照样生效, 且字符串**永远**到达不了只认数组的消费点
+  (`dm-policy` / `group-policy` / `triggers` / `friendcircle` / `channel-contract` / `directory`)。
+- **六个 CLI mutator** (`appendAllowFrom` / `appendGroupAllowFrom` / `removeAllowFrom` /
+  `removeGroupAllowFrom` / `updateHeartflowGroups` / `updateBlacklistGroups`) 一律改用
+  `coerceStringArrayList`: 旧写法 `Array.isArray(raw.X) ? raw.X : []` 遇到手写的逗号串会当成空数组,
+  **下一次加人就把原有条目全部静默截断** (丢数据)。
+
+### Fixed / 清空输入框终于能清空列表
+- `normalizeSpecValue` 的 `stringArray` 分支: **空串 = 清空列表** (`[]`), 旧版按 `null` 处理会被跳过 ⇒
+  UI 现在发的是字符串, 清空后**永远清不掉**白名单 (`fail-closed` 白名单尤其危险的反向: 群/私聊白名单
+  清空是**故意**要"什么都不放行", 但黑名单清空则是"什么都放行" —— 两者都不能再卡住)。
+  `null`/数字仍拒绝 (T5 语义保留), 数组形态仍能吃 (兼容旧块)。
+
+### ⚠️ 升级必须走停机窗口 (运维)
+- host 拿**本 manifest 的 channel schema** 校验 `channels.wechatpadpro` (写入时与加载时都校验),
+  类型不匹配 ⇒ 网关启动 **exit 78 / CONFIG**。故**类型变更与线上值迁移必须在同一停机窗口内完成**,
+  磁盘上任何一刻都不能处于"类型对不上"的状态。
+- 迁移脚本: 解析 `openclaw.json` → **只改 `.channels.wechatpadpro` 子树里这五个键** (数组→逗号串,
+  空数组→空串) → 按原缩进写回; 两道闸: ① 用同一序列化器把**未修改的**对象写一遍, 必须与原文件
+  **逐字节相同** (证明只动了那五个值); ② `channels.wecom.dynamicAgents.adminUsers` **同名但不同
+  channel**, 迁移前后 `deepEqual` 必须不变。顺序: 停网关 → 迁移 + 换 manifest → `openclaw config
+  validate` 通过 → 部署重启; **先换 manifest 再迁配置**, 或**漏迁任何一个**(尤其 `blacklistGroups: []`
+  要变成 `""`) 都会在下次启动时 exit 78。
+- 不适用 `openclaw plugins reload` 免重启: 迁移必须发生在"没有进程在读配置"的窗口里。
+  (未来纯 manifest 变更仍可走它。)
+- 框架另一处读 `allowFrom` 的地方 (`resolveChannelDmAllowFrom`) 已核**无害**: 只被 doctor 的
+  警告收集器消费, 不是放行闸; 且线上块里没有 `dmPolicy` 键 ⇒ 迁移后至多影响 doctor 输出。
+
 ## [v1.14.2] llmIntent 补上二级端点兜底 (2026-10-04)
 
 > **起因 (老板拍板)**: v1.14.1 把意图判断的端点收口到 judge 之后, 暴露出下一个洞 ——

@@ -1,8 +1,8 @@
 {
   "name": "wechatpadpro",
   "id": "wechatpadpro",
-  "version": "1.14.2",
-  "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin v1.14.0. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件/小程序卡片; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 323 paths API 覆盖 (vendor v09102, 含朋友圈批量导出/自动跟发、好友自动通过、运动排行). HEARTFLOW 心流 (未@群消息小模型多维持打分自动参与 + 发言预算/群画像/分层/观测复盘/重复内容闸/占比外环); JARGON 群黑话挖掘 (自主学习, AI 可查群黑话含义); AFFECTION 好感度/社交关系系统 + AI-UNIFY 统一判断模型. v1.9.x 修复: 红包/接龙关键词撞车 (结构性识别优先于关键词启发式) + 纯文本\"红包\"不再误静默 (关键词仅在卡片类 msgType=49 采信). v1.10.0 修复心流阈值自锁: 画像 band 有界抬升 (+0.10 上限) + 可达性天花板 (阈值够不着就压回最高分+一步) + 画像禁言令注入过滤 + 阈值不再印进裁判 prompt; 新增停摆金丝雀指标 (hf_last_send_age_sec / 生效阈值 gauge)。 v1.11.0 心流看图: 待判定消息的图片直链以 OpenAI 兼容多模态内容块交给裁判 (默认开, 单条最多 1 张, 只取该条消息的图), 判分由猜变读; 无图时请求体逐字节不变; ⚠️会把图片发往厂商端点 (含人脸/客户单据)。 安全加固: webhook token 强制 / 群白名单 fail-closed / WS 长退避 / 去重账号隔离 / DB 重试 / 时间口径全仓统一走 ts. v1.12.0 心流判分换模型: 由 deepseek-flash 切到阿里云 token-plan MaaS 的 qwen3.8-flash (端点由 env 指定, v1.14.0 起叫 JUDGE_BASE_URL, 未设则仍 api.deepseek.com); safe-fetch SSRF 白名单跟随同一 env 常量 (换端点不会漏改而静默停摆); 启动日志新增一行 judge 端点自述 (只含 format/host/路径/模型名/key 有无, 不含 key 本身). v1.13.0 judge 二级端点兜底: 主端点任何抛错 (无 key/超时/非 2xx/空正文) 自动改用兜底端点重试一次, 兜底被用到时 WARNING 出声 + 计 judge_fallback_total/judge_fallback_ok_total; 兜底端点/密钥/模型名三项 env (JUDGE_FALLBACK_BASE_URL/_API_KEY/_MODEL) 齐才生效 (模型名不硬编码), 半配在启动时 WARNING; 判分结果差不触发重试, 兜底未配时行为与 v1.12.0 逐字一致. v1.14.0 judge env 改名: DEEPSEEK_BASE_URL/DEEPSEEK_API_KEY → JUDGE_BASE_URL/JUDGE_API_KEY (它们自 v1.12.0 起装的是阿里云 token-plan 凭证, 挂 deepseek 名会与框架 models.providers.deepseek 的 env 兜底撞名 ⇒ 阿里 key 被 POST 到 api.deepseek.com); 旧名**不再被任何代码读取**, 只留一处启动 WARNING 点名; 改名与新 key 都要重启网关才对在跑的进程生效. v1.14.1 llmIntent 端点收口: 意图判断 (llmIntent) 的端点/格式/凭证改为**与 judge 主端点同源** (resolveJudgeCreds), 不再硬编码 api.minimaxi.com/anthropic, 也不再按 host 猜格式 —— 此前拿阿里 token-plan 的 key 打 MiniMax 的 x-api-key, 既是必然 401 (静默降级成规则、功能从未生效), 也是把凭据发给第三方; 账号 llmIntentModel 随之由 deepseek-flash 改 qwen3.8-flash (与 heartflow/affection/jargon 同模型同端点). v1.14.2 llmIntent 补二级端点兜底: 意图判断此前是全仓**唯一**没有兜底的 judge 系调用 (同端点, 但主端点一挂只静默降级回规则、无人察觉), 且非 2xx/空正文被压成与「答非所问」同一个 null; 本版起主端点任何端点级故障 (网络/非 2xx/空正文) 自动换 JUDGE_FALLBACK_* (env 三项齐才生效, 半配出声) 重试一次, 兜底被用到 WARNING 出声 + 计 intent_fallback_total/intent_fallback_ok_total (与 judge 层 v1.13.0 同口径: 只兜端点故障, 不兜分数/答案不好; 凭证缺失不触发兜底, 仍是 v1.14.1 的既定降级)。",
+  "version": "1.15.0",
+  "description": "WeChatPadPro (微信 Pad 协议 HTTP API) OpenClaw adapter plugin v1.14.0. 多账号 AccountRegistry (B 方案 accounts/<id>.json 独立配置). 收发文本/图片/语音/视频/文件/小程序卡片; 语音 silk 自动转码 + 失败降级发文件; 群接龙自动触发 AI 应景回复; 引用回复; 文件确定性回复; 完整 323 paths API 覆盖 (vendor v09102, 含朋友圈批量导出/自动跟发、好友自动通过、运动排行). HEARTFLOW 心流 (未@群消息小模型多维持打分自动参与 + 发言预算/群画像/分层/观测复盘/重复内容闸/占比外环); JARGON 群黑话挖掘 (自主学习, AI 可查群黑话含义); AFFECTION 好感度/社交关系系统 + AI-UNIFY 统一判断模型. v1.9.x 修复: 红包/接龙关键词撞车 (结构性识别优先于关键词启发式) + 纯文本\"红包\"不再误静默 (关键词仅在卡片类 msgType=49 采信). v1.10.0 修复心流阈值自锁: 画像 band 有界抬升 (+0.10 上限) + 可达性天花板 (阈值够不着就压回最高分+一步) + 画像禁言令注入过滤 + 阈值不再印进裁判 prompt; 新增停摆金丝雀指标 (hf_last_send_age_sec / 生效阈值 gauge)。 v1.11.0 心流看图: 待判定消息的图片直链以 OpenAI 兼容多模态内容块交给裁判 (默认开, 单条最多 1 张, 只取该条消息的图), 判分由猜变读; 无图时请求体逐字节不变; ⚠️会把图片发往厂商端点 (含人脸/客户单据)。 安全加固: webhook token 强制 / 群白名单 fail-closed / WS 长退避 / 去重账号隔离 / DB 重试 / 时间口径全仓统一走 ts. v1.12.0 心流判分换模型: 由 deepseek-flash 切到阿里云 token-plan MaaS 的 qwen3.8-flash (端点由 env 指定, v1.14.0 起叫 JUDGE_BASE_URL, 未设则仍 api.deepseek.com); safe-fetch SSRF 白名单跟随同一 env 常量 (换端点不会漏改而静默停摆); 启动日志新增一行 judge 端点自述 (只含 format/host/路径/模型名/key 有无, 不含 key 本身). v1.13.0 judge 二级端点兜底: 主端点任何抛错 (无 key/超时/非 2xx/空正文) 自动改用兜底端点重试一次, 兜底被用到时 WARNING 出声 + 计 judge_fallback_total/judge_fallback_ok_total; 兜底端点/密钥/模型名三项 env (JUDGE_FALLBACK_BASE_URL/_API_KEY/_MODEL) 齐才生效 (模型名不硬编码), 半配在启动时 WARNING; 判分结果差不触发重试, 兜底未配时行为与 v1.12.0 逐字一致. v1.14.0 judge env 改名: DEEPSEEK_BASE_URL/DEEPSEEK_API_KEY → JUDGE_BASE_URL/JUDGE_API_KEY (它们自 v1.12.0 起装的是阿里云 token-plan 凭证, 挂 deepseek 名会与框架 models.providers.deepseek 的 env 兜底撞名 ⇒ 阿里 key 被 POST 到 api.deepseek.com); 旧名**不再被任何代码读取**, 只留一处启动 WARNING 点名; 改名与新 key 都要重启网关才对在跑的进程生效. v1.14.1 llmIntent 端点收口: 意图判断 (llmIntent) 的端点/格式/凭证改为**与 judge 主端点同源** (resolveJudgeCreds), 不再硬编码 api.minimaxi.com/anthropic, 也不再按 host 猜格式 —— 此前拿阿里 token-plan 的 key 打 MiniMax 的 x-api-key, 既是必然 401 (静默降级成规则、功能从未生效), 也是把凭据发给第三方; 账号 llmIntentModel 随之由 deepseek-flash 改 qwen3.8-flash (与 heartflow/affection/jargon 同模型同端点). v1.14.2 llmIntent 补二级端点兜底: 意图判断此前是全仓**唯一**没有兜底的 judge 系调用 (同端点, 但主端点一挂只静默降级回规则、无人察觉), 且非 2xx/空正文被压成与「答非所问」同一个 null; 本版起主端点任何端点级故障 (网络/非 2xx/空正文) 自动换 JUDGE_FALLBACK_* (env 三项齐才生效, 半配出声) 重试一次, 兜底被用到 WARNING 出声 + 计 intent_fallback_total/intent_fallback_ok_total (与 judge 层 v1.13.0 同口径: 只兜端点故障, 不兜分数/答案不好; 凭证缺失不触发兜底, 仍是 v1.14.1 的既定降级)。 v1.15.0 Channel 页五个 wxid 列表 (adminUsers/allowFrom/groupAllowFrom/blacklistGroups/friendCirclePublishAllowFrom) 的 schema 类型由 array 改为 string: webui Channel 配置页里这五项从此渲染成一个逗号分隔的单行输入框 (此前是一个 wxid 一行输入框, 与 uiHints 标签早已写明的逗号分隔自相矛盾); 桥做双向转换 —— 块侧收/发逗号串, accounts/<id>.json 与全部运行期消费点仍是 string[]; 运行期在 config.ts 单一收口 coerceStringArrayList (数组清洗 / 字符串 split / 其它为空), 手改账号文件写逗号串也照样生效, 六个 CLI mutator 一并改用它 (旧写法遇逗号串会当成空数组, 下一次加人会静默截断原有条目); 空串 = 清空列表。 ⚠️ 类型变更与线上值迁移必须在同一停机窗口内完成: host 拿本 manifest 的 channel schema 校验 channels.wechatpadpro (写入与加载都校验), 磁盘上任何一刻类型对不上都可能在下次启动 exit 78/CONFIG。",
   "kind": "plugin",
   "configUiHints": {
     "tokenKey": {
@@ -76,18 +76,12 @@
             "description": "绑定 OpenClaw agent id (如 wpp-wechat)"
           },
           "adminUsers": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "管理员 wxid 列表 (默认 [selfWxid])。已落地用法: 朋友圈发布白名单 (friendCirclePublishAllowFrom 缺省时回退此列表)。限频/脱敏/优先回复豁免尚未接入"
+            "type": "string",
+            "description": "管理员 wxid 列表, 逗号分隔 (默认 [selfWxid])。已落地用法: 朋友圈发布白名单 (friendCirclePublishAllowFrom 缺省时回退此列表)。限频/脱敏/优先回复豁免尚未接入"
           },
           "allowFrom": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "允许的私聊发送方 wxid 白名单 (空=fail-closed 全拒)"
+            "type": "string",
+            "description": "允许的私聊发送方 wxid 白名单, 逗号分隔 (空=fail-closed 全拒)"
           },
           "groupPolicy": {
             "type": "string",
@@ -100,18 +94,12 @@
             "description": "群聊策略 (open 放行 / disabled 拒绝 / allowlist 白名单 / closed 拒绝)"
           },
           "groupAllowFrom": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "允许的群 wxid 白名单 (@chatroom; groupPolicy=allowlist 时用)"
+            "type": "string",
+            "description": "允许的群 wxid 白名单, 逗号分隔 (@chatroom; groupPolicy=allowlist 时用)"
           },
           "blacklistGroups": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "黑名单群 wxid (拒绝处理任何消息)"
+            "type": "string",
+            "description": "黑名单群 wxid 列表, 逗号分隔 (拒绝处理任何消息)"
           },
           "requireAtMention": {
             "type": "boolean",
@@ -126,11 +114,8 @@
             "description": "朋友圈发布开关 (v1.3.41): true=启用但仅 friendCirclePublishAllowFrom / adminUsers 内 wxid 可发; false=完全禁用"
           },
           "friendCirclePublishAllowFrom": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "朋友圈发布白名单 wxid (缺省用 adminUsers; 未配则全禁)"
+            "type": "string",
+            "description": "朋友圈发布白名单 wxid 列表, 逗号分隔 (缺省用 adminUsers; 未配则全禁)"
           },
           "heartflow": {
             "type": "object",
