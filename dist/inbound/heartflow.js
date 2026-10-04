@@ -468,7 +468,7 @@ export function parseHeartflowResponse(text, cfg) {
  */
 export async function judgeHeartflow(input, cfg, opts) {
     if (!opts.apiKey) {
-        warn("[WPP HEARTFLOW] missing judge API key (DEEPSEEK_API_KEY / MINIMAX_API_KEY), skip heartflow judge");
+        warn("[WPP HEARTFLOW] missing judge API key (JUDGE_API_KEY / MINIMAX_API_KEY), skip heartflow judge");
         return null;
     }
     // v1.4.0 12:09 老板拍板: 消除 plugin hardcode, model 必须从 cfg 链 (schema default → accounts cfg) 提供, 缺失立即报错

@@ -28,7 +28,14 @@ import { URL } from "node:url";
  * ⚠️ 白名单语义未变: 仍然是「只允许**运维点名**的主机」。env 由运维/配置层控制, 不是模型可写
  * (prompt 注入改不了它); 值缺失/非法 URL/非 http(s) 一律忽略(不抛), 不在名单里的 host 一律拒绝。
  */
-export const JUDGE_BASE_URL_ENV = "DEEPSEEK_BASE_URL";
+/**
+ * ⚠️ v1.14.0 (2026-10-04) 改名: 此常量原为 "DEEPSEEK_BASE_URL"。老板拍板「阿里的那个不能使用 deepseek*」——
+ * v1.12.0 换了端点却没换名, 于是这个变量里装着**阿里云套餐 key 的配套端点**却叫 deepseek,
+ * 与框架自家 models.providers.deepseek 的 env 兜底撞名 (阿里 key 被 POST 到 api.deepseek.com,
+ * 2026-10-04 一天 62 条 invalid + 每次阿里端点 403 都拖成 "All models failed")。
+ * 旧名不再被任何地方读取; 只留一处启动告警 (llm-judge.lingeringLegacyJudgeVars)。
+ */
+export const JUDGE_BASE_URL_ENV = "JUDGE_BASE_URL";
 /**
  * v1.13.0 (2026-10-03): judge **兜底**端点 (主端点故障时重试的那一个) 所在的 host, 同样经 env 声明。
  * 与上一条**同一个理由, 但风险更高**: 兜底只在"主端点已经坏了"时才走, 是整条链上最没人看的一跳 ——
@@ -67,7 +74,8 @@ function getEnvDeclaredHosts() {
 function getAllowedHosts() {
     const vendorHost = process.env.WPP_VENDOR_HOST || "WPP_VENDOR_HOST.example.com";
     return new Set([
-        // v1.12.0: judge 端点经 env 点名的 host (换端点只改 DEEPSEEK_BASE_URL, 见 JUDGE_BASE_URL_ENV)
+        // v1.12.0: judge 端点经 env 点名的 host (换端点只改 JUDGE_BASE_URL, 见 JUDGE_BASE_URL_ENV;
+        //   v1.14.0 前该变量叫 DEEPSEEK_BASE_URL —— 旧名已不再被读取, 见上方改名说明)
         ...getEnvDeclaredHosts(),
         // OSS bucket
         "openclaw-a.oss-cn-hangzhou.aliyuncs.com",
@@ -78,7 +86,8 @@ function getAllowedHosts() {
         "dashscope.aliyuncs.com", // 阿里 embedding (intent-embed)
         "api.minimaxi.com", // MiniMax LLM (intent-llm)
         "api.deepseek.com", // v1.6.0 judge 主端点默认值 (llm-judge: heartflow/jargon/affection/enrich);
-        //   v1.12.0 起实际端点可被 DEEPSEEK_BASE_URL 覆盖 → 上面 getEnvDeclaredHosts()
+        //   v1.12.0 起实际端点可被 JUDGE_BASE_URL 覆盖 → 上面 getEnvDeclaredHosts()
+        //   (v1.14.0 前该 env 叫 DEEPSEEK_BASE_URL)
         "api.siliconflow.cn", // SiliconFlow STT (storage/stt)
     ]);
 }

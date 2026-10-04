@@ -2,7 +2,7 @@
 // v1.6.0 2026-09-02: 支持双格式
 //   - format "openai"  : DeepSeek / 任意 OpenAI 兼容端点  (Authorization: Bearer)
 //   - format "anthropic": MiniMax / Anthropic 兼容端点      (x-api-key + anthropic-version)
-// 优先 DeepSeek (DEEPSEEK_API_KEY)，MiniMax (MINIMAX_API_KEY) 兜底 —— 与 /root/dev/wpp-hermes 对齐
+// 主端点 (openai 格式, 现为阿里云 token-plan MaaS) 优先, MiniMax (MINIMAX_API_KEY) 兜底 —— 与 /root/dev/wpp-hermes 对齐
 // v1.6.1 2026-09-13: judge 关思考 (默认) + 空正文显式报错
 //   - deepseek-flash 是推理模型, reasoning_content 与 content **共享** max_tokens 预算;
 //     judge 只要打分, 实测不关时 300 tokens 被思考吃光 → content="" (且掷骰子: 时而正常时而空)
@@ -11,7 +11,7 @@
 //   - 空正文/被截断 → throw 带 finish_reason + reasoning_tokens, 替代原先静默返回 ""
 // v1.12.0 2026-10-03: judge 主端点可经 env 覆盖 (老板拍板切阿里云 token-plan MaaS 的 qwen3.8-flash;
 //   该端点与 DeepSeek 同走 openai 格式 ⇒ 仍复用这条凭证链, 只换 baseUrl + 账号文件里的 model 名)
-//   - env: DEEPSEEK_BASE_URL (常量 JUDGE_BASE_URL_ENV 从 safe-fetch 导入, 那边同时把它解析进 SSRF 白名单)
+//   - env: JUDGE_BASE_URL (常量 JUDGE_BASE_URL_ENV 从 safe-fetch 导入, 那边同时把它解析进 SSRF 白名单)
 //   - 未设 → 默认 api.deepseek.com, 行为与 v1.11.0 完全一致
 // v1.13.0 2026-10-03: 判分层二级端点 (老板拍板「保留 deepseek 作兜底」) —— 主端点**任何**抛错后,
 //   自动换 DEEPSEEK 那一套 (JUDGE_FALLBACK_*) 重试一次; 兜底被用到时 WARNING 出声。
@@ -23,6 +23,14 @@
 //     "任何 throw 就重试" 恰好等于"只兜端点故障"。**判分好坏永远不触发重试** (否则会变成刷分)。
 //   - 三项 env 必须**同时**给全 (baseUrl + key + model): 模型名不许硬编码 (v1.4.0「消除 hardcode」),
 //     半配一律不启用且在启动时 WARNING —— 免得再造一个"配了却永远不生效"的开关。
+// v1.14.0 2026-10-04: 主端点两个 env **改名** (老板拍板「阿里的那个不能使用 deepseek*」):
+//   DEEPSEEK_BASE_URL → JUDGE_BASE_URL, DEEPSEEK_API_KEY → JUDGE_API_KEY。
+//   为什么非改不可: v1.12.0 换端点没换名, 这两个变量里装的已经是**阿里套餐 key**, 却挂着 DeepSeek 的名
+//   ⇒ 与框架自家 models.providers.deepseek 的 env 兜底撞名, 阿里 key 被 POST 到 api.deepseek.com;
+//   2026-10-04 一天攒了 62 条 `Your api key: ****… is invalid`, 且每次阿里端点 403 都会把整条模型链
+//   拖成 "All models failed (3)" = 机器人彻底不回复。
+//   - 旧名**只用于启动告警**, 绝不再当凭证读 (留兼容别名 = 把那条撞名的路继续开着, 风暴原样复发)。
+//   - 新名与兜底那套 (JUDGE_FALLBACK_*) 对称: 主端点 vs 兜底端点, 名字即语义。
 import { safeFetch, JUDGE_BASE_URL_ENV, JUDGE_FALLBACK_BASE_URL_ENV } from "./util/safe-fetch.js";
 import { JudgeMetrics } from "./monitor/metrics.js";
 import { warn } from "./core/logger.js";
@@ -32,6 +40,27 @@ export const JUDGE_FALLBACK_VARS = {
     apiKey: "JUDGE_FALLBACK_API_KEY",
     model: "JUDGE_FALLBACK_MODEL",
 };
+/**
+ * v1.14.0: 主端点 (openai 格式那一档) 的两个 env 名 —— 与 JUDGE_FALLBACK_VARS 对称。
+ * 端点值本身取自 safe-fetch 的 JUDGE_BASE_URL_ENV (同一个常量, 那边同时进 SSRF 白名单)。
+ */
+export const JUDGE_MAIN_VARS = {
+    baseUrl: JUDGE_BASE_URL_ENV,
+    apiKey: "JUDGE_API_KEY",
+};
+/**
+ * v1.14.0: 旧名 (v1.13.0 及以前) —— **只用于启动告警, 绝不再当凭证读**。
+ * 见文件头 v1.14.0 那节: 留着兼容别名就等于把"阿里 key 被框架当 DeepSeek key 用"那条路继续开着。
+ */
+export const LEGACY_JUDGE_VARS = ["DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY"];
+/**
+ * v1.14.0: 哪些旧名还残留在进程 env 里 (启动自述用; 空数组 = 干净)。
+ * 存在的意义: 改名后的失败形态是"心流突然一条都不判分", 一句 WARNING 能直接把根因说出来,
+ * 而不是让人从 `judge: no apiKey` 往回猜。
+ */
+export function lingeringLegacyJudgeVars() {
+    return LEGACY_JUDGE_VARS.filter((n) => (process.env[n] ?? "").trim() !== "");
+}
 /**
  * v1.13.0: 解析兜底端点 (每调用一次读一次 env, **不缓存** —— 缓存会让测试之间互相污染,
  * 而这条链一次调用只多三次 process.env 读, 相对一次网络调用可忽略)。
@@ -120,7 +149,8 @@ export const DEFAULT_JUDGE_ENDPOINTS = {
     minimax: "https://api.minimaxi.com/anthropic",
 };
 /**
- * v1.12.0 (2026-10-03): judge 主端点 baseUrl 的来源链 — 调用方显式覆盖 > env `DEEPSEEK_BASE_URL`
+ * v1.12.0 (2026-10-03): judge 主端点 baseUrl 的来源链 — 调用方显式覆盖 > env `JUDGE_BASE_URL`
+ * (v1.14.0 起的新名; 旧名 DEEPSEEK_BASE_URL 已废弃且**不再被读**, 见文件头)
  * > DEFAULT_JUDGE_ENDPOINTS.deepseek (默认 api.deepseek.com)。
  *
  * ⚠️ env 名取自 src/util/safe-fetch.ts 的 JUDGE_BASE_URL_ENV, **同一个常量**: 那边把它的 host
@@ -149,15 +179,20 @@ export function describeJudgeEndpoint(creds) {
     }
 }
 /**
- * 解析三机制 judge 凭证 (环境变量链: DEEPSEEK_API_KEY 优先, MINIMAX_API_KEY 兜底)
+ * 解析三机制 judge 凭证 (环境变量链: JUDGE_API_KEY 优先, MINIMAX_API_KEY 兜底)
+ *
+ * v1.14.0: 参数名 `deepseekBaseUrl` → `judgeBaseUrl` (它覆盖的是主端点, 而主端点自 v1.12.0 起
+ * 已经是阿里云 token-plan; 名字叫 deepseek 只是历史遗留, 正是本次要消灭的那种)。
+ * ⚠️ 旧 env 名 `DEEPSEEK_API_KEY` **不读** (见文件头): 谁还设着它, 启动时会被点名告警,
+ *    但绝不拿它当凭证 —— 那正是把阿里 key 送进 api.deepseek.com 的那条路。
  */
 export function resolveJudgeCreds(overrides) {
-    const deepseekKey = process.env.DEEPSEEK_API_KEY ?? "";
+    const mainKey = process.env[JUDGE_MAIN_VARS.apiKey] ?? "";
     const minimaxKey = process.env.MINIMAX_API_KEY ?? "";
-    if (deepseekKey) {
+    if (mainKey) {
         return {
-            apiKey: deepseekKey,
-            baseUrl: resolveJudgeBaseUrl(overrides?.deepseekBaseUrl),
+            apiKey: mainKey,
+            baseUrl: resolveJudgeBaseUrl(overrides?.judgeBaseUrl),
             format: "openai",
         };
     }
@@ -181,7 +216,7 @@ export function resolveJudgeCreds(overrides) {
  */
 async function callJudgeInner({ model, userPrompt, systemPrompt = null, maxTokens = 300, timeoutMs = 5000, creds, images, }) {
     if (!creds?.apiKey) {
-        throw new Error("judge: no apiKey (DEEPSEEK_API_KEY / MINIMAX_API_KEY both missing)");
+        throw new Error(`judge: no apiKey (${JUDGE_MAIN_VARS.apiKey} / MINIMAX_API_KEY both missing)`);
     }
     const { baseUrl, format } = creds;
     const noThink = creds.noThink ?? true; // v1.6.1: judge 默认关思考 (打分任务不需要思维链)

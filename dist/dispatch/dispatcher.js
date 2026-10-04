@@ -26,6 +26,7 @@ import { getMessages, getMessageByMsgIdOrNewId } from "../storage/db/messages.js
 import { waitForPendingEnrich } from "../inbound/handler.js";
 import { extractReferencedFromReplyContext, extractReferencedFromApp } from "../inbound/parser/quote.js";
 import { classifyGroupIntent, decideIntentWithLlm, needsLlm, normalizeTriggerText, toIntentCandidate } from "./intent-llm.js";
+import { JUDGE_MAIN_VARS } from "../llm-judge.js";
 import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
 import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
 import { recordRawMessage, resolveHfLearning, HF_LEARNING_DEFAULTS } from "../inbound/heartflow.js";
@@ -159,8 +160,11 @@ function resolveBotName(msg) {
         return "机器人";
     }
 }
-function resolveMinimaxApiKey() {
-    return process.env.DEEPSEEK_API_KEY ?? process.env.MINIMAX_API_KEY ?? "";
+function resolveIntentLlmApiKey() {
+    // v1.14.0: env 名随 judge 主端点一起改名 (DEEPSEEK_API_KEY → JUDGE_API_KEY, 见 llm-judge 文件头)。
+    // ⚠️ 实测已知: 这条链的**端点**仍是 intent-llm.ts 里硬编码的 api.minimaxi.com/anthropic,
+    //    拿这个 key (阿里 token-plan) 打过去必然 401 ⇒ 静默降级成规则。改端点属另一次改动, 此处只改名。
+    return process.env[JUDGE_MAIN_VARS.apiKey] ?? process.env.MINIMAX_API_KEY ?? "";
 }
 function resolveEmbedIntentEnabled(msg) {
     try {
@@ -317,7 +321,7 @@ async function buildGroupContextFromDb(msg) {
         if (msgs.length === 0)
             return null;
         //   规则预筛 (已在上方 no-op 拦截) → 命令类走 LLM → 非命令 embedding 快路径 → 降级 LLM → 降级注入全部
-        const llmEnabled = resolveLlmIntentEnabled(msg) && !!resolveMinimaxApiKey();
+        const llmEnabled = resolveLlmIntentEnabled(msg) && !!resolveIntentLlmApiKey();
         const embedEnabled = resolveEmbedIntentEnabled(msg) && !!resolveBailianEmbeddingKey(msg);
         const triggerText = normalizeTriggerText(msg.content);
         if (llmEnabled && needsLlm(msg.content)) {
@@ -327,7 +331,7 @@ async function buildGroupContextFromDb(msg) {
             if (isCommandIntent(triggerText)) {
                 // 命令类意图 (删/发/转/帮) → embedding 判断不了 → LLM
                 debug(`[WPP v1.3.2 EMBED-INTENT] command intent → LLM: "${triggerText.slice(0, 20)}"`);
-                decision = await decideIntentWithLlm({ triggerText, candidates: msgs.map(toIntentCandidate) }, { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) });
+                decision = await decideIntentWithLlm({ triggerText, candidates: msgs.map(toIntentCandidate) }, { apiKey: resolveIntentLlmApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) });
             }
             else if (embedEnabled) {
                 // 非命令 → embedding 快路径 (ms 级)
@@ -350,15 +354,15 @@ async function buildGroupContextFromDb(msg) {
                 else if (relevantIds !== null && relevantIds.length === 0) {
                     // 相似度全低于阈值 → LLM 兜底
                     debug(`[WPP v1.3.2 EMBED-INTENT] embedding 无相关 → LLM 兜底`);
-                    decision = await decideIntentWithLlm({ triggerText, candidates: msgs.map(toIntentCandidate) }, { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) });
+                    decision = await decideIntentWithLlm({ triggerText, candidates: msgs.map(toIntentCandidate) }, { apiKey: resolveIntentLlmApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) });
                 }
                 if (relevantIds === null) {
                     debug(`[WPP v1.3.2 EMBED-INTENT] embedding 失败 → LLM 兜底`);
-                    decision = await decideIntentWithLlm({ triggerText, candidates: msgs.map(toIntentCandidate) }, { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) });
+                    decision = await decideIntentWithLlm({ triggerText, candidates: msgs.map(toIntentCandidate) }, { apiKey: resolveIntentLlmApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) });
                 }
             }
             else {
-                decision = await decideIntentWithLlm({ triggerText, candidates: msgs.map(toIntentCandidate) }, { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) });
+                decision = await decideIntentWithLlm({ triggerText, candidates: msgs.map(toIntentCandidate) }, { apiKey: resolveIntentLlmApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) });
             }
             // 处理 LLM decision (no-op → 不注入; inject → filter 相关)
             if (decision?.action === "no-op") {
