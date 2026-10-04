@@ -91,9 +91,15 @@ test('P2-2.4: llmIntentModel 不回流 UI schema (老板: 只要核心在 UI; �
   assert.equal(props.llmIntentTimeoutMs, undefined, 'llmIntentTimeoutMs 不许在 UI schema');
 });
 
-test('P2-2.5: accounts cfg llmIntentModel = deepseek-flash', () => {
+test('P2-2.5: accounts cfg llmIntentModel = qwen3.8-flash', () => {
+  // v1.14.1 (2026-10-04): 值从 `deepseek-flash` 改为 `qwen3.8-flash`。
+  //   原因不是"换个模型试试" —— 是端点收口之后**必须**跟着换: intent 的端点/格式/凭证
+  //   一律跟 judge 主端点走 (resolveIntentLlmTarget → resolveJudgeCreds), 而生产 JUDGE_BASE_URL
+  //   是阿里 token-plan ⇒ 那边只服务 qwen 系; 留着 deepseek-flash 会 404/400
+  //   (旧形状更坏: 模型名对不上端点 = 静默降级回规则, 见 CHANGELOG v1.14.1)。
+  //   本门禁仍是**具体值钉死**, 不是"非空即可" —— 值随端点走, 改端点就得改这里。
   const d = JSON.parse(fs.readFileSync(`${DEPLOY}/accounts/default.json`, 'utf-8'));
-  assert.strictEqual(d.llmIntentModel, 'deepseek-flash', 'accounts cfg llmIntentModel 必须 deepseek-flash');
+  assert.strictEqual(d.llmIntentModel, 'qwen3.8-flash', 'accounts cfg llmIntentModel 必须 qwen3.8-flash (阿里端点只服务 qwen 系)');
   assert.strictEqual(d.llmIntentEnabled, true);
   assert.strictEqual(d.llmIntentTimeoutMs, 5000);
 });

@@ -4,6 +4,44 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.14.1] llmIntent 端点收口到 judge 主端点 (2026-10-04)
+
+> **起因 (老板拍板)**: v1.14.0 改名报告里列的"仍挂着"之一 —— 「llmIntent 的端点是否改指阿里」,
+> 老板选**改指阿里端点**。
+> v1.14.0 只把 env 名从 `DEEPSEEK_*` 改成 `JUDGE_*`, **没动端点**, 于是那条链变成:
+> 端点 = `intent-llm.ts` 里**硬编码**的 `https://api.minimaxi.com/anthropic` (anthropic 格式),
+> key = `JUDGE_API_KEY` —— 而它自 v1.12.0 起装的是**阿里云 token-plan** 凭证
+> ⇒ **必 401** ⇒ `warn` 一行 ⇒ 静默降级回规则 (功能从未真正生效),
+> **且那把阿里 token 被真的 POST 到 `api.minimaxi.com` 的 `x-api-key` 头** —— 凭据外发给第三方。
+> 这与 v1.14.0 关掉的那两条路 (阿里 key 打到 `api.deepseek.com`) 是同一个病:
+> **端点与 key 是一对, 分两处解析就一定会配错一处。**
+
+### Changed / 端点与凭证同源
+- 新增 `intent-llm.resolveIntentLlmTarget()`: 端点/格式的**唯一来源**是 `llm-judge.resolveJudgeCreds()`
+  (有 `JUDGE_API_KEY` ⇒ openai + env `JUDGE_BASE_URL`/默认 `api.deepseek.com`;
+  否则 `MINIMAX_API_KEY` ⇒ anthropic + `api.minimaxi.com/anthropic`)。
+  `decideIntentWithLlm` 不再硬编码 MiniMax 端点。
+- `dispatcher.resolveIntentLlmApiKey()` 改为 `resolveJudgeCreds().apiKey` —— key 与端点出自**同一个函数**,
+  "换了 key 忘了换端点"这一档在结构上不再存在。
+- 格式不再按 host **猜** (`opts.baseUrl?.includes("deepseek")` 那行): 不传 `opts.baseUrl` 时格式跟端点一起取;
+  显式传 `opts.baseUrl` 时格式须显式给 (猜错的代价是把 key 发到别人家)。
+- 账号 `llmIntentModel`: `deepseek-flash` → **`qwen3.8-flash`** (与 heartflow / affection / jargon 同模型同端点)。
+- 告警文案 `missing MINIMAX_API_KEY` → `missing JUDGE_API_KEY (fallback MINIMAX_API_KEY)` ——
+  照旧文案去配会配错那把 key (它装的是阿里 token-plan)。
+
+### Added / 测试
+- `tests/unit/intent-endpoint-v1141.test.mjs`: 判据**反向** —— 「设了 `JUDGE_API_KEY` + 阿里端点 ⇒
+  意图链解析出的 baseUrl/format 就是阿里 + openai」「任何情况下 baseUrl 都不是 api.minimaxi.com
+  (除非显式传 override)」; 另有"dist 里不再有 MiniMax 硬编码端点"与"告警文案同步"两条形状判据。
+
+### 行为变化 (部署 + 重启后生效)
+- `llmIntentEnabled=true` 时这条链**会真的产生 LLM 调用**(以前恒 401 降级) ⇒ 群上下文注入真正生效,
+  按需计费。降级路径不变 (任何失败仍 `return null` → 规则降级)。
+
+### Security / 另修
+- `CHANGELOG.md` 里 v1.4.0 段落的**明文 DeepSeek key** 已就地脱敏
+  (sha256[:12] `cf47fa069f73`); **该 key 仍需老板去厂商后台作废** —— 脱敏只治仓, 不治已泄漏的凭据。
+
 ## [v1.14.0] judge env 改名: DEEPSEEK_BASE_URL/_API_KEY → JUDGE_BASE_URL/_API_KEY (2026-10-04)
 
 > **起因 (老板拍板)**: 「1 改名处理, 2 阿里的那个不能使用 deepseek*」。
@@ -2108,7 +2146,7 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
   - **风险**: 固定 doc.pdf 文件名, 多次文件覆盖丢失
 - **vendor 限制**: /Tools/DownloadFile 公开 API 在 v1 schema 下不可用 (20+ 参数组合全 ret=-2)
 - 备份 `/data/wpp-v1157-file-fallback-20260809-1310/`
-- 老板 12:25 提供 **deepseek API key** `sk-REDACTED` 作为兜底
+- 老板 12:25 提供 **deepseek API key** `sk-<REDACTED-2026-10-04>` 作为兜底
 
 ## [v1.1.56]
 - 2026-08-09 12:50 (V1-SCHEMA-ENRICH — 私聊/群聊图片 AI 重新识别)

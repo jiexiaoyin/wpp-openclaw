@@ -29,7 +29,7 @@ import { getMessages, getMessageByMsgIdOrNewId } from "../storage/db/messages.js
 import { waitForPendingEnrich } from "../inbound/handler.js";
 import { extractReferencedFromReplyContext, extractReferencedFromApp } from "../inbound/parser/quote.js";
 import { classifyGroupIntent, decideIntentWithLlm, needsLlm, normalizeTriggerText, toIntentCandidate } from "./intent-llm.js";
-import { JUDGE_MAIN_VARS } from "../llm-judge.js";
+import { resolveJudgeCreds } from "../llm-judge.js";
 import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
 import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
 import { recordRawMessage, resolveHfLearning, HF_LEARNING_DEFAULTS, type HeartflowConfig } from "../inbound/heartflow.js";
@@ -203,9 +203,11 @@ function resolveBotName(msg: WppInboundMessage): string {
 }
 function resolveIntentLlmApiKey(): string {
   // v1.14.0: env 名随 judge 主端点一起改名 (DEEPSEEK_API_KEY → JUDGE_API_KEY, 见 llm-judge 文件头)。
-  // ⚠️ 实测已知: 这条链的**端点**仍是 intent-llm.ts 里硬编码的 api.minimaxi.com/anthropic,
-  //    拿这个 key (阿里 token-plan) 打过去必然 401 ⇒ 静默降级成规则。改端点属另一次改动, 此处只改名。
-  return process.env[JUDGE_MAIN_VARS.apiKey] ?? process.env.MINIMAX_API_KEY ?? "";
+  // v1.14.1: 改为直接问 judge 的凭证解析器 —— 键与端点从此**出自同一个函数**
+  //   (endpoint 由 intent-llm.resolveIntentLlmTarget 取 resolveJudgeCreds().baseUrl)。
+  //   这样"JUDGE_API_KEY 是阿里 token-plan 那把 ⇒ 就该打阿里端点"变成结构性事实,
+  //   不存在"改了 key 忘了改端点"这一档 (v1.14.0 之前的实况: 阿里 token 打到 api.minimaxi.com)。
+  return resolveJudgeCreds().apiKey;
 }
 
 function resolveEmbedIntentEnabled(msg: WppInboundMessage): boolean {
