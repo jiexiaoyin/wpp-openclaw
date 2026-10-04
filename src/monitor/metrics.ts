@@ -153,6 +153,11 @@ declareCounter("judge_calls_total");
 declareCounter("judge_failures_total");
 declareCounter("judge_fallback_total");
 declareCounter("judge_fallback_ok_total");
+// v1.14.2: 意图判断 (llmIntent) 与 judge 分开计 —— 它**不走 callJudge**, 端点故障曾完全不可见
+declareCounter("intent_calls_total");
+declareCounter("intent_failures_total");
+declareCounter("intent_fallback_total");
+declareCounter("intent_fallback_ok_total");
 declareCounter("messages_in_total");
 
 export const WsMetrics = {
@@ -180,6 +185,29 @@ export const JudgeMetrics = {
   incFallback: () => incCounter("judge_fallback_total"),
   /** v1.13.0: 兜底端点**救回来**的次数 ⇐ 直接回答"兜底到底有没有用" */
   incFallbackOk: () => incCounter("judge_fallback_ok_total"),
+};
+
+/**
+ * v1.14.2 (2026-10-04): 意图判断 (llmIntent) 的四个计数, 与 JudgeMetrics 逐项对称。
+ *
+ * 为什么要与 judge 分开而不是复用: llmIntent **不走 callJudge** —— 它自带一条 safeFetch 链
+ *   (decideIntentWithLlm)。复用的结果是"意图链断了但 judge 计数照涨", 正是 v1.10.0 那次
+ *   停摆 3 天的同一个盲区 (指标涨 ≠ 这条链活着)。
+ * 为什么值得加: 在 v1.14.2 之前, 意图链的端点故障**完全没有聚合信号** —— 只有一行 WARN,
+ *   而 401/超时/空正文三种病在日志里长得一模一样, 分不出"偶发"还是"一直在挂"。
+ */
+export const IntentMetrics = {
+  /** decideIntentWithLlm 调用次数 (群 @ 触发的意图判断, 未过规则预筛的才走到这) */
+  incCall: () => incCounter("intent_calls_total"),
+  /**
+   * **最终**失败次数 (无 apiKey / HTTP 非 2xx / 空正文 / 超时, 且兜底未配或也失败)。
+   * 与 judge 同口径: 主端点抛错但兜底救回来的那次**不计** (它没失败)。
+   */
+  incFailure: () => incCounter("intent_failures_total"),
+  /** v1.14.2: 兜底端点被启用 (= 主端点抛错且兜底已配) 的次数 */
+  incFallback: () => incCounter("intent_fallback_total"),
+  /** v1.14.2: 兜底端点**没抛错**的次数 —— 含"端点通了但答非 JSON", 那属模型质量问题不算端点故障 */
+  incFallbackOk: () => incCounter("intent_fallback_ok_total"),
 };
 
 export const InboundMetrics = {

@@ -4,6 +4,46 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.14.2] llmIntent 补上二级端点兜底 (2026-10-04)
+
+> **起因 (老板拍板)**: v1.14.1 把意图判断的端点收口到 judge 之后, 暴露出下一个洞 ——
+> 它**和 heartflow/affection/jargon 打同一个端点, 却是全仓唯一一条没有兜底的**。
+> 那三条自 v1.13.0 起主端点一挂就自动换 deepseek 重试; 意图判断没有: 端点一断,
+> 它只是静默降级回规则 —— 群 @ 回复照发, 只是少了上下文, **没有任何人能察觉**。
+> 老板选"给 llmIntent 接上兜底"。
+
+### Changed / 兜底 (与 v1.13.0 judge 层同 env、同语义)
+- `decideIntentWithLlm` 拆成 **单次调用 (`decideIntentInner`) + 兜底包装**: 主端点**任何端点级故障**
+  (网络异常 / HTTP 非 2xx / **空正文**) ⇒ 换 `JUDGE_FALLBACK_*` 那套 (生产 = `api.deepseek.com` /
+  `deepseek-flash`) 重试**一次**, 模型名与端点一起换 (它俩是一对)。
+- **只兜端点故障, 不兜"答得不好"**: 非空但解析不出 JSON ⇒ 仍是 `null` (不重试)。换端点治不好
+  「答非所问」, 重试只会白烧一次调用并把真问题掩盖掉。与 judge 层"不兜分数不好"逐字同口径。
+- **凭证缺失不触发兜底**: 没 `JUDGE_API_KEY` 仍是 v1.14.1 明文保留的既定降级 (直接走规则,
+  连一次网络都不发), 不会"偷偷拿兜底 key 顶上"。这是与 `callJudge`(没 key 也兜) 的**唯一**口径差异,
+  已写在代码注释里。
+- 出声: 兜底被用到 WARNING (含"从哪个端点换到哪个" + 主端点病因), 两段都失败时合并报错同时点名两个
+  端点; 两者**均不含任何 key** (复用 `describeJudgeEndpoint`/`describeJudgeFallback`)。
+
+### Fixed / 两个被压平的失败形态
+- **HTTP 非 2xx 与空正文** 原先是 `warn` + `return null`, 与"模型答了句废话"**压成同一个 null** ——
+  于是端点挂三天也只会看到一行 `unparseable`, 与 v1.10.0 那次"指标照涨但功能全停"是同族盲区。
+  本版起两者都**抛错** (⇒ 兜底看得见), 且空正文单独给出病因提示 (推理模型 `max_tokens` 被思考吃光,
+  v1.6.1 在 judge 层踩过的同一个坑)。
+
+### Added / 可观测性
+- 新增四个指标 (与 `JudgeMetrics` 逐项对称): `intent_calls_total` / `intent_failures_total` /
+  `intent_fallback_total` / `intent_fallback_ok_total`。
+  为什么**另起一套**而不复用 judge 的: 意图判断不走 `callJudge`, 复用等于"意图链断了但 judge 计数照涨"。
+
+### 未变
+- 兜底三项 env 未配/半配 ⇒ 行为与 v1.14.1 **逐字一致** (只多一行日志); 半配仍不重试。
+- 主端点/模型/端点收口逻辑 (v1.14.1) 一个字没动。
+
+### 测试
+- 新增 `tests/unit/intent-fallback-v1142.test.mjs` (18 例): 基线不变 / 重试形状 (提示词逐字相同) /
+  空正文与非 2xx 必兜 / 坏 JSON 不兜 / 没 key 不兜且零网络 / 两段都失败的合并报错不含 key /
+  出声恰好一条 / 四个计数器 / dist 产物真实接线。
+
 ## [v1.14.1] llmIntent 端点收口到 judge 主端点 (2026-10-04)
 
 > **起因 (老板拍板)**: v1.14.0 改名报告里列的"仍挂着"之一 —— 「llmIntent 的端点是否改指阿里」,
