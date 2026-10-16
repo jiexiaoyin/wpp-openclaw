@@ -2,20 +2,23 @@
 // v1.1.27 SEARCH-FIELD-FIX (2026-08-08 P1-1): 批量改字段名对齐 swagger
 //   之前: 全部用 keyword → 静默失效 (vendor 是 query)
 //   fix: Search.VerticalRequest = {query, cursor, limit, offset, ...}
-//        Search.AIRequest = {model, query, session_id, turn, ...}
+//        Search.AIRequest = {model, query}          ← v1.16.1 更正: 线上 AIRequestDoc 只有这两个
+//        (session_id 属于 FollowUp 的 AIFollowUpRequestDoc; turn 由服务端维护, 客户端不传)
 import { postWppJson, getWppJson } from "../api/client.js";
 import { ctxToCallOpts } from "./factory.js";
 export function makeWppSearch(ctx) {
     const opts = ctxToCallOpts(ctx);
     const dispatch = (ep, body = {}) => postWppJson(ctx.baseUrl, ep, body, opts);
     return {
-        /** /Search/AI — AI 搜索 (Search.AIRequest: model/query/session_id/turn) */
-        ai: (query, opts2) => dispatch("/Search/AI", {
-            query,
-            model: opts2?.model ?? "deepseek",
-            session_id: opts2?.sessionId ?? "",
-            turn: opts2?.turn ?? 1,
-        }),
+        /**
+         * /Search/AI — 新建 AI 搜索会话 (线上 Search.AIRequestDoc {model, query}, required 只有 query)。
+         * ⚠️ v1.16.1 (2026-10-16): 去掉 session_id/turn 两个死键 —— 厂商文档明说「轮次由服务端维护, 客户端**不需**传 turn」,
+         *   而 session_id 是**响应**里拿到的、用于 /Search/AI/FollowUp 追问 (见下面 aiFollowUp), 在"新建会话"上无效
+         *   (旧码还传了空串)。继续用第三/四参传它们只会让人以为多轮对话在这里生效。
+         * ⚠️ model 的默认值仍是历史值 "deepseek", 但厂商文档写「目前稳定公开值为 default」且示例就是 default ——
+         *   两种取值的实际差异**未复测** (本条无法用静态检查判定), 见 CHANGELOG v1.16.1 待验证项。
+         */
+        ai: (query, opts2) => dispatch("/Search/AI", { query, model: opts2?.model ?? "deepseek" }),
         /** /Search/All — 综合 */
         all: (query, cursor = "", limit = 20) => dispatch("/Search/All", { query, cursor, limit }),
         /** /Search/Articles — 公众号文章 */

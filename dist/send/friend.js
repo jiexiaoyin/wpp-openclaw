@@ -22,8 +22,15 @@ export function makeWppFriend(ctx) {
         getMFriend: (phoneList) => dispatch("/Friend/GetMFriend", { phoneList: phoneList.join(",") }),
         /** /Friend/LbsFind — 附近人 (v1.2.1 swagger-alignment: LbsFindParamDoc {latitude, longitude, opCode}) */
         lbsFind: (latitude, longitude, opCode) => dispatch("/Friend/LbsFind", { latitude, longitude, opCode: opCode ?? 1 }),
-        /** /Friend/PassVerify — 通过好友请求 (opcode + scene + v1 + v2) */
-        passVerify: (v1, v2, opcode = 1, scene = 1) => dispatch("/Friend/PassVerify", { opcode, scene, v1, v2 }),
+        /**
+         * /Friend/PassVerify — 通过好友请求.
+         * 线上 Friend.PassVerifyParamDoc {scene*(integer), v1*, v2*}, required 三个全有; **没有 opcode**。
+         * 厂商原话: "v1、v2、scene 直接使用 type=37 好友申请实时事件的 friend_request.accept_body;
+         *   底层**固定 Opcode=3**" ⇒ 客户端传的 opcode 根本不读。
+         * v1.16.1 (2026-10-16): 不再多带 opcode (旧码默认发 1, 既与实际行为不符, 又让人以为能控制它);
+         *   scene 抬到第三个形参, 让调用方能按事件里的真实 scene 传 (旧码只能吃默认 1)。
+         */
+        passVerify: (v1, v2, scene = 1) => dispatch("/Friend/PassVerify", { scene, v1, v2 }),
         /** /Friend/Search — 搜索联系人 (keyword + fromScene + searchScene) */
         search: (keyword, fromScene = 1, searchScene = 1) => dispatch("/Friend/Search", { keyword, fromScene, searchScene }),
         /**

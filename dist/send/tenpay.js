@@ -8,21 +8,37 @@
 //   - 同名 wxid: 老端点用 Wxid, 新端点用 wxid (vendor 文档本身混用, 按 swagger definitions 字段为准)
 import { postWppJson } from "../api/client.js";
 import { ctxToCallOpts } from "./factory.js";
+/**
+ * 金额 → 线上要求的「单位元、两位小数字符串」(示例 "1.00" / "10.00")。
+ * ⚠️ 不要图省事发 number: 线上这几个 model 都把金额声明为 **string**, 而厂商 Go 反序列化对类型是严格的
+ *   (同文件 /Msg/Revoke 的实测: 传 string 给 int64 直接 Code=-8 INVALID_ARGUMENT)。旧码发 number ⇒ 必失败。
+ */
+const yuan = (amount) => amount.toFixed(2);
 export function makeWppTenPay(ctx) {
     const opts = ctxToCallOpts(ctx);
     const dispatch = (ep, body = {}) => postWppJson(ctx.baseUrl, ep, body, opts);
     return {
-        /** /TenPay/GeMaSkdPayQCode — 自定义个人收款单 (TenPay.GeMaSkdPayQCodeParam: Money/Name/Remark/Wxid) */
-        geMaSkdPayQCode: (amount, name, remark, wxid = "") => dispatch("/TenPay/GeMaSkdPayQCode", { Money: amount, Name: name, Remark: remark, Wxid: wxid }),
+        /**
+         * /TenPay/GeMaSkdPayQCode — 自定义经营个人收款单.
+         * 线上 TenPay.GeMaSkdPayQCodeParam {Money*, Name*, Remark} — 三个字段**全是 string** (示例 "1.00"), 无 Wxid。
+         * ⚠️ v1.16.1 (2026-10-16) 两处更正: ① Money 由 number 改为两位小数字符串 (类型不符 ⇒ 厂商拒收);
+         *   ② 去掉不存在的 Wxid。另注: 线上明确 Name 必须与**已开通经营收款的账户名称完全一致**, 不是商品名/备注。
+         */
+        geMaSkdPayQCode: (amount, name, remark = "") => dispatch("/TenPay/GeMaSkdPayQCode", { Money: yuan(amount), Name: name, Remark: remark }),
         /** /TenPay/GetEncryptInfo */
         getEncryptInfo: (info) => dispatch("/TenPay/GetEncryptInfo", { info }),
-        /** /TenPay/OpenHongBao — 抢红包 (TenPay.HongBaoParam: SendId/SendUserName/Wxid/Xml; 无 TimingIdentifier) */
-        openHongBao: (sendId, sendUserName, wxid, xml) => dispatch("/TenPay/OpenHongBao", {
-            SendId: sendId,
-            SendUserName: sendUserName,
-            Wxid: wxid,
-            Xml: xml,
-        }),
+        /**
+         * /TenPay/OpenHongBao — 抢红包。
+         * ⚠️ v1.16.1 (2026-10-16) 字段更正: 旧版发 `{SendId, SendUserName, Wxid, Xml}`, 依据是注释里那句
+         *   "vendor TenPay.HongBaoParam 只有 SendId/SendUserName/Wxid/Xml" —— **那个 model 在容器 swagger 里不存在**。
+         *   以 swagger 为准, 线上是 `TenPay.HongBaoParamDoc {SendUserName, Xml, contextId}`:
+         *   ⇒ SendId/Wxid 厂商不认 (Go 对未知字段是**静默忽略**, 不报错, 所以一直没人发现),
+         *     而 SendUserName/Xml 又被 agent 工具常年传空字符串 ⇒ **整条调用是静默空操作** (抢红包必失败)。
+         *   现在按 model 走: 给 contextId 就只发 contextId (厂商标注"推荐使用"); 否则发兼容模式 SendUserName+Xml。
+         */
+        openHongBao: (opts) => dispatch("/TenPay/OpenHongBao", opts.contextId
+            ? { contextId: opts.contextId }
+            : { SendUserName: opts.sendUserName ?? "", Xml: opts.xml ?? "" }),
         /** /TenPay/Openwxhb — 拆开红包
          *  v1.6.0 SWAGGER-323 对齐: swagger TenPay.OpenwxhbParamDoc
          *    {Xml*, SendUserName*, TimingIdentifier*, Encrypt_key, Encrypt_userinfo}
@@ -50,29 +66,40 @@ export function makeWppTenPay(ctx) {
             ...(encryptKey ? { Encrypt_key: encryptKey } : {}),
             ...(encryptUserinfo ? { Encrypt_userinfo: encryptUserinfo } : {}),
         }),
-        /** /TenPay/SjSkdPayQCode — 商家收款单 (TenPay.SjSkdPayQCodeParam: Money/Name/Remark/Wxid) */
-        sjSkdPayQCode: (amount, name, remark, wxid = "") => dispatch("/TenPay/SjSkdPayQCode", { Money: amount, Name: name, Remark: remark, Wxid: wxid }),
+        /** /TenPay/SjSkdPayQCode — 商家收款单 (线上 TenPay.SjSkdPayQCodeParam {Money*, Name*, Remark}, 同 GeMaSkd: 全 string 无 Wxid) */
+        sjSkdPayQCode: (amount, name, remark = "") => dispatch("/TenPay/SjSkdPayQCode", { Money: yuan(amount), Name: name, Remark: remark }),
         // ===== v1.3.20 P1-TENPAY-FIELDS: 新增 5 个字段名按 vendor 全小写对齐 =====
         /**
-         * /TenPay/Collectmoney — 确认收款
-         * vendor: TenPay.CollectmoneyModel {invalidTime, toUserName, transFerId, transactionId, wxid}
-         * v1.3.19 错用 Wxid, Go 大小写敏感导致字段被忽略 → 修复为小写 wxid
+         * /TenPay/Collectmoney — 确认收款。
+         * ⚠️ v1.16.1 (2026-10-16) 字段更正: 旧版发 `{wxid}` (注释称 vendor model 里有 wxid), 但容器 swagger 的
+         *   `TenPay.CollectmoneyModelDoc` 只有 `{contextId, invalidTime, toUserName, transFerId, transactionId}` ——
+         *   **没有 wxid**。也就是说 v1.3.19 那次"修复为小写 wxid"本身是照着一个不存在的字段改的: 唯一那个键被厂商
+         *   静默忽略 ⇒ 确认收款是**空操作**。与 openHongBao 同一类病 (照过期 model 写字段名)。
+         *   现在: 给 contextId 就只发它 (厂商标注"推荐使用"); 否则发兼容模式 toUserName (付款方微信标识)
+         *   + 可选 transFerId/transactionId/invalidTime。
          */
-        collectMoney: (wxid) => dispatch("/TenPay/Collectmoney", { wxid }),
+        collectMoney: (opts) => dispatch("/TenPay/Collectmoney", opts.contextId
+            ? { contextId: opts.contextId }
+            : {
+                ...(opts.toUserName ? { toUserName: opts.toUserName } : {}),
+                ...(opts.transFerId ? { transFerId: opts.transFerId } : {}),
+                ...(opts.transactionId ? { transactionId: opts.transactionId } : {}),
+                ...(opts.invalidTime ? { invalidTime: opts.invalidTime } : {}),
+            }),
         /**
-         * /TenPay/ConfirmPreTransferApi — 确认支付
-         * vendor: TenPay.ConfirmPreTransfer {bankSerial, bankType, payPassword, reqKey, wxid}
-         * v1.3.19 错用 Wxid/TransferId, 修复为 wxid
-         * 注: bankSerial/bankType/payPassword/reqKey 来自 vendor 预支付响应, 调用方需通过 chainParams 传入
+         * /TenPay/ConfirmPreTransferApi — 确认支付 (完成 createPreTransfer 的预订单)
+         * 线上 `TenPay.ConfirmPreTransferDoc {bankSerial*, bankType*, payPassword*, reqKey*}` — 四个**全必填**, 全是 string。
+         * v1.16.1 (2026-10-16) 更正: 旧的 `(wxid, transferId, ...)` 形状有两个问题 —
+         *   ① 厂商 model 里既没有 wxid 也没有 transactionId (Go 静默忽略未知字段 ⇒ 一直无害但无用);
+         *   ② 更要紧的是**工具层**只暴露 wxid/transferId, 那四个必填只能拿默认空串 ⇒ "确认支付"实际发出
+         *      `{bankSerial:"",bankType:"",payPassword:"",reqKey:""}`, 线上不可能成功。现在改成 opts 形状,
+         *      四个必填由调用方显式给全, 工具层同步暴露这四个 (见 tenpay-meta.ts)。
          */
-        confirmPreTransfer: (wxid, transferId, bankSerial = "", bankType = "", payPassword = "", reqKey = "") => dispatch("/TenPay/ConfirmPreTransferApi", {
-            wxid,
-            bankSerial,
-            bankType,
-            payPassword,
-            reqKey,
-            // transferId 不在 vendor body schema, 仅传给 wxid 关联上下文 (vendor 隐含从 transactionId 取)
-            transactionId: transferId,
+        confirmPreTransfer: (o) => dispatch("/TenPay/ConfirmPreTransferApi", {
+            bankSerial: o.bankSerial,
+            bankType: o.bankType,
+            payPassword: o.payPassword,
+            reqKey: o.reqKey,
         }),
         /**
          * /TenPay/CreatePreTransfer — 创建转账预订单 (v1.6.0 SWAGGER-323 新端点).
@@ -84,28 +111,31 @@ export function makeWppTenPay(ctx) {
         createPreTransfer: (toUserName, feeFen, description = "") => dispatch("/TenPay/CreatePreTransfer", { toUserName, fee: feeFen, description }),
         /**
          * /TenPay/GeneratePayQCode — 生成自定义收款二维码
-         * vendor: TenPay.GeneratePayQCodeModel {money, name, wxid}
-         * v1.3.19 错用 Money/Name/Remark → money/name 无 remark
+         * 线上 TenPay.GeneratePayQCodeModelDoc {money*, name*} — 都是 string, money 单位元两位小数 (示例 "10.00")。
+         * v1.16.1: ① money 由 number 改为 yuan() 字符串 (类型不符 ⇒ 厂商拒收); ② 去掉 `wxid`
+         *   (旧注释引的 model 里有, 线上没有; Go 静默忽略 ⇒ 一直是死负载)。
+         * v1.3.19 错用 Money/Name/Remark → money/name 无 remark (这条仍成立)。
          */
-        generatePayQCode: (amount, name, wxid = "") => dispatch("/TenPay/GeneratePayQCode", { money: amount, name, wxid }),
+        generatePayQCode: (amount, name) => dispatch("/TenPay/GeneratePayQCode", { money: yuan(amount), name }),
         /**
          * /TenPay/GetRedPacketListApi — 查看红包领取列表
-         * vendor: TenPay.HongBaoDetail {offset, size, wxid, xml}
-         * v1.3.19 错用 RedPacketId → 需要 offset/size/wxid/xml 来自原始红包消息
+         * 线上 TenPay.HongBaoDetailDoc {xml*, offset, size} (required: xml) — **无 wxid**。
+         * v1.16.1: 去掉 wxid (Go 静默忽略的未知键); 旧注释引的 `TenPay.HongBaoDetail {offset,size,wxid,xml}` 已不存在。
          * 通常由 inbound 红包事件触发 (xml 来自 webhook payload)
          */
-        getRedPacketList: (wxid, xml, offset = 0, size = 100) => dispatch("/TenPay/GetRedPacketListApi", { wxid, xml, offset, size }),
+        getRedPacketList: (xml, offset = 0, size = 100) => dispatch("/TenPay/GetRedPacketListApi", { xml, offset, size }),
         /**
          * /TenPay/WXCreateRedPacketApi — 创建红包
-         * vendor: TenPay.RedPacket {amount, content, count, from, redType, username, wxid}
-         * v1.3.19 错用 Money/Name/Wxids/Remark → 完整重写
-         * 注: amount 单位单位"分" (整数), content 红包祝福语, count 个数, from 红包来源场景, redType 红包类型, username 群 ID 或 wxid
+         * 线上 TenPay.RedPacketDoc {amount*(integer, 分), content*, count*, from, redType, username*}
+         *   required = [username, count, amount, content]; **无 wxid** (旧注释引的 `TenPay.RedPacket {...wxid}` 已不存在)。
+         * v1.16.1: 去掉死负载 wxid (Go 静默忽略的未知键, vendor 从 AccessToken 取调用方身份)。
+         * v1.3.19 错用 Money/Name/Wxids/Remark → 完整重写 (这条仍成立)。
+         * 注: amount 单位"分" (整数), content 红包祝福语, count 个数, from 红包来源场景, redType 红包类型, username 群 ID 或 wxid
          */
         createRedPacket: (amountFen, // 红包总金额 (单位分)
         content, // 红包祝福语
         count, // 红包个数
         username, // 接收人 wxid 或群 ID
-        wxid = "", // 调用方 wxid (vendor 隐含从 AccessToken 取)
         redType = 1, // 红包类型 (1=普通, 2=群)
         from = 0 // 红包来源场景 (0=普通)
         ) => dispatch("/TenPay/WXCreateRedPacketApi", {
@@ -115,7 +145,18 @@ export function makeWppTenPay(ctx) {
             from,
             redType,
             username,
-            wxid,
+        }),
+        /**
+         * /TenPay/PayQCodeStatus — 查收款二维码的**是否真到账** (线上 TenPay.PayQCodeStatusModelDoc {order_id, pay_url}).
+         * 配对使用: generatePayQCode 的响应里拿 order_id, 拿它轮询本端点。厂商原话的判据很硬 ——
+         *   只有 `Data.status==="paid"` **且** `Data.paid===true` 才算确认到账; 扫码、收到通知、数字状态、金额相同都**不算**;
+         *   查询暂不可用会返回 HTTP 503 + PAYMENT_STATUS_UNAVAILABLE 且 Data.paid=false ⇒ 此时应保持原订单状态稍后重试,
+         *   **不得**据此判为支付失败。
+         * v1.16.1 新增 (线上 324 路径比快照多出的那条, 见 tests/fixtures/vendor-swagger-endpoints.json)。
+         */
+        payQCodeStatus: (orderId, payUrl = "") => dispatch("/TenPay/PayQCodeStatus", {
+            ...(orderId ? { order_id: orderId } : {}),
+            ...(payUrl ? { pay_url: payUrl } : {}),
         }),
         /** /TenPay/OpenHongBaoWithParams — 抢红包完整参数 (v1.3.67 新 API; SendId/SendUserName/TimingIdentifier/Xml) */
         openHongBaoWithParams: (sendId, sendUserName, timingIdentifier, xml) => dispatch("/TenPay/OpenHongBaoWithParams", { SendId: sendId, SendUserName: sendUserName, TimingIdentifier: timingIdentifier, Xml: xml }),

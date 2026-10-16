@@ -212,7 +212,7 @@ bash deploy-swap.sh --force  # 真实部署
 
 ## 已知风险
 
-**v1.9.2 (2026-09-28) 汇总，按重要度排序：**
+**v1.16.0 复核汇总：清单作于 v1.9.2，2026-10-16 逐条复核，三条均仍成立**，按重要度排序：
 
 ### 1. int64 精度风险（vendor 对齐引发的）
 
@@ -244,6 +244,7 @@ systemctl --user list-unit-files | grep openclaw
 ### 3. `decryptWeComSession` / `decryptFinderComment` 的语义
 
 工具名 `decryptFinderComment` 是历史误名（实际能力是企微会话记录解密，与视频号评论无关）。v1.9.2 已**新增正确命名的 `decryptWeComSession`**，旧 `decryptFinderComment` 保留为 deprecation alias 直至 v2.0。
+（2026-10-16 复核：v1.16.0 下该 alias 仍在、代码里计划的移除版本仍是 v2.0 —— 见 `src/dispatch/agent-tools/finder-meta.ts`。工具名对 LLM 是对外标识，改名属破坏性变更，故不随版本顺手改。）
 
 **当前 LLM 选型**：新代码请用 `decryptWeComSession`。旧名仍可用，但描述已明确告知其非视频号能力。
 

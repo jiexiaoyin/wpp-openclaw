@@ -11,10 +11,6 @@
 import { postWppJson, stringifyLargeInts } from "./api/client.js";
 import { logObj as log } from "./core/logger.js";
 import { safeFetchWithCap } from "./util/safe-fetch.js";
-import { makeWppMsg } from "./send/msg.js";
-import { makeWppGroup } from "./send/group.js";
-import { makeWppFriend } from "./send/friend.js";
-import { makeWppWebhook } from "./send/webhook.js";
 export { resolveImageToBase64, readLocalMedia } from "./api/resolve-media.js";
 /** XML 转义 (v1.3.12 FILE-SEND: 文件名含特殊字符时防 XML 破坏) */
 function escapeXml(s) {
@@ -38,16 +34,20 @@ function makeCtx(cfg, accountId) {
         accountId,
     };
 }
-function makeMsgFor(cfg, accountId) {
+async function makeMsgFor(cfg, accountId) {
+    const { makeWppMsg } = await import("./send/msg.js");
     return makeWppMsg(makeCtx(cfg, accountId));
 }
-function makeGroupFor(cfg, accountId) {
+async function makeGroupFor(cfg, accountId) {
+    const { makeWppGroup } = await import("./send/group.js");
     return makeWppGroup(makeCtx(cfg, accountId));
 }
-function makeFriendFor(cfg, accountId) {
+async function makeFriendFor(cfg, accountId) {
+    const { makeWppFriend } = await import("./send/friend.js");
     return makeWppFriend(makeCtx(cfg, accountId));
 }
-function makeWebhookFor(cfg, accountId) {
+async function makeWebhookFor(cfg, accountId) {
+    const { makeWppWebhook } = await import("./send/webhook.js");
     return makeWppWebhook(makeCtx(cfg, accountId));
 }
 export class WechatpadproApiClient {
@@ -92,19 +92,19 @@ export class WechatpadproApiClient {
     }
     // ============ Msg (v1.3.19 UNIFY-SEND: 委托 send/msg.ts, persist:false 防双入库) ============
     async sendText(toWxid, text, ats) {
-        const api = makeMsgFor(this.cfg, this.accountId);
+        const api = await makeMsgFor(this.cfg, this.accountId);
         return api.sendTxt(toWxid, text, ats, false);
     }
     async sendImage(toWxid, imageUrlOrPath) {
-        const api = makeMsgFor(this.cfg, this.accountId);
+        const api = await makeMsgFor(this.cfg, this.accountId);
         return api.sendImage(toWxid, imageUrlOrPath, false);
     }
     async sendVoice(toWxid, voiceUrlOrPath, durationMs, formatHint) {
-        const api = makeMsgFor(this.cfg, this.accountId);
+        const api = await makeMsgFor(this.cfg, this.accountId);
         return api.sendVoice(toWxid, voiceUrlOrPath, durationMs, false, formatHint);
     }
     async sendVideo(toWxid, videoUrlOrPath, thumbUrlOrPath, playLengthMs) {
-        const api = makeMsgFor(this.cfg, this.accountId);
+        const api = await makeMsgFor(this.cfg, this.accountId);
         return api.sendVideo(toWxid, videoUrlOrPath, thumbUrlOrPath, playLengthMs, false);
     }
     // /Msg/SendApp 是「群发消息」(SendGroupMassMsgTextParamDoc)
@@ -149,25 +149,25 @@ export class WechatpadproApiClient {
         return this.call("/Msg/ShareLink", { ToWxid: toWxid, Type: 6, Xml: xml });
     }
     async revokeMsg(msgId, newMsgId, toWxid, createTime) {
-        const api = makeMsgFor(this.cfg, this.accountId);
+        const api = await makeMsgFor(this.cfg, this.accountId);
         return api.revoke(msgId, newMsgId, toWxid, createTime);
     }
     // vendor swagger /Msg/Sync body schema = Msg.SyncParamDoc
     async syncMessage() {
-        const api = makeMsgFor(this.cfg, this.accountId);
+        const api = await makeMsgFor(this.cfg, this.accountId);
         return api.sync();
     }
     // ============ Group (委托 send/group.ts) ============
     async getChatroomInfo(chatroomId) {
-        return makeGroupFor(this.cfg, this.accountId).getInfo(chatroomId);
+        return (await makeGroupFor(this.cfg, this.accountId)).getInfo(chatroomId);
     }
     // /Group/GetChatRoomMemberList 404 → /Group/GetChatRoomMemberDetail 200
     async getChatroomMemberList(chatroomId) {
-        return makeGroupFor(this.cfg, this.accountId).getMemberDetail(chatroomId);
+        return (await makeGroupFor(this.cfg, this.accountId)).getMemberDetail(chatroomId);
     }
     // ============ Friend (委托 send/friend.ts) ============
     async getContactList() {
-        return makeFriendFor(this.cfg, this.accountId).getContractList();
+        return (await makeFriendFor(this.cfg, this.accountId)).getContractList();
     }
     // ============ User ============
     // /User/GetProfile 404 → /User/GetContractProfile 200; swagger authcode 在 query
@@ -178,20 +178,20 @@ export class WechatpadproApiClient {
     // ============ Webhook (委托 send/webhook.ts) ============
     async setWebhook(url, _authcode) {
         // webhook.set 保留 v1.1.17 P0-E enabled:true 修复; authcode 由 ctx 注入 (与调用方传的 cfg.authcode 同值)
-        return makeWebhookFor(this.cfg, this.accountId).set(url);
+        return (await makeWebhookFor(this.cfg, this.accountId)).set(url);
     }
     async getWebhook() {
-        return makeWebhookFor(this.cfg, this.accountId).get();
+        return (await makeWebhookFor(this.cfg, this.accountId)).get();
     }
     // setBusinessWebhook 字段不同 (syncMessageUrl/logoutUrl), 保留原实现
     async setBusinessWebhook(syncMessageUrl, logoutUrl) {
         return this.call("/Webhook/Business/Set", { syncMessageUrl, logoutUrl });
     }
     async startAutoSync(targetUrl) {
-        return makeMsgFor(this.cfg, this.accountId).startAutoSync(targetUrl);
+        return (await makeMsgFor(this.cfg, this.accountId)).startAutoSync(targetUrl);
     }
     async removeWebhook() {
-        return makeWebhookFor(this.cfg, this.accountId).remove();
+        return (await makeWebhookFor(this.cfg, this.accountId)).remove();
     }
 }
 // stringifyLargeInts 重导出 (供老代码引用)

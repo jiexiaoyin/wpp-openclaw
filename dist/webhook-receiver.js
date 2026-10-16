@@ -22,6 +22,14 @@ export class WechatpadproWebhookServer {
     server = null;
     /** 可选 body limit override (测试用, 默认 10MB) */
     bodyLimitBytes;
+    /**
+     * v1.16.1: 日志用的 path 脱敏器。**故意不给默认值** (默认原样返回) ——
+     * 判断"哪段是 token"需要 token 本身, 而 server 只拿到 path; 所以由构造方 (index.ts, 它持有
+     * cfg.webhookPathToken) 注入 policy。默认原样是为了不改动其它构造点/测试的行为;
+     * 谁忘了注入不会导致本条日志错, 只会在 src/index.ts 那个唯一的生产构造点上留下明文 ——
+     * 所以 tests/unit/webhook-token-redaction 的静态门钉的是"index.ts 构造时必须传 redactPath"。
+     */
+    redactPath;
     constructor(host, port, 
     /**
      * 多路径 + 每路径独立 handler (同步消息走 webhook 路径, 完整业务回调走 business 路径)
@@ -33,8 +41,10 @@ export class WechatpadproWebhookServer {
         this.paths = paths;
         this.secret = secret;
         this.bodyLimitBytes = opts?.bodyLimitBytes ?? WEBHOOK_BODY_LIMIT_BYTES;
+        this.redactPath = opts?.redactPath ?? ((p) => p);
         // 注: timeout 暂用全局 REQUEST_TIMEOUT_MS, 暂不开放 override
     }
+    // 约定: 本文件所有打 path 的日志一律 `this.redactPath(...)` 再插值, 别直接插 this.paths / matchPath
     /**
      * v1.3.61 WEBHOOK-SHARED-PORT: 动态注册 path (多账号共享端口, 单 server 实例多 path)。
      * 幂等: 同 path 已存在则跳过。start 前后均可调用 (start 后注册的 path 立即生效, 因 handler 实时查 this.paths)。
@@ -43,7 +53,7 @@ export class WechatpadproWebhookServer {
         if (this.paths.some((p) => p.path === path))
             return;
         this.paths.push({ path, onMessage });
-        log.info(`[WPP v1.3.61] webhook addPath: ${path} (total ${this.paths.length})`);
+        log.info(`[WPP v1.3.61] webhook addPath: ${this.redactPath(path)} (total ${this.paths.length})`);
     }
     /**
      * v1.3.63 P1 (2026-08-14 审阅): 移除账号时清理 path (防 zombie handler)。
@@ -53,7 +63,7 @@ export class WechatpadproWebhookServer {
         const before = this.paths.length;
         this.paths = this.paths.filter((p) => p.path !== path);
         if (this.paths.length !== before) {
-            log.info(`[WPP v1.3.63] webhook removePath: ${path} (total ${this.paths.length})`);
+            log.info(`[WPP v1.3.63] webhook removePath: ${this.redactPath(path)} (total ${this.paths.length})`);
         }
     }
     async start() {
@@ -151,14 +161,14 @@ export class WechatpadproWebhookServer {
                         if (signatureRequired(this.secret)) {
                             const sig = extractSignatureHeader(req.headers);
                             if (!verifyHmacSha256(rawBody, sig, this.secret)) {
-                                log.warn(`webhook signature verify failed: account=${matchPath} ` +
+                                log.warn(`webhook signature verify failed: account=${this.redactPath(matchPath)} ` +
                                     `(signature=${sig ? "present" : "missing"})`);
                                 WebhookMetrics.incRejectedSignature?.();
                                 res.statusCode = 401;
                                 res.end("unauthorized");
                                 return;
                             }
-                            log.debug(`webhook signature ok: path=${matchPath}`);
+                            log.debug(`webhook signature ok: path=${this.redactPath(matchPath)}`);
                         }
                         // secret 没配 → 接受 (vendor 当前不签, 按 v1.1.10 permissive 设计)
                         // Parse + dispatch
@@ -198,7 +208,7 @@ export class WechatpadproWebhookServer {
             });
             this.server.once("error", reject);
             this.server.listen(this.port, this.host, () => {
-                log.info(`webhook server listening: ${this.host}:${this.port}${this.paths.map(p => p.path).join(",")}` +
+                log.info(`webhook server listening: ${this.host}:${this.port}${this.paths.map(p => this.redactPath(p.path)).join(",")}` +
                     (signatureRequired(this.secret) ? " (signature verification: ON)" : " (signature: OFF, no secret)"));
                 resolve();
             });

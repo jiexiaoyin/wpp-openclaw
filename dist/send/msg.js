@@ -453,8 +453,21 @@ export function makeWppMsg(ctx) {
          * 简单 <svrid> 引用显示"引用内容不存在")
          */
         quoteXml: (toWxid, xml) => dispatch("/Msg/ShareLink", { ToWxid: toWxid, Type: 5, Xml: xml }),
-        /** /Msg/Quote — 引用文本消息 (兼容保留) */
-        quote: (msgId, toWxid, content) => dispatch("/Msg/Quote", { msgId, toWxid, content }),
+        /**
+         * /Msg/Quote — 引用文本消息 (兼容保留; **正常引用回复走上面的 quoteXml /Msg/ShareLink**)。
+         * v1.16.1 (2026-10-16) 字段更正: 线上已换成 `Msg.QuoteDoc {content*, chat_user_id, display_name,
+         *   from_user_id, msg_type, new_msg_id, quote_content, reply_context, sequence, svr_id, to_wxid}` ——
+         *   旧码发的 `msgId`/`toWxid` 两个键**线上没有** (Go 静默忽略, 等于没传收件人与被引消息)。
+         *   厂商文档的推荐体是 `{content, reply_context}` (回复内容 + 收到的 reply_context 原样回填)。
+         * ⚠️ 仍未复测: 本端点当年实测 ret=-2 (见上方 quoteXml 注释), 厂商随后**重写过这个 model** ⇒
+         *   改名后是否可用只能靠一次真实发送验证, 未验证前不要把它设成默认引用路径。
+         */
+        quote: (content, o = {}) => dispatch("/Msg/Quote", {
+            content,
+            ...(o.toWxid ? { to_wxid: o.toWxid } : {}),
+            ...(o.svrId ? { svr_id: o.svrId } : {}),
+            ...(o.replyContext ? { reply_context: o.replyContext } : {}),
+        }),
         /** /Msg/Revoke — 撤回消息 (swagger: ClientMsgId/NewMsgId/CreateTime/ToUserName) */
         /**
          * v1.3.20 REVOKE-FIX: RevokeMsgParamDoc 全 integer int64 — vendor Go 反序列化 string 到 int64 失败 (Code=-8 INVALID_ARGUMENT),
