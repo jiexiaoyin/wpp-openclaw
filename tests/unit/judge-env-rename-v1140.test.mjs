@@ -82,7 +82,7 @@ test('v1.14.0: LEGACY_JUDGE_VARS 恰好是那两个旧名 (不许多、不许少
 // ===== 2. ★ 反向: 旧名不再是凭证 (本文件的核心) =====
 
 test('v1.14.0 ★ 只设旧 DEEPSEEK_API_KEY ⇒ 拿不到主端点凭证 (旧名不再是凭证, 一个字节都不读)', () => {
-  withEnvs({ ...CLEAN, DEEPSEEK_API_KEY: 'sk-REDACTED' }, () => {
+  withEnvs({ ...CLEAN, DEEPSEEK_API_KEY: 'sk-legacy-fake' }, () => {
     const c = resolveJudgeCreds();
     // 落 minimax 分支 (无 minimax key ⇒ apiKey 空 ⇒ 上层会 WARNING "missing judge API key")
     assert.strictEqual(c.apiKey, '', '旧名里的 key 一个字都不许被当成凭证');
@@ -93,7 +93,7 @@ test('v1.14.0 ★ 只设旧 DEEPSEEK_API_KEY ⇒ 拿不到主端点凭证 (旧�
 
 test('v1.14.0 ★ 旧名 + 真 minimax key ⇒ 只能走 minimax (旧名连"第二顺位"都不是)', () => {
   withEnvs(
-    { ...CLEAN, DEEPSEEK_API_KEY: 'sk-REDACTED', MINIMAX_API_KEY: 'mm-real' },
+    { ...CLEAN, DEEPSEEK_API_KEY: 'sk-legacy-fake', MINIMAX_API_KEY: 'mm-real' },
     () => {
       const c = resolveJudgeCreds();
       assert.strictEqual(c.apiKey, 'mm-real');

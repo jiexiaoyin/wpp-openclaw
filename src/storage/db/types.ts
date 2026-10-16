@@ -284,6 +284,14 @@ export interface DbAdapter {
    * 口径偏差: 出站行含"老板自己用 iPad 手打的消息", 插件发送与人工发送在 wpp_messages 里无法区分。
    */
   listHfOutboundTexts(accountId: string, sinceSec: number, limit: number): Promise<HfOutboundTextRow[]>;
+
+  // ====== v1.16.0 图片配文 (caption, 画像样本"看得见图") ======
+  /** 存/更一条图片配文 (PK url_hash 幂等; caption=null 记一次失败, fail_count+1) */
+  upsertHfImageCaption(record: HfImageCaptionRecord): Promise<void>;
+  /** 批量查已试过的 URL 配文 (caption 列可能为 null = 试过但失败; 调用侧据此去重+止损) */
+  getHfCaptionsByHashes(accountId: string, urlHashes: string[]): Promise<HfImageCaptionRow[]>;
+  /** 白名单群近 sinceSec 的图片类入站消息 (caption 补做队列源; 轻量行, 只带 id+content) */
+  listHfImageMsgs(accountId: string, groupIds: string[], sinceSec: number, limit: number): Promise<HfImageMsgRow[]>;
 }
 
 /** v1.6.x: 心流 ledger 行类型 (wpp_hf_ledger, 落行字段; 列见 DDL) */
@@ -513,6 +521,37 @@ export interface SvridMappingRecord {
   msg_md5?: string | null;
   quoted_content_hash?: string | null;
   captured_at?: number;
+}
+
+/** v1.16.0 图片配文行 (wpp_hf_image_caption; 同图 URL 全局唯一, 多群转发只配一次) */
+export interface HfImageCaptionRecord {
+  account_id: string;
+  /** sha1(图片 OSS URL) */
+  url_hash: string;
+  /** 首次见到该图的群 (仅作溯源, 配文可跨群复用) */
+  group_id?: string | null;
+  /** 原 URL 截样 (运维排查用; 配文靠 hash 命中, 不靠它) */
+  url_sample?: string | null;
+  /** 一句话配文; null=本次尝试失败 */
+  caption?: string | null;
+  model?: string | null;
+  /** 失败计数增量 (成功=0, 失败=1); SQL 侧累加 */
+  fail_delta?: number;
+  created_at?: number;
+}
+
+/** v1.16.0 配文批量查行 (caption=null 且 fail_count<上限 = 还能重试) */
+export interface HfImageCaptionRow {
+  url_hash: string;
+  caption: string | null;
+  fail_count: number;
+}
+
+/** v1.16.0 caption 队列源行 (wpp_messages 轻量投影) */
+export interface HfImageMsgRow {
+  id: number;
+  group_id: string;
+  content: string | null;
 }
 
 export interface ChatroomRecord {

@@ -4,6 +4,81 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [Unreleased] v1.16.0 发布当天审阅修正: caption 失败静默 + 存量排空 (2026-10-16)
+
+> 对 v1.16.0 的独立审阅发现 1 处真缺陷 + 1 处可观测缺口 + 1 处被实测证伪的注释估计。
+> **改的是 src/inbound/heartflow-caption.ts / heartflow-profile.ts / openclaw.plugin.json ⇒ 需重新部署。**
+
+### Fixed
+
+- **caption 失败原因被整个吞掉 (真缺陷)**: `captionPendingHfImages` 的任务循环
+  `catch (e)` **从未引用 `e`** —— 配文失败只在库里写一行 `caption=NULL, fail_count+1`,
+  日志里一个字都没有 ("端点不支持 vision / OSS 403 / 超时" 在库里长得一模一样)。
+  同处还使 `npm run lint` 报 `no-unused-vars`, 而 `.github/workflows/ci.yml` 跑的正是
+  `eslint src --max-warnings 0` ⇒ **推上去 CI 必红** (部署流程不 gate lint, 故先前的部署没有拦住)。
+  **修法**: catch 里补 `warn(...formatErr(e))` —— 单图最多 `maxFails` 次, 不担心刷屏。
+- **`openclaw.plugin.json` description 首句版本号写死在 `v1.14.0`** 而 `version` 是 `1.16.0`
+  (plugin 列表里可见)。已改为 `v1.16.0`。
+
+### Changed
+
+- **画像 caption pass 的心跳门槛 `tasks > 0` → `capDone > 0`**, 日志同时报 `groups=已处理/候选`。
+  理由: 原门槛下"机制在跑但本轮没待办"与"机制根本没跑"**都不出声** —— 上线首日表里 0 行时,
+  无法自证是健康空闲还是坏了 (与本仓反复在防的静默盲区同族)。
+  全 fresh 的常态轮次 (`capDone = 0`) 仍不出声 (sweep 每 5 分钟一轮, 出声会刷屏)。
+
+### Docs
+
+- **修正"首轮爬坡期"的估计 (原注释写"一两天", 实测差约 7 倍)**: 全员群画像样本窗
+  (最新 80 条入站) 实测跨 **13.9 天**、含 **44 张图 (55%)**; 配额 6 张/次 × 约 1 次/天 ⇒
+  净排空 = 6 − 到达 3.1 = **2.9 张/天** ⇒ 存量排完要 **~15 天**, 期间样本行照样是 `收到一张图片`。
+  稳态本身没问题 (到达 3.1 < 配额 6); 慢的只有首轮存量 ⇒ 注释里补了排空调用式。
+
+### 运维 (非代码)
+
+- **2026-10-16 一次性排空 5 个白名单群的 caption 存量**: `50 张 / 0 失败`。
+  覆盖验收 (用插件自身 `extractHfImageUrls` + `hfCaptionHash` 核, 非手写 SQL 解析):
+  全员群样本窗 41/41、XX群 1/1、管理群 2/2 全部有配文 (另 2 群窗内无图)。
+  样本行实例: `[图] 零售单详情显示XXPura 80 Pro 12G+512G釉黑，折后合计5199元。`
+
+### 验收
+
+`npm test` = **734 passed / 0 failed / 2 skipped**; `npm run build` + `npm run lint` 干净;
+生产端点实跑 (阿里 token-plan, `qwen3.8-flash`) 单张 1.8s 读出一张真实零售单截图。
+
+## [v1.16.0] 图片配文 (caption): 群画像样本"看得见图" (2026-10-16)
+
+> 老板 2026-10-16 问: "喂给 LLM 的样本能否加入图片识别后的数据?" —— 能, 且这是全员群画像失真的结构根:
+> 全员群 14 天 44/78 条是图片, 而画像样本只有 `收到一张图片 [图片] URL` 占位 ⇒ 归纳模型永远看不见
+> 晒单图 ⇒ engage 清单缺晒单口径 ⇒ judge 给晒单图 0.635 (对照XX群同形态 0.775, 它样本里有"销售进度
+> 汇报"字样)。本次新增 caption 机制补这只"眼", 由老板拍板"直接优化到位"。
+
+### Added
+
+- `src/inbound/heartflow-caption.ts`: 图片配文模块 —— 画像生成前给近窗图片消息补一句话描述
+  (`listHfImageMsgs` 扫图 → `extractHfImageUrls` 抠 URL → sha1 幂等键 → 未配的送 `callJudge(images=[url])`)。
+  旋钮挂 `heartflow.profile.caption` (enabled/perGroupMax=6/maxFails=2/scanLimit=150/timeoutMs=8000, 缺省开)。
+- 新表 `wpp_hf_image_caption` (PK=url_hash 全局唯一, 同图跨群只配一次; caption NULL + fail_count<上限=可重试,
+  到次数即止损从不删行) —— applyMigrations 体内 DDL + db/schema.sql 双写同步。
+- DB 三层: types.ts 3 方法声明 + 3 行类型 / mysql.ts 实现 / storage/db/heartflow.ts 薄封装 + barrel 导出。
+- `loadSampleLines` 装配升级: 图片行从占位符换成 `[图] <配文>` (顺带清掉吃截断预算的 URL 噪声);
+  无配文退回 `收到一张图片`。
+- 新测试 `tests/unit/heartflow-caption.test.mjs` (13 例): 缺省/鈇制/hash 确定性/任务挑选 (去重·止损·配额)/
+  清洗/样本装配 + 安全边界 (anthropic 端点/disabled 必须**零 DB 触达**) + 源级接线 + 建表双写同步。
+
+### 设计红线
+
+- **增强件不是依赖件**: caption 失败/端点坏 → 样本退回旧形态, 画像生成不受阻塞 (全链吞错 + warn)。
+- anthropic 格式端点直接返回 (images 会被该格式丢弃, 对着空图胡说比不配更坏 —— v1.11.0 images 边界同款)。
+- 只为本轮真会重生成的群配文 (镜像 stale 判定 + maxPerRun 配额, 不白打 LLM); judge 热路径零新增开销。
+- 绊索更新: schema.sql 注释行 32 → 35 (schema-sql-split.test 既定规矩, 仓内先例 v1.9.2 同源)。
+
+### 配套背景 (同日非代码变更, 老板批准)
+
+- 全员群 (111111111) learned 阈值 0.90→0.60 人工重置 (silence 自锁, DB 即时生效) + 审计留痕 id16。
+- accounts `heartflow.businessContext` 写入 (晒单截图=喜报应祝贺口径; 启动加载, 需 `/restart` 生效)。
+- ⚠️ 本插件部署后需再 `/restart` 一次 (deploy-swap 的 restart 步被本次跳过, 防杀当前会话)。
+
 ## [Unreleased] 修复: 两个测试用例把临时目录泄漏到 /tmp (2026-10-04)
 
 > **只改 `tests/` 两个文件, 零 src / 零 manifest / 零配置变更 ⇒ 不需要部署, 不需要重启网关。
