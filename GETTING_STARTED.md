@@ -1,6 +1,6 @@
 # 快速开始 (GETTING_STARTED.md)
 
-> **当前版本: v1.16.0** · 从零到可用 · 预计 20 分钟
+> **当前版本: v1.16.1** · 从零到可用 · 预计 20 分钟
 > 本包只含编译产物, 不含 TypeScript 源码。
 
 ---
@@ -77,7 +77,7 @@ docker pull wechatpadpro/wechatpadprobusiness:v2026.08.18.1
 
 # 3. 验证 (端口是宿主机端口)
 curl http://127.0.0.1:18062          # HTTP API
-curl http://127.0.0.1:18062/swagger/  # 323 个 API 文档
+curl http://127.0.0.1:18062/swagger/  # 324 个 API 文档
 ```
 
 ### 2.0.1 人脸认证 + iPad 扫码登录 (首次必做)

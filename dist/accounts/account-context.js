@@ -6,6 +6,7 @@
 //      → outbound / dispatch / inbound 现有 call site 不用动
 import { info as loggerInfo, warn as loggerWarn, error as loggerError, debug as loggerDebug, formatErr, } from "../core/logger.js";
 import { WechatpadproApiClient } from "../api-client.js";
+import { redactWebhookPath } from "../core/redact.js";
 export class AccountContext {
     accountId;
     config;
@@ -107,7 +108,15 @@ export class AccountContext {
     attachWebhookServer(srv, paths = []) {
         this.webhookServer = srv;
         this.webhookPaths = paths;
-        this.info(`webhook server attached`, { port: this.config.webhookPort, paths });
+        // v1.16.1 (2026-10-16): paths 里含 webhookPathToken (路径上唯一的鉴权), 打日志前必须脱敏。
+        //   ⚠️ 这一处是**部署后验收时从生产日志里抓出来的** —— 首轮 12 处审计只扫了 index.ts 与
+        //   webhook-receiver.ts, 漏了这里 (本文件当时不在扫描范围)。所以现在门禁扫的是**整个 src/**,
+        //   不是"我知道的那两个文件"(见 tests/unit/webhook-token-redaction.test.mjs 的全库扫描)。
+        //   用**本账号自己的** token 脱: 传进来的 paths 就是本账号的 (deriveWebhookPaths 产出)。
+        this.info(`webhook server attached`, {
+            port: this.config.webhookPort,
+            paths: paths.map((p) => redactWebhookPath(p, this.config.webhookPathToken)),
+        });
     }
     // 启动时 setWebhook 失败 → 后台每 5 分钟重试, 成功 clearInterval
     // shutdown 时统一 clear (防泄漏)
