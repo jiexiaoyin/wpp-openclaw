@@ -346,8 +346,19 @@ fi
 echo ""
 echo -e "${GREEN}✔ DRY-RUN PASS — 全部 step 通过, 0 警告${NC}"
 echo ""
-echo "可考虑真实部署 (推荐用 deploy-swap.sh --force, 自动处理上述步骤):"
+# v1.16.0 审阅修正 (2026-10-16): 写 dry-run marker。
+#   deploy-swap.sh 的 gate 从"恒 exit 1 的空操作"改成**真校验**: 只有本脚本干净通过 (exit 0,
+#   即上面这条路径 —— exit 1/2 的分支都到不了这里) 才写 marker, 且 marker 够新才放行真实部署。
+#   放在 $TMPDIR 而非仓库 (仓库会进公开快照); 重启机器后 marker 消失 = 需重跑本脚本 (fail-closed)。
+MARKER="${DEPLOY_MARKER:-${TMPDIR:-/tmp}/wpp-deploy-swap.dryrun-ok}"
+if printf '%s\n' "$(date +%s)" > "$MARKER" 2>/dev/null; then
+  echo "  dry-run marker: $MARKER (deploy-swap.sh 5 分钟内免 --force)"
+else
+  echo -e "  ${YELLOW}${WARN}${NC} 无法写 dry-run marker ($MARKER) — deploy-swap.sh 将要求 --force"
+fi
+echo ""
+echo "可考虑真实部署 (deploy-swap.sh 会校验上面那个 marker):"
 echo "  1. 备份当前 prod: cp -a ${OPENCLAW_ROOT}/extensions/wechatpadpro \${BACKUP_ROOT:-/data}/wpp-prod-backup-\$(date +%s)"
-echo "  2. 部署: bash deploy-swap.sh --force"
+echo "  2. 部署: bash deploy-swap.sh          (超时/绕过: --force; 模拟: --dry-run)"
 echo "  3. 验证: journalctl --user -u \${GATEWAY_SERVICE:-openclaw-gateway} -n 50"
 exit 0

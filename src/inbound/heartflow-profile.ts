@@ -613,8 +613,9 @@ export interface HfProfileGenResult {
   generated: number;
   /** 本轮跳过的群数 (样本不足 / 还新 / 超 maxPerRun) */
   skipped: number;
-  /** v1.16.0 本轮补配的图片数 (tasks/ok/fail; 开关关或无图 = 0) */
-  captions?: { tasks: number; ok: number; fail: number };
+  // v1.16.0 审阅修正 (2026-10-16): 这里原有一个 `captions?: {tasks,ok,fail}` 字段, 但**全仓无消费者**
+  //   (唯一调用方 heartflow-learn.ts 丢返回值) ⇒ 死字段, 只会让人误以为"外部能观测配文进度"。
+  //   配文计数已在 caption pass 内自己 info 出声 (见下方); 真需要外部观测时再加, 且必须同时有消费者。
 }
 
 /**
@@ -696,7 +697,6 @@ export async function maybeGenerateHfGroupProfiles(
       warn(`[WPP HF] caption pass failed (画像用旧样本形态继续): ${formatErr(e)}`);
     }
   }
-  out.captions = capOut;
 
   for (const groupId of groups) {
     const prev = byGroup.get(groupId);

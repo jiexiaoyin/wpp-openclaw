@@ -56,18 +56,8 @@ GATEWAY_ENV="${OPENCLAW_ROOT}/gateway.systemd.env"
 TS=$(date +%s)
 BACKUP_DIR="${BACKUP_ROOT}/wpp-deploy-swap-${TS}"
 
-# ============ dry-run gate (要求 deploy.sh 刚跑过) ============
-# 防呆: 强制先跑 deploy.sh, 确认 build/manifest/load 都 PASS
-if [ "$FORCE" != "1" ] && [ "$DRY_RUN" != "1" ]; then
-  echo "⚠️  deploy-swap.sh 是真实部署脚本 (会写 ${OPENCLAW_ROOT}/ + restart gateway)"
-  echo ""
-  echo "要求: 5 分钟内 bash deploy.sh 跑过且 exit 0"
-  echo "跳过此 gate: bash deploy-swap.sh --force"
-  echo "模拟模式: bash deploy-swap.sh --dry-run"
-  exit 1
-fi
-
-# ============ 颜色 ============
+# ============ 颜色 / 辅助函数 ============
+# v1.16.0 审阅修正: 这段原在 gate 之后, 而新 gate 要打 ✓/✗ ⇒ 必须前置
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -76,6 +66,35 @@ NC='\033[0m'
 step() { echo -e "${GREEN}==${NC} $1"; }
 warn() { echo -e "${YELLOW}⚠${NC} $1"; }
 fail() { echo -e "${RED}✗${NC} $1"; exit 1; }
+
+# ============ dry-run gate (要求 deploy.sh 刚跑过) ============
+# v1.16.0 审阅修正 (2026-10-16): 旧版是**假 gate** —— 文字声称"要求 5 分钟内 deploy.sh 跑过且 exit 0",
+#   实现却只有 `[ FORCE != 1 ] && [ DRY_RUN != 1 ] && exit 1`: 不读任何证据, 也没有任何合法路径能过
+#   (文末自己承认"gate 只认 --force, 没有 marker 文件")。后果不是更安全, 而是每次都只能打 --force
+#   ⇒ 防呆名存实亡, 且判据与文档不符 (谎报)。
+#   现在: deploy.sh 干净通过 (exit 0) 时写 marker; 本 gate 校验 marker 存在且够新 ⇒ 判据与文字一致。
+GATE_MAX_AGE="${GATE_MAX_AGE:-300}"                                  # 秒
+MARKER="${DEPLOY_MARKER:-${TMPDIR:-/tmp}/wpp-deploy-swap.dryrun-ok}"  # 路径与 deploy.sh 同源
+
+if [ "$FORCE" != "1" ] && [ "$DRY_RUN" != "1" ]; then
+  if [ ! -f "$MARKER" ]; then
+    echo -e "${RED}✗${NC} dry-run gate: 未找到 marker $MARKER"
+    echo "    先跑: bash deploy.sh                 (PASS 且 0 警告时才写 marker)"
+    echo "    跳过: bash deploy-swap.sh --force"
+    echo "    模拟: bash deploy-swap.sh --dry-run"
+    exit 1
+  fi
+  MARKER_TS="$(cat "$MARKER" 2>/dev/null || echo 0)"
+  case "$MARKER_TS" in '' | *[!0-9]*) MARKER_TS=0 ;; esac
+  MARKER_AGE=$(( $(date +%s) - MARKER_TS ))
+  if [ "$MARKER_AGE" -gt "$GATE_MAX_AGE" ]; then
+    echo -e "${RED}✗${NC} dry-run gate: marker 已过期 (${MARKER_AGE}s > ${GATE_MAX_AGE}s)"
+    echo "    marker: $MARKER"
+    echo "    重跑: bash deploy.sh; 跳过: bash deploy-swap.sh --force"
+    exit 1
+  fi
+  echo -e "${GREEN}✓${NC} dry-run gate: deploy.sh 于 ${MARKER_AGE}s 前干净通过 (marker=$MARKER)"
+fi
 
 # ============ 步骤 1: 备份原 prod (如果存在) ============
 # v1.6.7 (2026-09-26) 修复: 旧版 DRY_RUN 只被最后那句 echo 使用 (第 182 行), 写操作全都不看它
@@ -194,6 +213,9 @@ if [ "$DRY_RUN" = "1" ]; then
 elif systemctl --user list-unit-files 2>/dev/null | grep -q "^${GATEWAY_SERVICE}\."; then
   # 抓重启前 PID, 用于步骤7 验证「进程确实换了」(防 restart 静默失败)
   OLD_GATEWAY_PID="$(systemctl --user show -p MainPID --value "$GATEWAY_SERVICE" 2>/dev/null || echo unknown)"
+  # v1.16.0 审阅修正: 记下重启时刻, 步骤 7 用它 --since 限定范围
+  #   (旧版只看 journal 末尾 N 行 ⇒ 会把**上一次**启动的旧 ERROR/WARN 也数进来)
+  SINCE_TS="$(date -d '2 seconds ago' '+%Y-%m-%d %H:%M:%S')"
   systemctl --user restart "$GATEWAY_SERVICE"
   sleep 5
   systemctl --user is-active "$GATEWAY_SERVICE" > /dev/null || fail "gateway 重启失败 (服务: $GATEWAY_SERVICE)"
@@ -210,19 +232,59 @@ else
 fi
 
 # ============ 步骤 7: verify (journalctl 仅当 systemd user 服务存在时可用) ============
-step "[7/7] verify (plugin registered + 无 error)"
+# v1.16.0 审阅修正 (2026-10-16): 旧版这里有三处假报 ——
+#   1) `sleep 5` 后找 "wppChannelPlugin registered": 实测插件在启动后 **约 6s 才注册** (本次
+#      restart 15:44:40 → 注册 15:44:46)、账号启动再往后 4s ⇒ 5s 固定等待对更慢的机器就是
+#      假阴性, 健康部署也会印 "✗ plugin registered log 未找到" 让人去乱查。改为**轮询到期限**。
+#   2) `grep -iE "error|fail"` 只认**子串** ⇒ 把正文含 error/fail 的 WARN 计成 error
+#      (实例: accounts/ 拷贝窗口的 "config hot-reload failed" WARN ⇒ 假报 3 error)。
+#      实测两套日志的级别都写成独立大写词: 插件 `<ISO>Z ERROR [WPP v*] msg`, 框架 `<ISO> ERROR: msg`
+#      ⇒ 改为只认**级别字段** `ERROR`/`FATAL`, 不看正文。
+#   3) 第 4 行 grep "http server listening" 在本部署**实测 0 命中** (永远打印空行, 却挂着
+#      "PLUGINS=" 的名字)—— 已删, 换成真实存在的账号启动行 (实测 15:44:50)。
+#   另: 范围改用 `--since "$SINCE_TS"` (步骤 6 记录的重启时刻), 不再只看末尾 N 行。
+step "[7/7] verify (plugin registered + 无 ERROR, 自 $SINCE_TS)"
 if [ "$DRY_RUN" = "1" ]; then
   echo "    [dry-run] 跳过 (没有新起的 gateway 可验)"
 elif systemctl --user list-unit-files 2>/dev/null | grep -q "^${GATEWAY_SERVICE}\."; then
+  VERIFY_WAIT="${VERIFY_WAIT:-90}"
+  VERIFY_DEADLINE=$((SECONDS + VERIFY_WAIT))
+  PLUGIN_LOG=""
+  while [ "$SECONDS" -lt "$VERIFY_DEADLINE" ]; do
+    PLUGIN_LOG="$(journalctl --user -u "$GATEWAY_SERVICE" --since "$SINCE_TS" --no-pager 2>/dev/null \
+      | grep -F "wppChannelPlugin registered" | tail -1)"
+    if [ -n "$PLUGIN_LOG" ]; then break; fi
+    sleep 3
+  done
+  if [ -n "$PLUGIN_LOG" ]; then
+    echo "    ✓ plugin registered: ${PLUGIN_LOG##*]: }"
+  else
+    warn "    ✗ ${VERIFY_WAIT}s 内未见 'wppChannelPlugin registered' — 请手动确认插件是否加载"
+  fi
+
+  # 注册之后还有账号启动 (实测晚 ~4s): 再等一小段, 让启动序列走完再一次性取日志,
+  #   否则会对着"还没打印"的窗口报假 ✗ (这正是旧版 sleep 5 的病根, 只是把位置挪到了读日志之前)。
   sleep 5
-  PLUGIN_LOG=$(journalctl --user -u "$GATEWAY_SERVICE" -n 50 --no-pager 2>&1 | grep "wppChannelPlugin registered" | tail -1)
-  [ -n "$PLUGIN_LOG" ] && echo "    ✓ $PLUGIN_LOG" || warn "    ✗ plugin registered log 未找到"
+  JOURN="$(journalctl --user -u "$GATEWAY_SERVICE" --since "$SINCE_TS" --no-pager 2>/dev/null)"
 
-  ERROR_COUNT=$(journalctl --user -u "$GATEWAY_SERVICE" -n 50 --no-pager 2>&1 | grep -iE "wechatpadpro" | grep -iE "error|fail" | wc -l)
-  [ "$ERROR_COUNT" = 0 ] && echo "    ✓ 0 error" || warn "    ✗ $ERROR_COUNT error"
+  LAST_START="$(printf '%s\n' "$JOURN" | grep -F "gateway.startAccount: started" | tail -1)"
+  if [ -n "$LAST_START" ]; then
+    echo "    ✓ account started: ${LAST_START##*]: }"
+  else
+    warn "    ✗ 未见 'gateway.startAccount: started' — 账号可能未启动"
+  fi
 
-  PLUGINS=$(journalctl --user -u "$GATEWAY_SERVICE" -n 30 --no-pager 2>&1 | grep "http server listening" | tail -1)
-  echo "    $PLUGINS"
+  ERR_LINES="$(printf '%s\n' "$JOURN" | grep -E '(^| )(ERROR|FATAL)([: ]|$)' || true)"
+  ERR_COUNT=0
+  if [ -n "$ERR_LINES" ]; then
+    ERR_COUNT="$(printf '%s\n' "$ERR_LINES" | wc -l)"
+  fi
+  if [ "$ERR_COUNT" = 0 ]; then
+    echo "    ✓ 0 ERROR (自 $SINCE_TS 起)"
+  else
+    warn "    ✗ $ERR_COUNT 条 ERROR (自 $SINCE_TS 起), 末 10 条:"
+    printf '%s\n' "$ERR_LINES" | tail -10 | sed 's/^/        /'
+  fi
 else
   warn "非 systemd 环境, 跳过 journalctl verify — 请自行确认插件加载成功"
 fi
@@ -230,7 +292,8 @@ fi
 echo ""
 if [ "$DRY_RUN" = "1" ]; then
   echo -e "${YELLOW}DRY-RUN: 上面是 plan, 未写任何文件 (备份/openclaw.json/env/拷贝/重启 已全跳过)${NC}"
-  echo "  真实 deploy: bash deploy-swap.sh --force  (gate 只认 --force, 没有 marker 文件)"
+  echo "  真实 deploy: bash deploy.sh && bash deploy-swap.sh   (gate 校验 deploy.sh 刚写的 marker)"
+  echo "  绕过 gate: --force   超时阈值: GATE_MAX_AGE=秒    marker 路径: DEPLOY_MARKER=..."
 else
   echo -e "${GREEN}✅ deploy-swap done${NC}"
   echo ""
