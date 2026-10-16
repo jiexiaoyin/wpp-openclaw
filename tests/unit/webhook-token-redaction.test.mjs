@@ -2,7 +2,7 @@
  * tests/unit/webhook-token-redaction.test.mjs — webhook token 日志脱敏 (2026-10-16, v1.16.1)
  *
  * 背景 (为什么值得一份专门的测试):
- *   webhookPathToken (32 hex / 128-bit, config.ts ensureWebhookPathToken 生成) 是 webhook 路径的
+ *   webhookPathToken (config.ts ensureWebhookPathToken: 新生成 32 hex / 128-bit, 已有值原样复用) 是 webhook 路径的
  *   **唯一鉴权** —— 路径匹配对了就进 handler, 没有第二道门。它嵌在 URL 里, 而插件有 12 处日志
  *   天天在打完整 URL / path: index.ts 的 setWebhook OK / failed / periodic / setBusinessWebhook /
  *   startAutoSync / STARTUP banner, webhook-receiver.ts 的 addPath / removePath / listening /
@@ -55,7 +55,12 @@ import { WechatpadproWebhookServer } from "../../dist/webhook-receiver.js";
 import { AccountContext } from "../../dist/accounts/account-context.js";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
-/** 生产里 token 就是 32 hex (randomBytes(16).toString("hex")) */
+/**
+ * 生产 token 的最常见形态 = 32 hex (randomBytes(16).toString("hex"))。
+ * ⚠️ 但**已存在**的值原样复用 (config.ts ensureWebhookPathToken), 老账号可能更短 ——
+ *   本机 default 在用的那把实测是 24 hex / 96-bit。故本文件的断言只依赖"长度 > 4 走 maskSecret
+ *   的 留头4尾2 分支", 不依赖 32 这个数 (短 token 另有专门一条用例覆盖)。
+ */
 const TOKEN = "9f3c1a7e5b2d80463ca1e5f7b9d02468";
 const TOKEN_B = "00112233445566778899aabbccddeeff"; // 第二个账号 (多账号共享 server 用)
 

@@ -18,7 +18,9 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 ### Security
 
 - **webhook 路径 token 原样进日志 (12 处)** ⚠️ **部署后验收又抓出第 13 处** —— 见本段末尾「部署后验收」小节
-  (那条既是本文的一部分, 也是"人工列的扫描范围"这件事的教训)。该 token 是 32 hex / 128 位, 由 `config.ts ensureWebhookPathToken`
+  (那条既是本文的一部分, 也是"人工列的扫描范围"这件事的教训)。该 token 由 `config.ts ensureWebhookPathToken`
+  **新生成**时是 32 hex / 128 位, **已有值原样复用** ⇒ 老账号可能更短 (本机 default 在用的是 24 hex / 96-bit,
+  照样不可暴力, 但"去日志里 grep 32 个 hex"这种找法会一条都搜不到 —— 这一条是验收时量出来的, 顺手更正)
   生成、经 `deriveWebhookPaths` 拼进路径, 且是 webhook 路径上**唯一的**鉴权 (vendor 不发 `X-Signature`,
   HMAC 按 v1.1.10 既定策略关着) ⇒ 任何能看到日志的人都能给 webhook 打真消息。
   泄漏点: `index.ts` 7 处 (setWebhook OK/failed、periodic OK/scheduled、setBusinessWebhook OK、
