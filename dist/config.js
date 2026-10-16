@@ -235,7 +235,16 @@ export async function loadAccountConfig(accountId = DEFAULT_ACCOUNT_ID) {
             log.info(`account=${accountId}: webhookSecret loaded from env ${raw.webhookSecretEnv}`);
         }
         else if (!raw.webhookSecret) {
-            log.warn(`account=${accountId}: webhookSecretEnv=${raw.webhookSecretEnv} but env empty AND webhookSecret empty — HMAC verification OFF`);
+            // v1.16.0 审阅修正 (2026-10-16): 本条原为 WARN, 但"webhookSecretEnv 配了、env 无值"在
+            //   当前部署里是**既定正确状态, 不是漏配** ——
+            //   证据: 网关 env 白名单 (OPENCLAW_SERVICE_MANAGED_ENV_KEYS) 与 .env 都不含该变量 (刻意不注入);
+            //   依据: signature.ts 的既定策略 —— vendor (WeChatPadPro) 推送不带 X-Signature 头,
+            //     secret 一旦为真值, needsSignatureVerification 就返 true ⇒ 入站被 401 **全量拒收**
+            //     (2026-08-25 真实事故: 配了该 env ⇒ 0 入库 ⇒ v1.1.10 老板拍回 permissive)。
+            //   每启动一次就 WARN = 长期狼来了: 真漏配会被这条噪声淹没。降为 info, 并把「为什么 +
+            //   真要开时怎么做」写进句子, 让它自解释。分级改动见 tests/unit/hmac-fix-v1.5.1.test.mjs (无断言依赖本条)。
+            log.info(`account=${accountId}: webhook HMAC 验签 OFF (webhookSecretEnv=${raw.webhookSecretEnv} 在 env 中无值) — ` +
+                `既定行为非漏配: vendor 不发签名, 该 secret 配真值会让入站被全量 401; 确需验签再设此 env 并重启`);
         }
     }
     // webhookPublicUrl env var fallback (跟 tokenKey/authcode 同模式)

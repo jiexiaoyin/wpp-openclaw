@@ -553,7 +553,6 @@ export async function maybeGenerateHfGroupProfiles(accountId, cfg, nowSec) {
             warn(`[WPP HF] caption pass failed (画像用旧样本形态继续): ${formatErr(e)}`);
         }
     }
-    out.captions = capOut;
     for (const groupId of groups) {
         const prev = byGroup.get(groupId);
         if (!isHfProfileStale(prev?.generated_at ?? null, nowSec, P.refreshHours)) {
