@@ -17,15 +17,26 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
 const PLUGIN_NAME = 'wechatpadpro';
 
+// 本文件每个 case 都建一棵假 stateDir (含 dist/ 副本, 体量大) ⇒ 必须登记后统一清理。
+// 2026-10-04 事故: 本文件自 09-26 起只建不删, 三周在 /tmp 累积 3089 个 wpp-capture-* 目录 (~5.9G)。
+const TEMP_DIRS = [];
 function ws() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'wpp-capture-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpp-capture-'));
+  TEMP_DIRS.push(dir);
+  return dir;
 }
+after(() => {
+  for (const dir of TEMP_DIRS) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败不得影响测试结论 */ }
+  }
+  TEMP_DIRS.length = 0;
+});
 
 /** 造一个「插件包」: package.json + openclaw.plugin.json (+ 可选 dist/accounts) */
 function makePluginPkg(dir, { name = PLUGIN_NAME, id = PLUGIN_NAME, version = '1.6.7', dist = false, accounts = false } = {}) {

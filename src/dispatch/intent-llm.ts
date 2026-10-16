@@ -4,10 +4,32 @@
 // 方案: 规则预筛 (纯@/极短不调 LLM) → LLM 判断注入哪些候选 → 失败降级注入全部。
 // 语音当文本: STT 转写文本在 content `\n[转写] <text>`, 当普通文本处理 (老板观点)。
 //
-// LLM 调用: MiniMax anthropic-messages (POST {baseUrl}/v1/messages + x-api-key + anthropic-version)
+// LLM 调用: **端点与格式一律跟 judge 主端点走** (v1.14.1, 见 resolveIntentLlmTarget) ——
+//   有 key 时 openai 格式 (POST {baseUrl}/chat/completions + Authorization: Bearer), 与 heartflow/
+//   affection/jargon 同一条凭证链; 只有显式传 opts.baseUrl/opts.format 才会偏离。
+//
+// ⚠️ v1.14.0 及以前这里**硬编码** `https://api.minimaxi.com/anthropic` 且格式按 host 猜,
+//   而 key 早就是阿里 token-plan 的那把 ⇒ 阿里 token 被 POST 到 api.minimaxi.com 的 x-api-key 头,
+//   必然 401 ⇒ 静默降级回规则。这既是"功能从未生效", 又是**凭据外发给第三方**。
+//   v1.14.1 把端点收口到 judge 的同一个解析器 (resolveJudgeCreds), 两种"换端点只做一半"
+//   不再可能 (与 safe-fetch 白名单共用常量的那条教训同族)。
+//
+// v1.14.2 (2026-10-04): 补上**二级端点兜底** —— 端点收口之后暴露出的下一个洞: 这条链虽然
+//   和 heartflow/affection/jargon 打同一个端点, 却是唯一**没有兜底**的一条 (那三条自 v1.13.0
+//   起主端点一挂就自动换 deepseek 重试)。端点一断, 意图判断只是静默降级回规则 ——
+//   群 @ 回复照发, 只是少了上下文, 无人能察觉。本版起: 主端点任何端点级故障
+//   (网络/非 2xx/空正文) ⇒ 换 JUDGE_FALLBACK_* 那套 (deepseek) 重试一次, 出声 + 计
+//   intent_fallback_total / intent_fallback_ok_total。
 
 import { logObj as log, warn } from "../core/logger.js";
 import { safeFetch } from "../util/safe-fetch.js"; // v1.3.27 P3-safe-fetch: 白名单化防 SSRF
+import {
+  resolveJudgeCreds, // v1.14.1: 端点/格式/凭证唯一来源
+  resolveJudgeFallback, // v1.14.2: 兜底端点 (主端点故障时重试的那一个)
+  describeJudgeFallback,
+  describeJudgeEndpoint,
+} from "../llm-judge.js";
+import { IntentMetrics } from "../monitor/metrics.js"; // v1.14.2: 意图链此前零聚合信号
 import type { MessageRecord } from "../storage/db/types.js";
 
 /** v1.3.0: 群聊触发消息意图 (简单规则预筛 + LLM 判断基础) */
@@ -129,13 +151,42 @@ export interface IntentLlmInput {
 
 export interface IntentLlmOptions {
   apiKey: string;
-  baseUrl?: string; // default https://api.minimaxi.com/anthropic
+  /** v1.14.1: 不传 = 跟 judge 主端点走 (推荐)。显式传则必须同时给 format —— 见 resolveIntentLlmTarget。 */
+  baseUrl?: string;
   model?: string; // default MiniMax-M2.7-highspeed (v1.4.0 12:09 B+ 方案 schema default 链路)
   timeoutMs?: number; // default 5000
   maxTokens?: number; // default 200
-  format?: "openai" | "anthropic"; // v1.6.0: DeepSeek (openai) | MiniMax (anthropic)
+  format?: "openai" | "anthropic"; // v1.6.0: DeepSeek (openai) | MiniMax (anthropic); v1.14.1 起默认跟端点一起取
   /** v1.9.3: bot 显示名 (accounts cfg nickname 注入); 缺失时用中性占位, 不再 hardcode 人设名 */
   botName?: string;
+}
+
+/**
+ * v1.14.1: 解析 intent 该打哪个端点、用什么格式 —— **唯一来源是 judge 凭证链**
+ * (`resolveJudgeCreds()`: 有 JUDGE_API_KEY ⇒ openai + env JUDGE_BASE_URL/默认 deepseek;
+ * 否则 MINIMAX_API_KEY ⇒ anthropic + api.minimaxi.com/anthropic)。
+ *
+ * 为什么必须共用: 端点和 key 是**一对**。分成两处解析就一定会出现"key 换了、端点没换"
+ * (v1.14.0 之前的实况: 阿里 token + MiniMax 端点 ⇒ 401 + 凭据外发)。
+ * 与 llm-judge/safe-fetch 共用 JUDGE_BASE_URL_ENV 常量是同一类结构修复。
+ *
+ * 显式覆盖 (`opts.baseUrl`) 仍支持, 但格式的**兜底方向反过来了**: 只有认得出是
+ * anthropic-messages 的 host (minimaxi / anthropic) 才猜 anthropic, 其余一律 openai。
+ * 旧写法 (`includes("deepseek") ? "openai" : "anthropic"`) 的失败方向最坏 ——
+ * 认不出的 host 会拿到 `x-api-key`, 而 openai 兼容端点是绝大多数。
+ */
+export function resolveIntentLlmTarget(opts?: {
+  baseUrl?: string;
+  format?: "openai" | "anthropic";
+}): { baseUrl: string; format: "openai" | "anthropic" } {
+  const override = (opts?.baseUrl ?? "").trim();
+  if (override) {
+    const baseUrl = override.replace(/\/+$/, "");
+    const looksAnthropic = /minimaxi|anthropic/i.test(baseUrl);
+    return { baseUrl, format: opts?.format ?? (looksAnthropic ? "anthropic" : "openai") };
+  }
+  const creds = resolveJudgeCreds();
+  return { baseUrl: creds.baseUrl, format: creds.format };
 }
 
 /** 解析 LLM 响应文本 → IntentDecision (剥 ```json 围栏 + 校验) */
@@ -159,18 +210,35 @@ export function parseIntentResponse(text: string): IntentDecision | null {
 }
 
 /**
- * 调 MiniMax LLM 判断意图。任何失败 (无 key/超时/HTTP/坏 JSON) → null (调用方降级)。
+ * 调 judge 主端点 (生产 = 阿里云 token-plan MaaS) 判断意图。
+ *
+ * v1.14.2 (2026-10-04): 主端点**端点级故障**时自动换兜底端点重试一次 —— 与 callJudge 的
+ *   v1.13.0 兜底同一套 env (JUDGE_FALLBACK_*)、同一套语义 (只兜端点故障, 不兜"答得不好")。
+ *   ⚠️ 在此之前这里是全仓**唯一**一条"端点挂了没人接"的 judge 系调用: heartflow/affection/
+ *   jargon/enrich 自 v1.13.0 起有二级端点, 而同样打这个端点的意图判断没有 —— 端点一断,
+ *   现场表现只是"群 @ 回复少了点上下文", 日志也只有一行 WARN, 没有任何聚合信号。
+ *
+ * 任何失败 (无 key/超时/HTTP/坏 JSON) → null (调用方降级回规则)。
  */
 export async function decideIntentWithLlm(
   input: IntentLlmInput,
   opts: IntentLlmOptions,
 ): Promise<IntentDecision | null> {
+  IntentMetrics.incCall();
   const apiKey = opts.apiKey;
   if (!apiKey) {
-    warn("[WPP v1.3.1 LLM-INTENT] missing MINIMAX_API_KEY, skip LLM intent (rule fallback)");
+    // v1.14.1: 文案与真实读取顺序对齐 —— 读的是 JUDGE_API_KEY (v1.14.0 前叫 DEEPSEEK_API_KEY),
+    //   MINIMAX_API_KEY 只是兜底。旧文案只提 MINIMAX_API_KEY, 照它去配会配错那把 key
+    //   (而且那把 key 装的是阿里 token-plan, 见文件头)。
+    // v1.14.2: 这条**不触发兜底** (与 callJudge 的"没 key 也兜"不同) —— 它是 v1.14.1 明文
+    //   保留的既定降级路径 (没凭证 ⇒ 直接走规则, 连一次网络都不发), 属**配置缺失**而非端点故障;
+    //   但计一笔 failure, 让"意图链一直裸奔"有聚合信号 (旧版这里是零观测)。
+    warn("[WPP v1.14.1 LLM-INTENT] missing JUDGE_API_KEY (fallback MINIMAX_API_KEY), skip LLM intent (rule fallback)");
+    IntentMetrics.incFailure();
     return null;
   }
-  const baseUrl = (opts.baseUrl ?? "https://api.minimaxi.com/anthropic").replace(/\/$/, "");
+  // v1.14.1: 端点+格式跟 judge 走 (不传 opts.baseUrl 时) —— 见 resolveIntentLlmTarget
+  const { baseUrl, format } = resolveIntentLlmTarget(opts);
   // v1.5.0 P2-fix 20:41 老板拍 A: 4 项 P2 全收口 - 3 处 intent-llm/dispatcher hardcode 消除
   //   v1.4.0 心流消除 hardcode 时漏了这里, 现在补上
   //   链: opts.model (从 accounts cfg 注入) → schema default (openclaw.plugin.json llmIntentModel.default)
@@ -201,78 +269,152 @@ export async function decideIntentWithLlm(
       text: c.text,
     })))}`;
 
-  const body = {
+  // v1.14.2: 兜底重试带的参数 —— 与主端点**只差 model/端点/凭证**, 提示词与 maxTokens/timeout
+  //   一个不少 (否则兜底一路就变成"换个模型问另一件事")。主端点凭证单独放, 见下方两处调用。
+  const callArgs = {
     model,
-    max_tokens: maxTokens,
-    temperature: 0,
-    system: systemPrompt,
-    messages: [{ role: "user", content: userPrompt }],
+    systemPrompt,
+    userPrompt,
+    maxTokens,
+    timeoutMs,
+    candidateCount: input.candidates.length,
   };
+  const primaryCreds = { apiKey, baseUrl, format };
 
   try {
-    const format = opts.format ?? (opts.baseUrl?.includes("deepseek") ? "openai" : "anthropic");
-    if (format === "openai") {
-      const resp = await safeFetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: maxTokens,
-          temperature: 0,
-          thinking: { type: "disabled" },
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!resp.ok) {
-        const err = await resp.text().catch(() => "");
-        warn(`[WPP v1.3.1 LLM-INTENT] HTTP ${resp.status}: ${err.slice(0, 200)}`);
-        return null;
-      }
-      const json = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
-      const text = json.choices?.[0]?.message?.content ?? "";
-      const decision = parseIntentResponse(text);
-      if (!decision) {
-        warn(`[WPP v1.3.1 LLM-INTENT] unparseable response: ${text.slice(0, 100)}`);
-        return null;
-      }
-      log.debug(`[WPP v1.3.1 LLM-INTENT] decision: ${JSON.stringify(decision)} (${input.candidates.length} candidates)`);
-      return decision;
+    return await decideIntentInner({ ...callArgs, ...primaryCreds });
+  } catch (primaryErr) {
+    const fb = resolveJudgeFallback();
+    if (fb.kind !== "on") {
+      // 兜底未配/半配 ⇒ 行为与 v1.14.1 逐字一致 (异常吞成 null, 调用方降级回规则), 只多一行日志
+      warn(
+        `[WPP v1.14.2 LLM-INTENT] 主端点失败 (兜底${fb.kind === "partial" ? "半配未启用" : "未配"}): ${errText(primaryErr)}` +
+          ` | endpoint=${describeJudgeEndpoint(primaryCreds)}`,
+      );
+      IntentMetrics.incFailure();
+      return null;
     }
-    const resp = await safeFetch(`${baseUrl}/v1/messages`, {
+    IntentMetrics.incFallback();
+    // 兜底被用到 = 主端点此刻是坏的, 这是运维必须看见的事 ⇒ WARNING (journald 只采 WARNING+)
+    warn(
+      `[WPP LLM-INTENT] 主端点失败, 转兜底端点重试: ${describeJudgeEndpoint(primaryCreds)} → ${describeJudgeFallback(fb)}`,
+      primaryErr,
+    );
+    try {
+      const decision = await decideIntentInner({
+        ...callArgs,
+        ...fb.creds, // 端点/凭证/格式 (恒 openai, 见 resolveJudgeFallback 的格式说明)
+        model: fb.model, // 模型名与端点是一对, 必须一起换
+      });
+      IntentMetrics.incFallbackOk();
+      return decision;
+    } catch (fallbackErr) {
+      IntentMetrics.incFailure();
+      // 两段都失败: 必须同时点名两个端点 —— 否则现场只看到"意图判断老是不生效", 分不清是 A 死了
+      // 还是兜底 B 也死了 (describeJudgeEndpoint 只出 host/路径, 不含 key)。
+      warn(
+        `[WPP LLM-INTENT] 主端点与兜底端点均失败` +
+          ` | primary(${describeJudgeEndpoint(primaryCreds)}) = ${errText(primaryErr)}` +
+          ` | fallback(${describeJudgeFallback(fb)}) = ${errText(fallbackErr)}`,
+      );
+      return null;
+    }
+  }
+}
+
+/**
+ * v1.14.2: 单次意图判断。**端点级故障抛错** (网络异常 / 非 2xx / 空正文) ⇒ 由调用方决定是否兜底;
+ *   非空但解析不出 JSON ⇒ 返回 null (= 模型质量问题, **不重试** —— 与 judge 层"不兜分数不好"同款)。
+ *
+ * ⚠️ 这里把 v1.14.1 的"HTTP 非 2xx 与空正文都 return null"改成**抛错**, 是本版的关键改动:
+ *   旧写法把"端点故障"与"模型答了句废话"压成同一个 null, 于是端点挂三天也只会看到
+ *   unparseable 的 WARN —— 正是 v1.10.0 那次"指标照涨但功能全停"的同族盲区。
+ */
+async function decideIntentInner(p: {
+  apiKey: string;
+  baseUrl: string;
+  format: "openai" | "anthropic";
+  model: string;
+  systemPrompt: string;
+  userPrompt: string;
+  maxTokens: number;
+  timeoutMs: number;
+  candidateCount: number;
+}): Promise<IntentDecision | null> {
+  const { apiKey, baseUrl, format, model, systemPrompt, userPrompt, maxTokens, timeoutMs, candidateCount } = p;
+  if (format === "openai") {
+    const resp = await safeFetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "x-api-key": apiKey,
+        authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        temperature: 0,
+        thinking: { type: "disabled" },
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      }),
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!resp.ok) {
       const err = await resp.text().catch(() => "");
-      warn(`[WPP v1.3.1 LLM-INTENT] HTTP ${resp.status}: ${err.slice(0, 200)}`);
-      return null;
+      throw new Error(`HTTP ${resp.status}: ${err.slice(0, 200)}`);
     }
-    const json = (await resp.json()) as { content?: Array<{ type?: string; text?: string }> };
-    const text = json.content?.find((b) => b.type === "text")?.text ?? "";
-    const decision = parseIntentResponse(text);
-    if (!decision) {
-      warn(`[WPP v1.3.1 LLM-INTENT] unparseable response: ${text.slice(0, 100)}`);
-      return null;
-    }
-    log.debug(`[WPP v1.3.1 LLM-INTENT] decision: ${JSON.stringify(decision)} (${input.candidates.length} candidates)`);
-    return decision;
-  } catch (e) {
-    warn(`[WPP v1.3.1 LLM-INTENT] failed (fallback): ${e instanceof Error ? e.message : String(e)}`);
+    const json = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    return interpretIntentText(json.choices?.[0]?.message?.content ?? "", candidateCount);
+  }
+  const resp = await safeFetch(`${baseUrl}/v1/messages`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "x-api-key": apiKey,
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      temperature: 0,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!resp.ok) {
+    const err = await resp.text().catch(() => "");
+    throw new Error(`HTTP ${resp.status}: ${err.slice(0, 200)}`);
+  }
+  const json = (await resp.json()) as { content?: Array<{ type?: string; text?: string }> };
+  return interpretIntentText(json.content?.find((b) => b.type === "text")?.text ?? "", candidateCount);
+}
+
+/**
+ * v1.14.2: 响应文本 → IntentDecision。
+ * 空正文 = **端点故障** (抛错 ⇒ 兜底会换另一个模型再问一次): 推理模型的思考与正文共享
+ *   max_tokens, 被思考吃光就返回空正文 (v1.6.1 在 judge 层踩过的同一个坑) —— 旧版把这种情况
+ *   当 "unparseable" 静默吞掉, 于是"模型明明在返 200 却永远判不出意图"没有任何出口。
+ * 非空但坏 JSON = 模型质量问题 ⇒ null (不重试, 换端点也治不好「答非所问」)。
+ */
+function interpretIntentText(text: string, candidateCount: number): IntentDecision | null {
+  if (!text.trim()) {
+    throw new Error("empty content (推理模型 max_tokens 被思考吃光?)");
+  }
+  const decision = parseIntentResponse(text);
+  if (!decision) {
+    warn(`[WPP v1.3.1 LLM-INTENT] unparseable response: ${text.slice(0, 100)}`);
     return null;
   }
+  log.debug(`[WPP v1.3.1 LLM-INTENT] decision: ${JSON.stringify(decision)} (${candidateCount} candidates)`);
+  return decision;
+}
+
+/** v1.14.2: 单行错误文本 (合并报错用; 与 llm-judge 的 errText 同款 —— 不取堆栈, 这条要落成一行) */
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 /** 快速预筛: 纯@/≤4字 → false (不调 LLM) */

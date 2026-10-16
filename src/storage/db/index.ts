@@ -55,6 +55,9 @@ export {
   markHfLedgerVeto,
   listHfBotMsgShare,
   listHfOutboundTexts,
+  upsertHfImageCaption,
+  getHfCaptionsByHashes,
+  listHfImageMsgs,
 } from "./heartflow.js";
 export { upsertAccount, getAccounts, getAccount } from "./accounts.js";
 export {

@@ -4,7 +4,354 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
-## [v1.13.0] judge 二级端点兜底: 保留 DeepSeek 作兜底 (2026-10-03)
+## [Unreleased] v1.16.0 发布当天审阅修正: caption 失败静默 + 存量排空 (2026-10-16)
+
+> 对 v1.16.0 的独立审阅发现 1 处真缺陷 + 1 处可观测缺口 + 1 处被实测证伪的注释估计。
+> **改的是 src/inbound/heartflow-caption.ts / heartflow-profile.ts / openclaw.plugin.json ⇒ 需重新部署。**
+
+### Fixed
+
+- **caption 失败原因被整个吞掉 (真缺陷)**: `captionPendingHfImages` 的任务循环
+  `catch (e)` **从未引用 `e`** —— 配文失败只在库里写一行 `caption=NULL, fail_count+1`,
+  日志里一个字都没有 ("端点不支持 vision / OSS 403 / 超时" 在库里长得一模一样)。
+  同处还使 `npm run lint` 报 `no-unused-vars`, 而 `.github/workflows/ci.yml` 跑的正是
+  `eslint src --max-warnings 0` ⇒ **推上去 CI 必红** (部署流程不 gate lint, 故先前的部署没有拦住)。
+  **修法**: catch 里补 `warn(...formatErr(e))` —— 单图最多 `maxFails` 次, 不担心刷屏。
+- **`openclaw.plugin.json` description 首句版本号写死在 `v1.14.0`** 而 `version` 是 `1.16.0`
+  (plugin 列表里可见)。已改为 `v1.16.0`。
+
+### Changed
+
+- **画像 caption pass 的心跳门槛 `tasks > 0` → `capDone > 0`**, 日志同时报 `groups=已处理/候选`。
+  理由: 原门槛下"机制在跑但本轮没待办"与"机制根本没跑"**都不出声** —— 上线首日表里 0 行时,
+  无法自证是健康空闲还是坏了 (与本仓反复在防的静默盲区同族)。
+  全 fresh 的常态轮次 (`capDone = 0`) 仍不出声 (sweep 每 5 分钟一轮, 出声会刷屏)。
+
+### Docs
+
+- **修正"首轮爬坡期"的估计 (原注释写"一两天", 实测差约 7 倍)**: 全员群画像样本窗
+  (最新 80 条入站) 实测跨 **13.9 天**、含 **44 张图 (55%)**; 配额 6 张/次 × 约 1 次/天 ⇒
+  净排空 = 6 − 到达 3.1 = **2.9 张/天** ⇒ 存量排完要 **~15 天**, 期间样本行照样是 `收到一张图片`。
+  稳态本身没问题 (到达 3.1 < 配额 6); 慢的只有首轮存量 ⇒ 注释里补了排空调用式。
+
+### 运维 (非代码)
+
+- **2026-10-16 一次性排空 5 个白名单群的 caption 存量**: `50 张 / 0 失败`。
+  覆盖验收 (用插件自身 `extractHfImageUrls` + `hfCaptionHash` 核, 非手写 SQL 解析):
+  全员群样本窗 41/41、华为群 1/1、管理群 2/2 全部有配文 (另 2 群窗内无图)。
+  样本行实例: `[图] 零售单详情显示华为Pura 80 Pro 12G+512G釉黑，折后合计5199元。`
+
+### 验收
+
+`npm test` = **734 passed / 0 failed / 2 skipped**; `npm run build` + `npm run lint` 干净;
+生产端点实跑 (阿里 token-plan, `qwen3.8-flash`) 单张 1.8s 读出一张真实零售单截图。
+
+## [v1.16.0] 图片配文 (caption): 群画像样本"看得见图" (2026-10-16)
+
+> 老板 2026-10-16 问: "喂给 LLM 的样本能否加入图片识别后的数据?" —— 能, 且这是全员群画像失真的结构根:
+> 全员群 14 天 44/78 条是图片, 而画像样本只有 `收到一张图片 [图片] URL` 占位 ⇒ 归纳模型永远看不见
+> 晒单图 ⇒ engage 清单缺晒单口径 ⇒ judge 给晒单图 0.635 (对照华为群同形态 0.775, 它样本里有"销售进度
+> 汇报"字样)。本次新增 caption 机制补这只"眼", 由老板拍板"直接优化到位"。
+
+### Added
+
+- `src/inbound/heartflow-caption.ts`: 图片配文模块 —— 画像生成前给近窗图片消息补一句话描述
+  (`listHfImageMsgs` 扫图 → `extractHfImageUrls` 抠 URL → sha1 幂等键 → 未配的送 `callJudge(images=[url])`)。
+  旋钮挂 `heartflow.profile.caption` (enabled/perGroupMax=6/maxFails=2/scanLimit=150/timeoutMs=8000, 缺省开)。
+- 新表 `wpp_hf_image_caption` (PK=url_hash 全局唯一, 同图跨群只配一次; caption NULL + fail_count<上限=可重试,
+  到次数即止损从不删行) —— applyMigrations 体内 DDL + db/schema.sql 双写同步。
+- DB 三层: types.ts 3 方法声明 + 3 行类型 / mysql.ts 实现 / storage/db/heartflow.ts 薄封装 + barrel 导出。
+- `loadSampleLines` 装配升级: 图片行从占位符换成 `[图] <配文>` (顺带清掉吃截断预算的 URL 噪声);
+  无配文退回 `收到一张图片`。
+- 新测试 `tests/unit/heartflow-caption.test.mjs` (13 例): 缺省/鈇制/hash 确定性/任务挑选 (去重·止损·配额)/
+  清洗/样本装配 + 安全边界 (anthropic 端点/disabled 必须**零 DB 触达**) + 源级接线 + 建表双写同步。
+
+### 设计红线
+
+- **增强件不是依赖件**: caption 失败/端点坏 → 样本退回旧形态, 画像生成不受阻塞 (全链吞错 + warn)。
+- anthropic 格式端点直接返回 (images 会被该格式丢弃, 对着空图胡说比不配更坏 —— v1.11.0 images 边界同款)。
+- 只为本轮真会重生成的群配文 (镜像 stale 判定 + maxPerRun 配额, 不白打 LLM); judge 热路径零新增开销。
+- 绊索更新: schema.sql 注释行 32 → 35 (schema-sql-split.test 既定规矩, 仓内先例 v1.9.2 同源)。
+
+### 配套背景 (同日非代码变更, 老板批准)
+
+- 全员群 (44971342037) learned 阈值 0.90→0.60 人工重置 (silence 自锁, DB 即时生效) + 审计留痕 id16。
+- accounts `heartflow.businessContext` 写入 (晒单截图=喜报应祝贺口径; 启动加载, 需 `/restart` 生效)。
+- ⚠️ 本插件部署后需再 `/restart` 一次 (deploy-swap 的 restart 步被本次跳过, 防杀当前会话)。
+
+## [Unreleased] 修复: 两个测试用例把临时目录泄漏到 /tmp (2026-10-04)
+
+> **只改 `tests/` 两个文件, 零 src / 零 manifest / 零配置变更 ⇒ 不需要部署, 不需要重启网关。
+> 版本号保持 v1.15.1。**
+
+### Fixed
+
+- `tests/unit/plugin-capture-paths.test.mjs` 与 `tests/unit/sanitize-rules.test.mjs` 的
+  `mkdtempSync` (前缀 `wpp-capture-` / `wpp-sanitize-`) **只建不删**。两文件每次运行都会各造若干棵
+  临时树 (capture 那棵还含一份 `dist/` 拷贝), 跑完即弃。
+- **实测后果 (2026-10-04 服务器巡检)**: 自 2026-09-26 起累计约 **3089 个 `wpp-capture-*` (5.9G)**
+  + **2461 个 `wpp-sanitize-*` (101M)** 堆在 `/tmp`, 且仍在增长 (~240 目录/天)。
+  已在本次清理中删除, 并按下述方式根治。
+- **修法**: 两文件各加一个模块级 `TEMP_DIRS` 登记表 + `node:test` 的 `after()` 钩子,
+  用例结束时 `rmSync(dir, { recursive: true, force: true })` 统一清理 (单条失败不影响测试结论)。
+- **验收**: `node --test` 跑完两文件后 `/tmp/wpp-capture-*` 与 `/tmp/wpp-sanitize-*` 残留 = **0**;
+  全量 `npm test` = **721 passed / 0 failed / 2 skipped** (两条 `{ skip: true }` 为 v1.5.1 遗留,
+  非本次引入), `npm run lint` 干净。
+
+## [Unreleased] 文档: 明确 Communications→Messages 各字段对 WPP 是否生效 (2026-10-04)
+
+> **纯文档, 零代码 / 零配置变更 ⇒ 不需要部署, 不需要重启网关。版本号保持 v1.15.1。**
+
+### Docs
+
+- 新增 `docs/openclaw-messages-config-scope.md` —— 判定框架顶层 `messages.*` 各字段
+  (即 Control UI Settings → Communications → Messages 页) 对 **本通道** 是否生效, 附消费点
+  file:line 与复现命令。结论:
+  - **生效 4 组**: `messages.visibleReplies` / `messages.groupChat.visibleReplies` (回合核心
+    `resolveSourceReplyDeliveryMode`, 按 `ChatType` 取值)、`messages.queue.{mode,cap,drop,debounceMs}`
+    (`get-reply-fCAtF3T_.mjs: resolveQueueSettings`, 走 `sessionCtx.Provider` ⇒ 支持 `byChannel`)、
+    `messages.responsePrefix` (`delivery.runtime-*` 施加)、`messages.responseUsage` / `usageTemplate`。
+    ⇒ 这几项**今天已在管 WPP**, 无需任何改动。
+  - **空转 5 项**: `groupChat.mentionPatterns` / `groupChat.unmentionedInbound` /
+    `groupChat.historyLimit` / `inbound.debounceMs` / `ackReaction(.Scope)`。共同原因: 消费点全在框架
+    **入站入口层** (`buildChannelInboundEventContext` / `runChannelInboundEvent` / 框架自带通道处理器),
+    而本插件入站只做 `recordInboundSession` 登记, 不把入站交给框架 ⇒ 框架拿不到
+    `InboundEventKind` / `InboundHistory` / `SessionTranscriptContext` / `WasMentioned` (插件 `src/`
+    对这四个符号 0 命中)。
+  - **结构性不可实现**: `ackReaction` —— 微信消息没有 reaction 这个动作, vendor 只有
+    `/Msg/SendEmoji` (`src/send/msg.ts:653`) 是**发一条表情消息**, 不是贴回应。
+- **为何不做"改插件适配 Communications"**: 生效项已生效 (改=重复实现); 空转项本插件都有**更强**的
+  自研等价物 (per-account 提及判定 / 心流自决插话 / `groupContextWindow`+语境过滤 / per-sender
+  debounce), 接入反而变弱; 且 `groupChat.unmentionedInbound: "room_event"` 会**压掉心流的自动回复**,
+  与需求相反。要真让空转项生效只能把入站改走框架入站管线 = 换架构, 代价是接受框架 sessionKey 约定
+  (参见 `src/session-key.ts` 记录的漂移事故) + 双份去重/debounce 把关 + 停机窗口。
+  ⇒ 判定: **负收益, 不做**。真需要的只有框架独有能力 (入站 hooks / bot-pair loop guard /
+  session-init conflict retry), 做法是单点照抄语义自研。
+
+## [v1.15.1] 针对 v1.15.0 带来的 doctor 假报「群白名单为空」: 加抑制钩子 (⚠️ 对 openclaw doctor 无效, 见下) (2026-10-04)
+
+> **起因 (v1.15.0 的副作用)**: v1.15.0 让 `channels.wechatpadpro.groupAllowFrom` / `allowFrom` 在
+> 顶层块里变成**逗号串** (Channel 页单框所必需)。框架自己的通用判据只认数组 ——
+> `empty-allowlist-scan-QxhNaDKI.mjs` 的 `hasAllowFromEntries(list) = Array.isArray(list) && …`
+> ⇒ 那两个值**恒被判成"空"**, 于是每次 `openclaw doctor` 都报
+> `channels.wechatpadpro.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty …`
+> **纯假报**: 真实群白名单在 `accounts/<id>.json` (SSOT), 框架看不到那个文件, 群消息不会掉。
+
+### ⚠️ 实测结论: 本版的钩子**拦不住 `openclaw doctor` 那条告警**, 且无法从插件侧拦住
+
+上线后复测: `openclaw doctor` 仍打印该告警。三条独立证据说明原因 —— **`openclaw doctor` 是独立
+CLI 进程, 它不加载第三方 (extension) channel 插件代码**:
+
+1. 该进程里 `normalizeAnyChannelId("wechatpadpro")` → `null`
+   (`registry-normalize-BnQO61Jh.mjs:8` = 查运行时注册表), 于是 `getDoctorChannelCapabilities`
+   落到 `DEFAULT_DOCTOR_CHANNEL_CAPABILITIES` —— 其 `groupAllowFromFallbackToAllowFrom: true`,
+   与 doctor 实际打印的措辞「**(and allowFrom)** is empty / …or …allowFrom」逐字吻合; 而本契约
+   声明的 `false` **从未生效** ⇒ 证明该进程里 `getChannelPlugin("wechatpadpro")` 是空的。
+2. `openclaw doctor` 输出里**零**条插件自身日志 (本插件 register 必打
+   `plugin.register: wppChannelPlugin registered`; 同进程也没有任何别的扩展插件日志)。
+3. 框架设计如此: doctor 侧走 `read-only-Dwh541LY.mjs` 的 manifest 元数据路径, read-only 插件对象
+   **没有 `doctor` 字段**; `listChannelDoctorEntries` 的 doctor 适配器只可能来自
+   `getLoadedChannelPlugin` / bundled 插件。`doctorCapabilities` 全 dist 只出现在 **bundled catalog**
+   (`official-external-plugin-bundled-catalogs-*.mjs`), docs 0 命中 ⇒ 第三方 extension **没有
+   manifest 级开关**。
+
+⇒ 结论: **本契约 (含 2026-09-27 那批 `dmAllowFromMode` / `groupModel` / `legacyConfigRules` /
+`collectEmptyAllowlistExtraWarnings`) 对 `openclaw doctor` 而言全是空转**; 那条 CLI 假报在插件侧
+无法消除 (只剩"把顶层 `groupPolicy` 从 openclaw.json 删掉"这种改语义的办法 —— 而 `groupPolicy`
+是 16 个 Channel 页核心镜像字段之一, 桥会按账号文件把它写回来, 故不可行)。本版钩子保留的理由:
+**语义正确、零副作用**, 一旦框架改为在 doctor 里加载插件代码即自动生效。
+
+### Fixed
+
+- **`doctor.shouldSkipDefaultEmptyGroupAllowlistWarning`** (v1.15.1 新增): 框架在白名单
+  `channelDoctorFunctionKeys` 里留了这个钩子, 调用点 `channel-doctor-6TyVVqIn.mjs:125`
+  (`entry.doctor.shouldSkip…(ctx) === true`), 位置在「groupPolicy==="allowlist" 且
+  `warnOnEmptyGroupSenderAllowlist`」**之后**、计算群名单是否为空**之前** ⇒ 返回 `true` 即短路掉
+  **该记录**的这条默认警告。
+  - 按记录 `prefix` 反解账号 (`channels.wechatpadpro` = 隐式 default;
+    `channels.wechatpadpro.accounts.<id>` = 具名), 用仓库既有的 **sync** `resolveAccount()` 读
+    `accounts/<id>.json` 的 `groupAllowFrom`, 经**同一个** `coerceStringArrayList` 归一
+    (数组或逗号串两种磁盘形态都算"有名单")。
+  - ⚠️ **只在真值非空时返回 `true`**。真为空 / 文件缺失 / 非法 JSON / 非法 id / 其它 channel
+    → 一律 `false`, 让框架照旧告警 (那时那条警告**有价值**: 群名单真空 ⇒ 群消息确实会被全拒)。
+    绝不做无条件抑制, 也**没有**把 `warnOnEmptyGroupSenderAllowlist` 改成 `false`。
+  - 失败方向安全: 读账号出错时只打一条 warn 并返回 `false` (宁可多报, 不可漏报)。
+
+### Added
+
+- `tests/unit/doctor-empty-group-allowlist-v1151.test.mjs` (9 例): 契约接线 / 数组非空 / 逗号串非空 /
+  空数组 / 空串与纯分隔符 / 文件缺失 / 非法 JSON / 路径穿越 id / 别的 channel / 无 `accounts` 段
+  走 default 分支 (现读现算期望值, 不钉内容)。只碰 scratch 账号, 不读写 `accounts/default.json`。
+
+### Changed
+
+- `tests/unit/channel-list-comma-v1150.test.mjs` V1: 不再钉死 `manifest.version === "1.15.0"`, 改成
+  钉**不变量** —— manifest 与 `package.json` 版本必须一致, 且不得低于 `1.15.0` (回退 = 本改造被回滚)。
+
+> 无 schema / 配置迁移, 无停机窗口要求 (除部署本身那次网关重启)。
+
+## [v1.15.0] Channel 页五个 wxid 列表改成「逗号分隔单框」 (2026-10-04)
+
+> **起因 (老板反馈)**: OpenClaw webui 的 **Channel 配置页**里, `adminUsers` / `allowFrom` /
+> `groupAllowFrom` / `blacklistGroups` / `friendCirclePublishAllowFrom` 这五项是**一个 wxid 一个输入框**
+> (逐行增删), "太复杂了"; 而 manifest 的 `uiHints` 标签从 v1.3.x 起就写着"（逗号分隔）" ——
+> **文字与界面自相矛盾**。老板拍板走"改成逗号单框"(保留在 UI 里可编辑)。
+
+### Changed / 类型是唯一杠杆
+- 这五项的 **channel schema 类型 `array` → `string`** (连同 `items` 子块删除), `description` 改写成
+  "……列表, 逗号分隔 ……", 与 `uiHints` 标签第一次名副其实。
+  为什么只能改类型: 实测框架 `control-ui` 的 `config-form` 只按 schema 类型分派控件 ——
+  `type:"array"` 恒为逐行增删编辑器, `type:"string"` 恒为单行 `<input type=text>`;
+  `uiHints` 只认 `label/help/placeholder/…`, **没有** `widget`/`format`/`csv`/`separator` 这类开关,
+  未知键会被丢掉, 保存时也不做任何逗号↔数组转换。
+- **双形态**: schema/manifest/块侧 = `string` (逗号串); `accounts/<id>.json`(唯一真值) 与**所有运行期
+  消费点** = 仍是 `string[]`。两者由 `channel-ui-bridge` 双向转换, 运行期消费口径零改动。
+
+### Added / 桥与运行期收口
+- `channel-ui-bridge`: 新导出 `COMMA_LIST_FIELDS` + 新编码器 `encodeChannelValue` ——
+  块侧收/发逗号串, 账号文件侧收发 `string[]`; 写回循环改为"编码后比较", 故**幂等仍是零写**
+  (块里 `a,b` 与文件里 `["a","b"]` 判等), 且迁移前遗留的数组块会被**自愈**成逗号串。
+  用**插件代码常量**而不是 manifest 自定义标记键: 自定义键今天活下来只因为 host 恰好原样透传
+  property schema (不受我们控制), 一旦将来某版把它规范化掉, 形态会静默退回 `string`,
+  桥就会往账号文件里写逗号**字符串**, 于是所有 `.includes()` 退化成**子串匹配** ⇒ 静默误授权。
+  风险改为"常量与 manifest 漂移", 用单测锁死。
+- `config.ts`: 新增 `COMMA_LIST_KEYS` + 导出 `coerceStringArrayList(v)` (数组→清洗;
+  字符串→`split(",")`; 其它→`[]`), 在 `loadAccountConfig()` 紧跟 `JSON.parse` 之后对五个键归一 ——
+  **单一收口**: 手改账号文件写逗号串也照样生效, 且字符串**永远**到达不了只认数组的消费点
+  (`dm-policy` / `group-policy` / `triggers` / `friendcircle` / `channel-contract` / `directory`)。
+- **六个 CLI mutator** (`appendAllowFrom` / `appendGroupAllowFrom` / `removeAllowFrom` /
+  `removeGroupAllowFrom` / `updateHeartflowGroups` / `updateBlacklistGroups`) 一律改用
+  `coerceStringArrayList`: 旧写法 `Array.isArray(raw.X) ? raw.X : []` 遇到手写的逗号串会当成空数组,
+  **下一次加人就把原有条目全部静默截断** (丢数据)。
+
+### Fixed / 清空输入框终于能清空列表
+- `normalizeSpecValue` 的 `stringArray` 分支: **空串 = 清空列表** (`[]`), 旧版按 `null` 处理会被跳过 ⇒
+  UI 现在发的是字符串, 清空后**永远清不掉**白名单 (`fail-closed` 白名单尤其危险的反向: 群/私聊白名单
+  清空是**故意**要"什么都不放行", 但黑名单清空则是"什么都放行" —— 两者都不能再卡住)。
+  `null`/数字仍拒绝 (T5 语义保留), 数组形态仍能吃 (兼容旧块)。
+
+### ⚠️ 升级必须走停机窗口 (运维)
+- host 拿**本 manifest 的 channel schema** 校验 `channels.wechatpadpro` (写入时与加载时都校验),
+  类型不匹配 ⇒ 网关启动 **exit 78 / CONFIG**。故**类型变更与线上值迁移必须在同一停机窗口内完成**,
+  磁盘上任何一刻都不能处于"类型对不上"的状态。
+- 迁移脚本: 解析 `openclaw.json` → **只改 `.channels.wechatpadpro` 子树里这五个键** (数组→逗号串,
+  空数组→空串) → 按原缩进写回; 两道闸: ① 用同一序列化器把**未修改的**对象写一遍, 必须与原文件
+  **逐字节相同** (证明只动了那五个值); ② `channels.wecom.dynamicAgents.adminUsers` **同名但不同
+  channel**, 迁移前后 `deepEqual` 必须不变。顺序: 停网关 → 迁移 + 换 manifest → `openclaw config
+  validate` 通过 → 部署重启; **先换 manifest 再迁配置**, 或**漏迁任何一个**(尤其 `blacklistGroups: []`
+  要变成 `""`) 都会在下次启动时 exit 78。
+- 不适用 `openclaw plugins reload` 免重启: 迁移必须发生在"没有进程在读配置"的窗口里。
+  (未来纯 manifest 变更仍可走它。)
+- 框架另一处读 `allowFrom` 的地方 (`resolveChannelDmAllowFrom`) 已核**无害**: 只被 doctor 的
+  警告收集器消费, 不是放行闸; 且线上块里没有 `dmPolicy` 键 ⇒ 迁移后至多影响 doctor 输出。
+
+## [v1.14.2] llmIntent 补上二级端点兜底 (2026-10-04)
+
+> **起因 (老板拍板)**: v1.14.1 把意图判断的端点收口到 judge 之后, 暴露出下一个洞 ——
+> 它**和 heartflow/affection/jargon 打同一个端点, 却是全仓唯一一条没有兜底的**。
+> 那三条自 v1.13.0 起主端点一挂就自动换 deepseek 重试; 意图判断没有: 端点一断,
+> 它只是静默降级回规则 —— 群 @ 回复照发, 只是少了上下文, **没有任何人能察觉**。
+> 老板选"给 llmIntent 接上兜底"。
+
+### Changed / 兜底 (与 v1.13.0 judge 层同 env、同语义)
+- `decideIntentWithLlm` 拆成 **单次调用 (`decideIntentInner`) + 兜底包装**: 主端点**任何端点级故障**
+  (网络异常 / HTTP 非 2xx / **空正文**) ⇒ 换 `JUDGE_FALLBACK_*` 那套 (生产 = `api.deepseek.com` /
+  `deepseek-flash`) 重试**一次**, 模型名与端点一起换 (它俩是一对)。
+- **只兜端点故障, 不兜"答得不好"**: 非空但解析不出 JSON ⇒ 仍是 `null` (不重试)。换端点治不好
+  「答非所问」, 重试只会白烧一次调用并把真问题掩盖掉。与 judge 层"不兜分数不好"逐字同口径。
+- **凭证缺失不触发兜底**: 没 `JUDGE_API_KEY` 仍是 v1.14.1 明文保留的既定降级 (直接走规则,
+  连一次网络都不发), 不会"偷偷拿兜底 key 顶上"。这是与 `callJudge`(没 key 也兜) 的**唯一**口径差异,
+  已写在代码注释里。
+- 出声: 兜底被用到 WARNING (含"从哪个端点换到哪个" + 主端点病因), 两段都失败时合并报错同时点名两个
+  端点; 两者**均不含任何 key** (复用 `describeJudgeEndpoint`/`describeJudgeFallback`)。
+
+### Fixed / 两个被压平的失败形态
+- **HTTP 非 2xx 与空正文** 原先是 `warn` + `return null`, 与"模型答了句废话"**压成同一个 null** ——
+  于是端点挂三天也只会看到一行 `unparseable`, 与 v1.10.0 那次"指标照涨但功能全停"是同族盲区。
+  本版起两者都**抛错** (⇒ 兜底看得见), 且空正文单独给出病因提示 (推理模型 `max_tokens` 被思考吃光,
+  v1.6.1 在 judge 层踩过的同一个坑)。
+
+### Added / 可观测性
+- 新增四个指标 (与 `JudgeMetrics` 逐项对称): `intent_calls_total` / `intent_failures_total` /
+  `intent_fallback_total` / `intent_fallback_ok_total`。
+  为什么**另起一套**而不复用 judge 的: 意图判断不走 `callJudge`, 复用等于"意图链断了但 judge 计数照涨"。
+
+### 未变
+- 兜底三项 env 未配/半配 ⇒ 行为与 v1.14.1 **逐字一致** (只多一行日志); 半配仍不重试。
+- 主端点/模型/端点收口逻辑 (v1.14.1) 一个字没动。
+
+### 测试
+- 新增 `tests/unit/intent-fallback-v1142.test.mjs` (18 例): 基线不变 / 重试形状 (提示词逐字相同) /
+  空正文与非 2xx 必兜 / 坏 JSON 不兜 / 没 key 不兜且零网络 / 两段都失败的合并报错不含 key /
+  出声恰好一条 / 四个计数器 / dist 产物真实接线。
+
+## [v1.14.1] llmIntent 端点收口到 judge 主端点 (2026-10-04)
+
+> **起因 (老板拍板)**: v1.14.0 改名报告里列的"仍挂着"之一 —— 「llmIntent 的端点是否改指阿里」,
+> 老板选**改指阿里端点**。
+> v1.14.0 只把 env 名从 `DEEPSEEK_*` 改成 `JUDGE_*`, **没动端点**, 于是那条链变成:
+> 端点 = `intent-llm.ts` 里**硬编码**的 `https://api.minimaxi.com/anthropic` (anthropic 格式),
+> key = `JUDGE_API_KEY` —— 而它自 v1.12.0 起装的是**阿里云 token-plan** 凭证
+> ⇒ **必 401** ⇒ `warn` 一行 ⇒ 静默降级回规则 (功能从未真正生效),
+> **且那把阿里 token 被真的 POST 到 `api.minimaxi.com` 的 `x-api-key` 头** —— 凭据外发给第三方。
+> 这与 v1.14.0 关掉的那两条路 (阿里 key 打到 `api.deepseek.com`) 是同一个病:
+> **端点与 key 是一对, 分两处解析就一定会配错一处。**
+
+### Changed / 端点与凭证同源
+- 新增 `intent-llm.resolveIntentLlmTarget()`: 端点/格式的**唯一来源**是 `llm-judge.resolveJudgeCreds()`
+  (有 `JUDGE_API_KEY` ⇒ openai + env `JUDGE_BASE_URL`/默认 `api.deepseek.com`;
+  否则 `MINIMAX_API_KEY` ⇒ anthropic + `api.minimaxi.com/anthropic`)。
+  `decideIntentWithLlm` 不再硬编码 MiniMax 端点。
+- `dispatcher.resolveIntentLlmApiKey()` 改为 `resolveJudgeCreds().apiKey` —— key 与端点出自**同一个函数**,
+  "换了 key 忘了换端点"这一档在结构上不再存在。
+- 格式不再按 host **猜** (`opts.baseUrl?.includes("deepseek")` 那行): 不传 `opts.baseUrl` 时格式跟端点一起取;
+  显式传 `opts.baseUrl` 时格式须显式给 (猜错的代价是把 key 发到别人家)。
+- 账号 `llmIntentModel`: `deepseek-flash` → **`qwen3.8-flash`** (与 heartflow / affection / jargon 同模型同端点)。
+- 告警文案 `missing MINIMAX_API_KEY` → `missing JUDGE_API_KEY (fallback MINIMAX_API_KEY)` ——
+  照旧文案去配会配错那把 key (它装的是阿里 token-plan)。
+
+### Added / 测试
+- `tests/unit/intent-endpoint-v1141.test.mjs`: 判据**反向** —— 「设了 `JUDGE_API_KEY` + 阿里端点 ⇒
+  意图链解析出的 baseUrl/format 就是阿里 + openai」「任何情况下 baseUrl 都不是 api.minimaxi.com
+  (除非显式传 override)」; 另有"dist 里不再有 MiniMax 硬编码端点"与"告警文案同步"两条形状判据。
+
+### 行为变化 (部署 + 重启后生效)
+- `llmIntentEnabled=true` 时这条链**会真的产生 LLM 调用**(以前恒 401 降级) ⇒ 群上下文注入真正生效,
+  按需计费。降级路径不变 (任何失败仍 `return null` → 规则降级)。
+
+### Security / 另修
+- `CHANGELOG.md` 里 v1.4.0 段落的**明文 DeepSeek key** 已就地脱敏
+  (sha256[:12] `cf47fa069f73`); **该 key 仍需老板去厂商后台作废** —— 脱敏只治仓, 不治已泄漏的凭据。
+
+## [v1.14.0] judge env 改名: DEEPSEEK_BASE_URL/_API_KEY → JUDGE_BASE_URL/_API_KEY (2026-10-04)
+
+> **起因 (老板拍板)**: 「1 改名处理, 2 阿里的那个不能使用 deepseek*」。
+> 2026-10-04 一天里, 框架日志攒了 **62 条** `Your api key: ****… is invalid` (全在 03:00–08:50 之间),
+> 另有每次阿里端点 `403` 把整条模型链拖成 `All models failed` —— 根因是**同一个名字有三个消费者**:
+> ① 插件 judge 主端点 (设计如此、正确, 它打的就是阿里云 token-plan);
+> ② 框架 `models.providers.deepseek` 的 env 兜底 —— 读到同名 key, 把**阿里 key** POST 到 `api.deepseek.com`;
+> ③ 插件 llmIntent (`resolveMinimaxApiKey`) —— 读到同名 key, 打到硬编码的 MiniMax。
+> 名字指向 deepseek、值却是阿里云套餐凭证 ⇒ 只要还叫这个名字, ② ③ 两条路就永远开着。
+
+### Changed / 改名 (破坏性)
+- `DEEPSEEK_BASE_URL` → **`JUDGE_BASE_URL`**; `DEEPSEEK_API_KEY` → **`JUDGE_API_KEY`**。
+  与既有 `JUDGE_FALLBACK_BASE_URL` / `JUDGE_FALLBACK_API_KEY` / `JUDGE_FALLBACK_MODEL` 对称。
+- **旧名彻底作废, 不留兼容别名**: 全树没有任何一条路读它 (`command grep -rn` 只剩告警名单里那两个字面量)。
+  兼容别名哪怕只留一条, 撞名那条路就原样开着 —— 那正是这次要关掉的东西。
+- `resolveJudgeCreds()` 的参数 `deepseekBaseUrl` → `judgeBaseUrl` (它覆盖的是主端点, 而主端点
+  自 v1.12.0 起已经是阿里云 token-plan)。
+- `dispatcher.resolveMinimaxApiKey()` → `resolveIntentLlmApiKey()`。
+  ⚠️ 只改名, **没改端点**: 这条链的端点仍是 `intent-llm.ts` 里硬编码的 `api.minimaxi.com/anthropic`,
+  拿新名里的阿里 key 打过去必然 401 ⇒ 静默降级成规则 (改端点属另一次改动, 待老板单独拍)。
+- ⚠️ **`.env` 与 dist 都要重启网关才生效**: `.env` 只在网关启动时读一次 (无 watch/reload)。
+  改名本身可以在不重启的情况下安全落地 (运行中的进程 env 与 dist 都是旧的, 自洽)。
+
+### Added / 旧名残留告警
+- 启动时 `lingeringLegacyJudgeVars()` 检查旧名: 谁还设着, 就打一条 WARNING **点名**并告诉运维改成什么
+  (只点名, 不打印值); 白名单值按"没设"处理 —— **绝不拿它当凭证**。
+- 新增 `tests/unit/judge-env-rename-v1140.test.mjs`: 判据一律**反向** —— 「只设旧名 ⇒ 拿不到凭证 /
+  进不了 SSRF 白名单」, 外加"全 dist 代码里旧名只许出现在告警名单那一行"。
+
 
 > **起因**: 老板 2026-10-03 追问「心流策略能否保留 deepseek 作为兜底?」——
 > v1.12.0 切到阿里云端点后, 判分从"DeepSeek 单点"变成"阿里云单点",
@@ -2080,7 +2427,7 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
   - **风险**: 固定 doc.pdf 文件名, 多次文件覆盖丢失
 - **vendor 限制**: /Tools/DownloadFile 公开 API 在 v1 schema 下不可用 (20+ 参数组合全 ret=-2)
 - 备份 `/data/wpp-v1157-file-fallback-20260809-1310/`
-- 老板 12:25 提供 **deepseek API key** `sk-60357bc32d1342fb97e4682802098525` 作为兜底
+- 老板 12:25 提供 **deepseek API key** `sk-<REDACTED-2026-10-04>` 作为兜底
 
 ## [v1.1.56]
 - 2026-08-09 12:50 (V1-SCHEMA-ENRICH — 私聊/群聊图片 AI 重新识别)

@@ -110,6 +110,14 @@ test('T7 写回集 = schema 收敛核心集 (~16; 无明文 secret; 含 friendCi
   for (const adv of ['debounceMs', 'sync', 'commandAllowlist', 'keywordTrigger', 'msgTypeTrigger', 'embedIntentEnabled', 'llmIntentModel', 'llmIntentTimeoutMs', 'apiBaseUrl', 'wsUrl', 'webhookHost', 'webhookPort', 'webhookPathToken', 'autoSetWebhook', 'groupContextWindow', 'heartflow.whitelistGroups', 'heartflow.learning.enabled', 'heartflow.maxRetries', 'heartflow.replyThreshold', 'affection.initialGap', 'tokenKeyEnv', 'authcodeEnv', 'webhookSecretEnv']) {
     assert.ok(!paths.includes(adv), `高级参数 ${adv} 不许回流 UI schema/写回集 (文件/CLI 权威)`);
   }
+  // v1.15.0: 五个 wxid 列表在 manifest 里是 string (为了 Channel 页渲染成逗号单框), 但
+  //   **文件/运行期侧** kind 必须仍是 stringArray —— 见 COMMA_LIST_FIELDS 的注释与
+  //   tests/unit/channel-list-comma-v1150.test.mjs (漂移锁)。
+  for (const k of ['adminUsers', 'allowFrom', 'groupAllowFrom', 'blacklistGroups', 'friendCirclePublishAllowFrom']) {
+    const s = CHANNEL_UI_CORE_FIELDS.find((f) => f.path === k);
+    assert.ok(s, `${k} 必须在写回集`);
+    assert.equal(s.kind, 'stringArray', `${k} 文件侧 kind 必须 stringArray (schema 侧才是 string)`);
+  }
 });
 
 test('T8 mirror (accounts 容器): 外部改文件 → openclaw 块同步; 值等幂等; secret 永不 publish; 块缺失不复活; MIRROR=0 关', async () => {

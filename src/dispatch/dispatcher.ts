@@ -29,6 +29,7 @@ import { getMessages, getMessageByMsgIdOrNewId } from "../storage/db/messages.js
 import { waitForPendingEnrich } from "../inbound/handler.js";
 import { extractReferencedFromReplyContext, extractReferencedFromApp } from "../inbound/parser/quote.js";
 import { classifyGroupIntent, decideIntentWithLlm, needsLlm, normalizeTriggerText, toIntentCandidate } from "./intent-llm.js";
+import { resolveJudgeCreds } from "../llm-judge.js";
 import { isCommandIntent, selectTopNByEmbedding } from "./intent-embed.js";
 import { rememberReply, rememberLastGroupMention } from "./pending-reply.js";
 import { recordRawMessage, resolveHfLearning, HF_LEARNING_DEFAULTS, type HeartflowConfig } from "../inbound/heartflow.js";
@@ -200,8 +201,13 @@ function resolveBotName(msg: WppInboundMessage): string {
     return "机器人";
   }
 }
-function resolveMinimaxApiKey(): string {
-  return process.env.DEEPSEEK_API_KEY ?? process.env.MINIMAX_API_KEY ?? "";
+function resolveIntentLlmApiKey(): string {
+  // v1.14.0: env 名随 judge 主端点一起改名 (DEEPSEEK_API_KEY → JUDGE_API_KEY, 见 llm-judge 文件头)。
+  // v1.14.1: 改为直接问 judge 的凭证解析器 —— 键与端点从此**出自同一个函数**
+  //   (endpoint 由 intent-llm.resolveIntentLlmTarget 取 resolveJudgeCreds().baseUrl)。
+  //   这样"JUDGE_API_KEY 是阿里 token-plan 那把 ⇒ 就该打阿里端点"变成结构性事实,
+  //   不存在"改了 key 忘了改端点"这一档 (v1.14.0 之前的实况: 阿里 token 打到 api.minimaxi.com)。
+  return resolveJudgeCreds().apiKey;
 }
 
 function resolveEmbedIntentEnabled(msg: WppInboundMessage): boolean {
@@ -351,7 +357,7 @@ async function buildGroupContextFromDb(msg: WppInboundMessage): Promise<string |
     if (msgs.length === 0) return null;
 
     //   规则预筛 (已在上方 no-op 拦截) → 命令类走 LLM → 非命令 embedding 快路径 → 降级 LLM → 降级注入全部
-    const llmEnabled = resolveLlmIntentEnabled(msg) && !!resolveMinimaxApiKey();
+    const llmEnabled = resolveLlmIntentEnabled(msg) && !!resolveIntentLlmApiKey();
     const embedEnabled = resolveEmbedIntentEnabled(msg) && !!resolveBailianEmbeddingKey(msg);
     const triggerText = normalizeTriggerText(msg.content);
     if (llmEnabled && needsLlm(msg.content)) {
@@ -364,7 +370,7 @@ async function buildGroupContextFromDb(msg: WppInboundMessage): Promise<string |
         debug(`[WPP v1.3.2 EMBED-INTENT] command intent → LLM: "${triggerText.slice(0, 20)}"`);
         decision = await decideIntentWithLlm(
           { triggerText, candidates: msgs.map(toIntentCandidate) },
-          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
+          { apiKey: resolveIntentLlmApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
         );
       } else if (embedEnabled) {
         // 非命令 → embedding 快路径 (ms 级)
@@ -392,20 +398,20 @@ async function buildGroupContextFromDb(msg: WppInboundMessage): Promise<string |
           debug(`[WPP v1.3.2 EMBED-INTENT] embedding 无相关 → LLM 兜底`);
           decision = await decideIntentWithLlm(
             { triggerText, candidates: msgs.map(toIntentCandidate) },
-            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
+            { apiKey: resolveIntentLlmApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
           );
         }
         if (relevantIds === null) {
           debug(`[WPP v1.3.2 EMBED-INTENT] embedding 失败 → LLM 兜底`);
           decision = await decideIntentWithLlm(
             { triggerText, candidates: msgs.map(toIntentCandidate) },
-            { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
+            { apiKey: resolveIntentLlmApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
           );
         }
       } else {
         decision = await decideIntentWithLlm(
           { triggerText, candidates: msgs.map(toIntentCandidate) },
-          { apiKey: resolveMinimaxApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
+          { apiKey: resolveIntentLlmApiKey(), model: resolveLlmModel(msg), timeoutMs: resolveLlmTimeoutMs(msg), botName: resolveBotName(msg) },
         );
       }
 
