@@ -5,8 +5,12 @@
  *   1) deploy-swap.sh 的 dry-run gate 是空操作 —— 文字声称"要求 5 分钟内 bash deploy.sh 跑过且 exit 0",
  *      实现只有 `[ FORCE != 1 ] && [ DRY_RUN != 1 ] && exit 1`: 不读任何证据, 也没有任何合法路径能过
  *      ⇒ 每次只能打 --force (防呆名存实亡), 且判据与文字不符 (谎报)。
- *   2) verify 的 `sleep 5` 短于插件真实注册耗时 (实测启动后约 6s 才注册, 账号启动再晚 4s)
+ *   2) verify 的 `sleep 5` 赌"启动够快": 实测两次相差极大 —— 一次启动后 6s 注册, 另一次
+ *      **37s+** (注册 16:15:16 → 账号启动 16:15:45, 全量拷贝 733M + 清 jiti 缓存拖慢了启动)
  *      ⇒ **健康部署也印** "✗ plugin registered log 未找到", 把人引去乱查。
+ *      ⚠️ 关键教训 (写在这里防后人重犯): 只把"盲等"换成"轮询首个信号 + 固定兜底**形状没变** ——
+ *      本文件的第一版修正就是那样, 随后一次真实部署立刻自我证伪 (仍报 ✗ 未见账号启动行)。
+ *      正解是轮询到**两个信号都出现**, 不赌任何固定等待。下面那条源级断言钉的就是这个形状。
  *   3) verify 的 `grep -iE "error|fail"` 只认子串 ⇒ 把正文含 error/fail 的 WARN 计成 error
  *      (实例: accounts/ 拷贝窗口期的 "config hot-reload failed" WARN ⇒ 假报 3 error);
  *      且只看 journal 末尾 N 行 ⇒ 会把**上一次**启动的行也数进来。
@@ -114,11 +118,21 @@ test('v1.16.0 源级: gate 必须真读 marker (阈值 + 判据 + 指路)', () =
 
 // ===== 4. 源级: verify 不得盲等 / 不得用子串判 error =====
 
-test('v1.16.0 源级: verify 必须轮询注册行, 不得再盲等 sleep 后一次性读', () => {
+test('v1.16.0 源级: verify 必须轮询到"两个信号都出现", 不得等最早信号 + 固定兜底', () => {
   for (const rel of COPIES) {
     const src = codeOf(rel);
-    assert.match(src, /VERIFY_WAIT/, `${rel}: 必须轮询到期限 (插件实测 ~6s 才注册, 固定 5s 对慢机器就是假阴性)`);
-    assert.doesNotMatch(src, /sleep 5\n\s*PLUGIN_LOG=/, `${rel}: 不得退回"盲等 5s 再一次性读"`);
+    assert.match(src, /VERIFY_WAIT/, `${rel}: 必须轮询到期限`);
+    assert.match(
+      src,
+      /ACCT_LOG/,
+      `${rel}: 必须同时等账号启动行 —— 只等首个注册行会假阴性 (实测两者相隔 29s: 注册 16:15:16 → 账号启动 16:15:45)`,
+    );
+    assert.doesNotMatch(
+      src,
+      /sleep [0-9]+\n\s*JOURN=/,
+      `${rel}: 不得用固定等待兜底 —— 病根是"等最早信号 + 固定兜底"这个形状, 不是秒数大小`,
+    );
+    assert.doesNotMatch(src, /sleep [0-9]+\n\s*PLUGIN_LOG=/, `${rel}: 不得"盲等后一次性读注册行"`);
   }
 });
 

@@ -233,27 +233,41 @@ fi
 
 # ============ 步骤 7: verify (journalctl 仅当 systemd user 服务存在时可用) ============
 # v1.16.0 审阅修正 (2026-10-16): 旧版这里有三处假报 ——
-#   1) `sleep 5` 后找 "wppChannelPlugin registered": 实测插件在启动后 **约 6s 才注册** (本次
-#      restart 15:44:40 → 注册 15:44:46)、账号启动再往后 4s ⇒ 5s 固定等待对更慢的机器就是
-#      假阴性, 健康部署也会印 "✗ plugin registered log 未找到" 让人去乱查。改为**轮询到期限**。
+#   1) `sleep 5` 后找 "wppChannelPlugin registered": 固定等待赌的是"启动够快"。实测两次相差极大 ——
+#      restart 15:44:40 → 注册 15:44:46 (6s); 而 16:14:39 → 注册 16:15:16、**账号启动 16:15:45 (37s+)**
+#      (步骤 4 全量拷贝 733M + 清 jiti 缓存会拖慢启动; 且日志里有三次注册行) ⇒ 5s 必然假阴性。
+#      ⚠️ 本文件的第一版"修正"只把盲等换成"轮询首个注册行 + sleep 5 兜底", **同一次部署立刻自我证伪**
+#      (真部署 16:14:39 那次仍报 ✗ 未见账号启动行) —— 病根不是秒数, 是"等最早信号 + 固定兜底"这个形状。
+#      现在: 轮询到**两个信号都出现**为止 (VERIFY_WAIT, 默认 120s), 不赌任何固定等待。
 #   2) `grep -iE "error|fail"` 只认**子串** ⇒ 把正文含 error/fail 的 WARN 计成 error
 #      (实例: accounts/ 拷贝窗口的 "config hot-reload failed" WARN ⇒ 假报 3 error)。
 #      实测两套日志的级别都写成独立大写词: 插件 `<ISO>Z ERROR [WPP v*] msg`, 框架 `<ISO> ERROR: msg`
 #      ⇒ 改为只认**级别字段** `ERROR`/`FATAL`, 不看正文。
 #   3) 第 4 行 grep "http server listening" 在本部署**实测 0 命中** (永远打印空行, 却挂着
-#      "PLUGINS=" 的名字)—— 已删, 换成真实存在的账号启动行 (实测 15:44:50)。
+#      "PLUGINS=" 的名字)—— 已删, 换成真实存在的账号启动行。
 #   另: 范围改用 `--since "$SINCE_TS"` (步骤 6 记录的重启时刻), 不再只看末尾 N 行。
 step "[7/7] verify (plugin registered + 无 ERROR, 自 $SINCE_TS)"
 if [ "$DRY_RUN" = "1" ]; then
   echo "    [dry-run] 跳过 (没有新起的 gateway 可验)"
 elif systemctl --user list-unit-files 2>/dev/null | grep -q "^${GATEWAY_SERVICE}\."; then
-  VERIFY_WAIT="${VERIFY_WAIT:-90}"
+  # v1.16.0 (2026-10-16, 首跑即自我证伪的一次修正): 只等"注册行出现"再固定兜底 sleep 是**同一个病**。
+  #   实测本部署的一次真实部署 (16:14:39 重启): 注册 16:15:16 → **账号启动 16:15:45** (隔 29s!),
+  #   因为步骤 4 全量拷贝 733M + 清 jiti 缓存会拖慢启动; 且日志里有**三次**注册行 (16:15:16/31/44)。
+  #   ⇒ "首个注册行 + sleep 5" 读日志时账号行还没打印, 于是对健康部署报 ✗ —— 正是旧版 sleep 5 的病。
+  #   正确做法: 轮询到**两个信号都出现**为止 (或到期限), 不再赌任何固定等待。
+  VERIFY_WAIT="${VERIFY_WAIT:-120}"
   VERIFY_DEADLINE=$((SECONDS + VERIFY_WAIT))
   PLUGIN_LOG=""
+  ACCT_LOG=""
   while [ "$SECONDS" -lt "$VERIFY_DEADLINE" ]; do
-    PLUGIN_LOG="$(journalctl --user -u "$GATEWAY_SERVICE" --since "$SINCE_TS" --no-pager 2>/dev/null \
-      | grep -F "wppChannelPlugin registered" | tail -1)"
-    if [ -n "$PLUGIN_LOG" ]; then break; fi
+    JOURN="$(journalctl --user -u "$GATEWAY_SERVICE" --since "$SINCE_TS" --no-pager 2>/dev/null)"
+    if [ -z "$PLUGIN_LOG" ]; then
+      PLUGIN_LOG="$(printf '%s\n' "$JOURN" | grep -F "wppChannelPlugin registered" | tail -1)"
+    fi
+    if [ -z "$ACCT_LOG" ]; then
+      ACCT_LOG="$(printf '%s\n' "$JOURN" | grep -F "gateway.startAccount: started" | tail -1)"
+    fi
+    if [ -n "$PLUGIN_LOG" ] && [ -n "$ACCT_LOG" ]; then break; fi
     sleep 3
   done
   if [ -n "$PLUGIN_LOG" ]; then
@@ -261,17 +275,10 @@ elif systemctl --user list-unit-files 2>/dev/null | grep -q "^${GATEWAY_SERVICE}
   else
     warn "    ✗ ${VERIFY_WAIT}s 内未见 'wppChannelPlugin registered' — 请手动确认插件是否加载"
   fi
-
-  # 注册之后还有账号启动 (实测晚 ~4s): 再等一小段, 让启动序列走完再一次性取日志,
-  #   否则会对着"还没打印"的窗口报假 ✗ (这正是旧版 sleep 5 的病根, 只是把位置挪到了读日志之前)。
-  sleep 5
-  JOURN="$(journalctl --user -u "$GATEWAY_SERVICE" --since "$SINCE_TS" --no-pager 2>/dev/null)"
-
-  LAST_START="$(printf '%s\n' "$JOURN" | grep -F "gateway.startAccount: started" | tail -1)"
-  if [ -n "$LAST_START" ]; then
-    echo "    ✓ account started: ${LAST_START##*]: }"
+  if [ -n "$ACCT_LOG" ]; then
+    echo "    ✓ account started: ${ACCT_LOG##*]: }"
   else
-    warn "    ✗ 未见 'gateway.startAccount: started' — 账号可能未启动"
+    warn "    ✗ ${VERIFY_WAIT}s 内未见 'gateway.startAccount: started' — 账号可能未启动"
   fi
 
   ERR_LINES="$(printf '%s\n' "$JOURN" | grep -E '(^| )(ERROR|FATAL)([: ]|$)' || true)"
