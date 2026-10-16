@@ -6,6 +6,7 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { logObj as log, formatErr } from "./core/logger.js";
+import { maskSecret, redactWebhookPath, redactWebhookPathAny } from "./core/redact.js";
 import { SetWebhookMetrics } from "./monitor/metrics.js";
 import { CHANNEL_ID, PLUGIN_NAME, PLUGIN_VERSION, DEFAULT_BOT_NICKNAME } from "./core/constants.js";
 import { loadGlobalConfigAsync, loadAccountConfigAsync, listAccountIds, isConfigured } from "./config.js";
@@ -96,9 +97,25 @@ export function deriveWebhookPaths(cfg: {
   return { webhookPath, businessPath };
 }
 
-function maskSecret(secret: string): string {
-  if (!secret) return "(empty)";
-  return secret.length <= 4 ? "****" : `${secret.slice(0, 4)}...${secret.slice(-2)}`;
+// v1.16.1: maskSecret / redactWebhookPath 移到 core/redact.ts —— webhook-receiver.ts 也要用同一套
+// (它自己打 addPath/listening 日志, 里面同样带 token)。这里只 import, 不再本地定义。
+
+/**
+ * v1.16.1: 共享 webhook server 的 path 脱敏器 (传给 WechatpadproWebhookServer opts.redactPath)。
+ *
+ * 为什么查 registry 而不是闭包捕获当前账号的 token:
+ *   v1.3.61 起多账号**共用一个 server**, 后启动账号 addPath 注册的 path 带的是它自己的 token。
+ *   闭包捕获首账号 token ⇒ 只能脱敏首账号那条, 第二个账号的 token 照样明文进日志。
+ *   查 registry 全量账号 = 谁启动过谁的 token 就在里面 (自维护, 不用另记账);
+ *   时序也已核对: token 在 startAccountById 里 ensure 后才 addPath, 且 ctx.stop() 是
+ *   **先** removePath 再 registry 删除 context (account-registry.stop) ⇒ 停机那条日志也脱得到。
+ *   AccountContext.config 就是 startAccountById 里那个 cfg 对象本身 (引用, 非拷贝) ⇒ 写入可见。
+ */
+function redactSharedWebhookPaths(p: string): string {
+  return redactWebhookPathAny(
+    p,
+    getDefaultAccountRegistry().list().map((c) => c.config?.webhookPathToken),
+  );
 }
 
 // v1.3.77 AI-UNIFY: 统一 LLM 判断模型配置 (纯函数在 config-ai.ts)
@@ -612,12 +629,19 @@ export async function startAccountById(
     const tk = await ensureWebhookPathToken(accountId);
     if (tk.ok && tk.token) {
       cfg.webhookPathToken = tk.token;
-      log.warn(`[WPP P0-1] account=${accountId} webhookPathToken 未配置, 已自动生成并写回 (token 尾部 ${tk.token.slice(-4)})`);
+      log.warn(`[WPP P0-1] account=${accountId} webhookPathToken 未配置, 已自动生成并写回 (token=${maskSecret(tk.token)})`);
     } else {
       log.warn(`[WPP P0-1] account=${accountId} webhookPathToken 缺失且自动生成失败 (${tk.reason ?? "unknown"}) — webhook 无路径鉴权!`);
     }
   }
   const { webhookPath, businessPath } = deriveWebhookPaths(cfg);
+  // v1.16.1: 日志只打脱敏后的路径。webhookPathToken 是 webhook 路径的唯一鉴权 (拿到 = 能往插件灌
+  //   任意消息), 而下面几条日志天天在打完整 URL ⇒ 明文 token 长期落在 journald/日志文件里。
+  //   authcode 早就是 maskSecret 了, token 之前没有 —— 这里补齐。变量名带 Log 后缀, 让
+  //   "网络请求用真值 / 日志用脱敏值" 在调用点一眼可辨; tests/unit/webhook-token-redaction 有静态门钉住。
+  const webhookPathLog = redactWebhookPath(webhookPath, cfg.webhookPathToken);
+  // 注: businessPath 这里不用再算一份 —— 它只在 syncMessageUrl 里进日志, 下面有 syncMessageUrlLog;
+  //   receiver 自己那几条 (addPath/listening) 由 opts.redactPath 覆盖。
 
   if (!state.webhookServer) {
     // v1.3.61 WEBHOOK-SHARED-PORT: 多账号共享单个 webhook server (单端口 + path 区分, 贴合 vendor 设计)
@@ -628,6 +652,7 @@ export async function startAccountById(
       cfg.webhookPort,
       [], // 初始空 paths, 下方 addPath 逐个注册
       cfg.webhookSecret, // 可选 secret, 配了则启用 signature 验证
+      { redactPath: redactSharedWebhookPaths }, // v1.16.1: 日志脱敏 (server 自己打 addPath/listening 日志)
     );
     if (!sharedWebhookServer) {
       sharedWebhookServer = srv;
@@ -687,6 +712,7 @@ export async function startAccountById(
   // 自动注册 webhook URL 给 vendor (每账号 authcode 不同, 手动 set 易漏; 3 次 backoff 覆盖临时 401/timeout)
   if (cfg.autoSetWebhook && cfg.webhookPublicUrl && cfg.authcode) {
     const url = `${cfg.webhookPublicUrl.replace(/\/$/, "")}${webhookPath}`;
+    const urlLog = redactWebhookPath(url, cfg.webhookPathToken); // 日志专用 (见上方注释); setWebhook 仍用真 url
     const maxAttempts = cfg.setWebhookRetries ?? 3;
     let lastErr: unknown;
     let ok = false;
@@ -695,7 +721,7 @@ export async function startAccountById(
         const result = await state.apiClient.setWebhook(url, cfg.authcode);
         if (result.Code === 0) {
           log.info(
-            `setWebhook OK: account=${accountId} url=${url} authcode=${maskSecret(cfg.authcode)} attempt=${attempt}/${maxAttempts}`,
+            `setWebhook OK: account=${accountId} url=${urlLog} authcode=${maskSecret(cfg.authcode)} attempt=${attempt}/${maxAttempts}`,
           );
           SetWebhookMetrics.incSetWebhookOk();
           state.setVendorAuth(cfg.selfWxid, cfg.authcode); // vendor 鉴权通过 -> 消除 lastError 假告警
@@ -721,7 +747,7 @@ export async function startAccountById(
     }
     if (!ok) {
       log.warn(
-        `setWebhook failed after ${maxAttempts} attempts: account=${accountId} url=${url} lastErr=${formatErr(lastErr)} (plugin continues, vendor 不会 push webhook, 但 /Msg/Sync polling 仍可用)`,
+        `setWebhook failed after ${maxAttempts} attempts: account=${accountId} url=${urlLog} lastErr=${formatErr(lastErr)} (plugin continues, vendor 不会 push webhook, 但 /Msg/Sync polling 仍可用)`,
       );
       SetWebhookMetrics.incSetWebhookFail(); // 最后一次失败也 count
       // 启动失败后的后台周期性重试: 每 5 分钟 (匹配 vendor 心跳间隔), 成功即停
@@ -735,7 +761,7 @@ export async function startAccountById(
             const r = await state.apiClient.setWebhook(url, cfg.authcode);
             if (r.Code === 0) {
               log.info(
-                `periodic setWebhook OK: account=${accountId} url=${url} authcode=${maskSecret(cfg.authcode)} (timer stopped)`,
+                `periodic setWebhook OK: account=${accountId} url=${urlLog} authcode=${maskSecret(cfg.authcode)} (timer stopped)`,
               );
               SetWebhookMetrics.incPeriodicOk();
               state.setVendorAuth(cfg.selfWxid, cfg.authcode); // 周期重试成功同样标记已鉴权
@@ -758,7 +784,7 @@ export async function startAccountById(
       timer.unref();
       state.setRetryTimer(timer);
       log.info(
-        `periodic setWebhook scheduled: account=${accountId} url=${url} interval=${PERIODIC_RETRY_MS / 1000}s`,
+        `periodic setWebhook scheduled: account=${accountId} url=${urlLog} interval=${PERIODIC_RETRY_MS / 1000}s`,
       );
     }
   } else if (cfg.autoSetWebhook && !cfg.webhookPublicUrl) {
@@ -774,11 +800,12 @@ export async function startAccountById(
     // v1.3.63 P1-7: 用派生 businessPath (带 webhookPathToken), 不重新从 cfg 拼 (否则 token 段丢失 →
     //   vendor 注册无 token URL → nginx 403)
     const syncMessageUrl = `${cfg.webhookPublicUrl.replace(/\/$/, "")}${businessPath}`;
+    const syncMessageUrlLog = redactWebhookPath(syncMessageUrl, cfg.webhookPathToken); // 日志专用
     const logoutUrl = `${cfg.webhookPublicUrl.replace(/\/$/, "")}${businessPath}/logout`;
     try {
       const r = await state.apiClient.setBusinessWebhook(syncMessageUrl, logoutUrl);
       if (r.Code === 0) {
-        log.info(`setBusinessWebhook OK: account=${accountId} syncMessageUrl=${syncMessageUrl}`);
+        log.info(`setBusinessWebhook OK: account=${accountId} syncMessageUrl=${syncMessageUrlLog}`);
       } else {
         log.warn(
           `setBusinessWebhook non-zero: account=${accountId} Code=${r.Code} CodeValue=${r.CodeValue ?? "?"}`,
@@ -787,7 +814,7 @@ export async function startAccountById(
       // StartAutoSync 启动轮询
       const s = await state.apiClient.startAutoSync(syncMessageUrl);
       if (s.Code === 0) {
-        log.info(`startAutoSync OK: account=${accountId} vendor 会推完整消息到 ${syncMessageUrl}`);
+        log.info(`startAutoSync OK: account=${accountId} vendor 会推完整消息到 ${syncMessageUrlLog}`);
       } else {
         log.warn(
           `startAutoSync non-zero: account=${accountId} Code=${s.Code} CodeValue=${s.CodeValue ?? "?"}`,
@@ -801,7 +828,7 @@ export async function startAccountById(
   // log 用 cfg.agent (运行时真正用的), 不用入参 agentId (避免 "default 为什么对应 main" 误解)
   log.info(
     `[WPP v${PLUGIN_VERSION} STARTUP] account=${accountId} ` +
-    `webhook=${cfg.webhookHost}:${cfg.webhookPort}${webhookPath} ` +
+    `webhook=${cfg.webhookHost}:${cfg.webhookPort}${webhookPathLog} ` +
     `autoSetWebhook=${cfg.autoSetWebhook !== false} ` +
     `mcpEnabled=${cfg.mcpEnabled !== false} ` +
     `groupContext=${cfg.groupContextEnabled === true ? "ON" : "OFF"} ` +

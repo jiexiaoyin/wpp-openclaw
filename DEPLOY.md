@@ -1,6 +1,6 @@
 # 部署指南 (DEPLOY.md)
 
-WeChatPadPro OpenClaw Plugin v1.9.2 部署到 OpenClaw gateway 的详细指南。
+WeChatPadPro OpenClaw Plugin v1.16.0 部署到 OpenClaw gateway 的详细指南。
 
 > 本插件部署分**两层**, 都要跑通:
 > 1. **服务端 (vendor)** — 微信 Pad 协议服务 (本包 `vendor/` 已含), 提供 HTTP API + WS
@@ -137,6 +137,46 @@ cp -a node_modules "$OPENCLAW_ROOT/extensions/wechatpadpro/"
 
 ---
 
+### 3.5 厂商接口漂移自查 (部署后 / 厂商升版后跑一次)
+
+`npm test` 里有一道**离线**对齐门 `tests/unit/wpp-swagger-alignment.test.mjs`: 它拿仓库快照
+`tests/fixtures/vendor-swagger-endpoints.json` 与源码逐条比对 ——
+「源码调的端点都在快照里」「快照里的端点都被显式登记或显式排除」「内联 body 不缺必填键」
+「内联 body 里不出现线上没声明的字段名」。(最后一条是 2026-10-16 加的: 字段名写错时厂商 Go 是
+**静默忽略**未知字段, 不报错、不生效 —— 必填那一层永远看不见这种病。)
+
+快照只是**某一次**抓下来的线上 swagger, 所以还要单独查「线上有没有变」:
+
+```bash
+node tools/check-swagger-drift.mjs                # 默认取 http://127.0.0.1:28062/swagger.json
+node tools/check-swagger-drift.mjs --url http://<host>:<port>/swagger.json
+```
+
+**退出码 —— 1 和 2 是两件事, 别混:**
+
+| 码 | 含义 | 动作 |
+|---|---|---|
+| `0` | 线上与快照逐条一致 (md5 相同) | 无 |
+| `1` | **有漂移**: 新端点 / 端点下线 / body 字段增删 / **必填项**变化 | 按输出逐条处理 (见下) |
+| `2` | **取不到**线上 swagger (容器没起 / 端口不对 / 超时) | 这是「查不了」, **不是**漂移 —— 先确认 vendor 容器在跑 |
+
+漂移的处理顺序:
+
+```bash
+curl -s http://127.0.0.1:28062/swagger.json -o /tmp/wpp-swagger.json
+node tools/gen-swagger-snapshot.mjs /tmp/wpp-swagger.json          # 重生成快照
+node --test tests/unit/wpp-swagger-alignment.test.mjs              # 对齐门会指出要改哪里
+```
+
+- **新端点** ⇒ 要么在 `src/send/*.ts` 里接上并登记进 `src/send/index.ts` 的 `WPP_VENDOR_ENDPOINTS`,
+  要么写进对齐门里的 `DELIBERATELY_EXCLUDED` (**必须写理由**)。
+- **字段改名 / 字段消失** ⇒ 改**源码字段名**。若对齐门报「未知字段」, 那就是厂商改了名 ——
+  不要往 `KNOWN_EXTRA_KEYS` 里加条目糊过去 (那张表只收"经裁定**保留**且写明理由"的例外, 且会自己报腐烂)。
+- **必填项新增** ⇒ 静态检查只看**键名**不看值, 所以每个受影响的调用点都要人工确认"真发得出这个键且值非空"
+  (反例: `ConfirmPreTransferApi` 的工具曾把 4 个必填发成空串 —— 键名对、值不对, 静态检查看不见)。
+
+---
+
 ## 4. 回滚 (Rollback)
 
 ```bash
@@ -179,7 +219,7 @@ rm -rf "$OPENCLAW_ROOT/extensions/wechatpadpro"
 
 | 组件 | 版本 |
 |---|---|
-| 插件 | v1.9.2 (本发布包) |
+| 插件 | v1.16.0 (本发布包) |
 | 服务端 (vendor) | v8_m4.1.12.29_p8.0.75.53 (本包 `vendor/` 已含) |
 
 > **插件仅适配此版本服务端** — 升级服务端前请先确认插件兼容, 或同步升级插件。

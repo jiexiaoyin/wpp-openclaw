@@ -404,6 +404,8 @@ export const WPP_VENDOR_ENDPOINTS = {
     "/TenPay/ReceivewxhbWithoutEncryption",
     // v1.6.0 SWAGGER-323: 转账预订单 (不扣款, 配合 ConfirmPreTransferApi)
     "/TenPay/CreatePreTransfer",
+    // v1.16.1 (2026-10-16): 线上 324 路径比快照多出的那条 — 收款码到账状态轮询 (配合 GeneratePayQCode)
+    "/TenPay/PayQCodeStatus",
   ],
   favorites: ["/Favor/Del", "/Favor/GetFavInfo", "/Favor/GetFavItem", "/Favor/Sync"],
   label: [

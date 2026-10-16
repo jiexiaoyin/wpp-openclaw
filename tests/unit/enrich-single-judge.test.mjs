@@ -21,11 +21,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { execSync } from 'node:child_process';
 
 const ROOT = '/root/dev/wechatpadpro-openclaw';
 const DEPLOY = '/root/.openclaw/extensions/wechatpadpro';
 const read = (p) => fs.readFileSync(p, 'utf-8');
+
+/**
+ * 递归列出目录下所有文件 (纯 JS)。v1.16.1 用它替掉 `execSync('grep -rln ...')` 找候选文件的做法 ——
+ *   那条链的失败面: 依赖 PATH 上的 grep / 模式与路径被拼进 shell / `|| true` 把失败吞成空列表
+ *   (候选为空 ⇒ 唯一性检查空转 = 假绿)。做成目录遍历后结果确定, 且下面每处都带控制针自证没空转。
+ */
+function walkFiles(dir, filter = () => true, acc = []) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = `${dir}/${e.name}`;
+    if (e.isDirectory()) walkFiles(p, filter, acc);
+    else if (filter(e.name)) acc.push(p);
+  }
+  return acc;
+}
 
 // ⚠️ 本次删除在文件头**注释**里写明了被删符号名 (tryIndependentTrigger 等) 作为「为什么删」的记录。
 //   tsc 默认保留注释 ⇒ 裸 assert.doesNotMatch(raw, /tryIndependentTrigger/) 会命中注释假红。
@@ -89,9 +102,18 @@ test('5. accounts (dev + deploy) 不得再有 independentTrigger 键 (留着=看
 
 // ===== 2. handler 是唯一心流判定 + 台账写入方 =====
 test('6. 全库唯一 persistHfJudged 调用点 = handler.ts (真回复只此一条路)', () => {
-  // 只看 .ts 源 (src/ 下另有历史遗留的编译产物 .js, 不参与运行时, 见文件末尾说明)
-  const hits = execSync(`grep -rln "persistHfJudged\\|persistHfJudgedBelowThreshold" ${ROOT}/src --include=*.ts || true`, { encoding: 'utf-8' })
-    .split('\n').filter(Boolean);
+  // 只看 .ts 源 (v1.16.1 起 src/ 下已无编译残留 .js —— 那 35 个已删, 见 tests/unit/src-artifact-hygiene.test.mjs;
+  //   .ts 过滤保留为双保险, 防将来又落一个 .js 进来被当成"第二调用点")。
+  // v1.16.1: 候选文件不再靠 `execSync('grep -rln ...')` 找 —— 那条链的失败面见 walkFiles 注释;
+  //   且原写法里 `|| true` 会把 grep 失败吞成空列表 ⇒ 整段 for 循环空转, 这个守卫就白设了。
+  const tsFiles = walkFiles(`${ROOT}/src`, (n) => n.endsWith('.ts'));
+  assert.ok(tsFiles.length >= 100, `只遍历到 ${tsFiles.length} 个 .ts —— 遍历失配, 本条会假绿`);
+  // 控制针: handler.ts 里必然出现这个符号 ⇒ 候选表必须非空且含它 (否则下面的唯一性检查是空转)
+  const hits = tsFiles.filter((f) => /persistHfJudged[A-Za-z]*/.test(read(f)));
+  assert.ok(
+    hits.some((f) => f.endsWith('src/inbound/handler.ts')),
+    '候选表里没有 handler.ts —— 扫描失配 (不是"只有 handler.ts 是唯一写入方")',
+  );
   // ⚠️ 判据必须是**真正调用语句** `await persistHfJudgedXxx(...)`, 不能写成 /await persistHf/ ——
   //   反向注入实测: 删掉发送路径的 `await persistHfJudged(hfRecord)` 后, 下面的 below-threshold 调用
   //   仍命中 /await persistHf/ ⇒ 该守卫假绿 (漏掉「sent 行永远不写」这种静默失效)。

@@ -12,10 +12,14 @@
 import { postWppJson, stringifyLargeInts } from "./api/client.js";
 import { logObj as log } from "./core/logger.js";
 import { safeFetchWithCap } from "./util/safe-fetch.js";
-import { makeWppMsg } from "./send/msg.js";
-import { makeWppGroup } from "./send/group.js";
-import { makeWppFriend } from "./send/friend.js";
-import { makeWppWebhook } from "./send/webhook.js";
+// v1.16.1 VALUE-CYCLE: 这里**故意不再静态导入** send/{msg,group,friend,webhook}.js ——
+//   原来那 4 条静态值导入 + send/* → api/client.js → account-state.js → accounts/account-registry.js
+//   → accounts/account-context.js → api-client.js 构成一个 9 模块的值环。ESM 的环本身能跑,
+//   只在"模块求值期读到对方尚未初始化的绑定"时才炸 (TDZ) —— 也就是说炸不炸取决于求值顺序/jiti
+//   缓存状态, 这种脆弱性不该留在发送主链路上。改成动态 import 后环里不再有 send/* (见
+//   tests/unit/module-cycle.test.mjs 的静态门: 发送层必须保持 DAG)。
+//   为什么动态可行: 这 4 个工厂只在 async 方法里用, 返回值当次就用掉 ⇒ 多一个 await 没有行为差别
+//   (模块加载器有缓存, 第二次起是查表); 路径写错的风险由同一条静态门兜 (它 resolve 每个动态 import)。
 import type { WppAccountConfig, WppApiClient, WppApiResponse } from "./types.js";
 
 export { resolveImageToBase64, readLocalMedia } from "./api/resolve-media.js";
@@ -44,16 +48,20 @@ function makeCtx(cfg: WppAccountConfig, accountId: string) {
   };
 }
 
-function makeMsgFor(cfg: WppAccountConfig, accountId: string) {
+async function makeMsgFor(cfg: WppAccountConfig, accountId: string) {
+  const { makeWppMsg } = await import("./send/msg.js");
   return makeWppMsg(makeCtx(cfg, accountId));
 }
-function makeGroupFor(cfg: WppAccountConfig, accountId: string) {
+async function makeGroupFor(cfg: WppAccountConfig, accountId: string) {
+  const { makeWppGroup } = await import("./send/group.js");
   return makeWppGroup(makeCtx(cfg, accountId));
 }
-function makeFriendFor(cfg: WppAccountConfig, accountId: string) {
+async function makeFriendFor(cfg: WppAccountConfig, accountId: string) {
+  const { makeWppFriend } = await import("./send/friend.js");
   return makeWppFriend(makeCtx(cfg, accountId));
 }
-function makeWebhookFor(cfg: WppAccountConfig, accountId: string) {
+async function makeWebhookFor(cfg: WppAccountConfig, accountId: string) {
+  const { makeWppWebhook } = await import("./send/webhook.js");
   return makeWppWebhook(makeCtx(cfg, accountId));
 }
 
@@ -105,17 +113,17 @@ export class WechatpadproApiClient implements WppApiClient {
 
   // ============ Msg (v1.3.19 UNIFY-SEND: 委托 send/msg.ts, persist:false 防双入库) ============
   async sendText(toWxid: string, text: string, ats?: string[]): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg, this.accountId);
+    const api = await makeMsgFor(this.cfg, this.accountId);
     return api.sendTxt(toWxid, text, ats, false);
   }
 
   async sendImage(toWxid: string, imageUrlOrPath: string): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg, this.accountId);
+    const api = await makeMsgFor(this.cfg, this.accountId);
     return api.sendImage(toWxid, imageUrlOrPath, false);
   }
 
   async sendVoice(toWxid: string, voiceUrlOrPath: string, durationMs?: number, formatHint?: "mp3" | "silk"): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg, this.accountId);
+    const api = await makeMsgFor(this.cfg, this.accountId);
     return api.sendVoice(toWxid, voiceUrlOrPath, durationMs, false, formatHint);
   }
 
@@ -125,7 +133,7 @@ export class WechatpadproApiClient implements WppApiClient {
     thumbUrlOrPath?: string,
     playLengthMs?: number,
   ): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg, this.accountId);
+    const api = await makeMsgFor(this.cfg, this.accountId);
     return api.sendVideo(toWxid, videoUrlOrPath, thumbUrlOrPath, playLengthMs, false);
   }
 
@@ -179,29 +187,29 @@ export class WechatpadproApiClient implements WppApiClient {
   }
 
   async revokeMsg(msgId: string, newMsgId: string, toWxid: string, createTime?: number): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg, this.accountId);
+    const api = await makeMsgFor(this.cfg, this.accountId);
     return api.revoke(msgId, newMsgId, toWxid, createTime);
   }
 
   // vendor swagger /Msg/Sync body schema = Msg.SyncParamDoc
   async syncMessage(): Promise<WppApiResponse> {
-    const api = makeMsgFor(this.cfg, this.accountId);
+    const api = await makeMsgFor(this.cfg, this.accountId);
     return api.sync();
   }
 
   // ============ Group (委托 send/group.ts) ============
   async getChatroomInfo(chatroomId: string): Promise<WppApiResponse> {
-    return makeGroupFor(this.cfg, this.accountId).getInfo(chatroomId);
+    return (await makeGroupFor(this.cfg, this.accountId)).getInfo(chatroomId);
   }
 
   // /Group/GetChatRoomMemberList 404 → /Group/GetChatRoomMemberDetail 200
   async getChatroomMemberList(chatroomId: string): Promise<WppApiResponse> {
-    return makeGroupFor(this.cfg, this.accountId).getMemberDetail(chatroomId);
+    return (await makeGroupFor(this.cfg, this.accountId)).getMemberDetail(chatroomId);
   }
 
   // ============ Friend (委托 send/friend.ts) ============
   async getContactList(): Promise<WppApiResponse> {
-    return makeFriendFor(this.cfg, this.accountId).getContractList();
+    return (await makeFriendFor(this.cfg, this.accountId)).getContractList();
   }
 
   // ============ User ============
@@ -214,11 +222,11 @@ export class WechatpadproApiClient implements WppApiClient {
   // ============ Webhook (委托 send/webhook.ts) ============
   async setWebhook(url: string, _authcode: string): Promise<WppApiResponse> {
     // webhook.set 保留 v1.1.17 P0-E enabled:true 修复; authcode 由 ctx 注入 (与调用方传的 cfg.authcode 同值)
-    return makeWebhookFor(this.cfg, this.accountId).set(url);
+    return (await makeWebhookFor(this.cfg, this.accountId)).set(url);
   }
 
   async getWebhook(): Promise<WppApiResponse> {
-    return makeWebhookFor(this.cfg, this.accountId).get();
+    return (await makeWebhookFor(this.cfg, this.accountId)).get();
   }
 
   // setBusinessWebhook 字段不同 (syncMessageUrl/logoutUrl), 保留原实现
@@ -227,11 +235,11 @@ export class WechatpadproApiClient implements WppApiClient {
   }
 
   async startAutoSync(targetUrl: string): Promise<WppApiResponse> {
-    return makeMsgFor(this.cfg, this.accountId).startAutoSync(targetUrl);
+    return (await makeMsgFor(this.cfg, this.accountId)).startAutoSync(targetUrl);
   }
 
   async removeWebhook(): Promise<WppApiResponse> {
-    return makeWebhookFor(this.cfg, this.accountId).remove();
+    return (await makeWebhookFor(this.cfg, this.accountId)).remove();
   }
 }
 
