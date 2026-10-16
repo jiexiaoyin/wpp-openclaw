@@ -4,19 +4,21 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
-## [Unreleased] 六项收口: 工具 body 纠错 / swagger 漂移门 / 日志脱敏 / 值环摘除 / 编译残留 / 文档版本 (2026-10-16)
+## [v1.16.1] 第三批: 六项收口 — 工具 body 纠错 / swagger 漂移门 / 日志脱敏 / 值环摘除 / 编译残留 / 文档版本 (2026-10-16)
 
-> 对 v1.16.0 的又一批独立审阅结果, 六件事一起收。与上面两个 `[Unreleased]` 段一样**尚未发布**。
-> (标题不编号: 上面的 commit `审阅修正(三)` 已被 verify 那次修正占用了编号, 再叫 (三) 会指错地方。)
-> ⚠️ **版本号**仍写 v1.16.0: 本批含 src 改动 (`core/redact.ts` 新增; `index.ts` / `webhook-receiver.ts` /
-> `api-client.ts` / `send/tenpay.ts` / `dispatch/agent-tools/tenpay-meta.ts` 改写) ⇒ 必须重新部署才对线上生效,
-> 而 `deploy-swap.sh` 会顺带 restart gateway (重启要老板点头) ⇒ 升号与部署一并等窗口。
-> src 注释里把本批标为 `v1.16.1` 的几处 (tenpay 那几个) 指的就是这一批 —— 部署窗口里会连同
-> `package.json` / `openclaw.plugin.json` / 五份文档一起升到 v1.16.1。
+> 📦 **v1.16.1 = 本文件下面三段 `[v1.16.1]` 一起发** (v1.16.0 之后的全部修正), 2026-10-16 部署 + 重启网关
+> (老板批准)。三批都含 src 改动 ⇒ 三批都到这一版才对线上生效; 前端 2 批的 `Tests` 段里写的
+> 742 / 734 是各自收口那一刻的实跑值, 本版总账在第三批末尾。
+> ⚠️ 第三批末尾还有一段 `### 部署后验收` (部署当天从生产日志里抓出的第 13 处 token 漏点 + 修 + 门加固),
+> 那段**尚未上线** (要第二次重启), 读本文件时别把它当成"已生效"。
+> 本批 (第三批) 含: `core/redact.ts` 新增; `index.ts` / `webhook-receiver.ts` / `api-client.ts` /
+> `send/tenpay.ts` / `dispatch/agent-tools/tenpay-meta.ts` 改写。src 注释里标 `v1.16.1` 的几处即指本批。
+> (标题不写"审阅修正 (三)": 那个编号已被 commit `审阅修正(三)`(verify 那次) 占用, 同一串两义会指错地方。)
 
 ### Security
 
-- **webhook 路径 token 原样进日志 (12 处)**。该 token 是 32 hex / 128 位, 由 `config.ts ensureWebhookPathToken`
+- **webhook 路径 token 原样进日志 (12 处)** ⚠️ **部署后验收又抓出第 13 处** —— 见本段末尾「部署后验收」小节
+  (那条既是本文的一部分, 也是"人工列的扫描范围"这件事的教训)。该 token 是 32 hex / 128 位, 由 `config.ts ensureWebhookPathToken`
   生成、经 `deriveWebhookPaths` 拼进路径, 且是 webhook 路径上**唯一的**鉴权 (vendor 不发 `X-Signature`,
   HMAC 按 v1.1.10 既定策略关着) ⇒ 任何能看到日志的人都能给 webhook 打真消息。
   泄漏点: `index.ts` 7 处 (setWebhook OK/failed、periodic OK/scheduled、setBusinessWebhook OK、
@@ -99,7 +101,7 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 ### Tests
 
-- 新增 `tests/unit/webhook-token-redaction.test.mjs` (10 例): 纯函数语义 (多次出现 / 无 token 恒等 /
+- 新增 `tests/unit/webhook-token-redaction.test.mjs` (**当时 10 例 → 部署后补到 12 例**, 见「部署后验收」): 纯函数语义 (多次出现 / 无 token 恒等 /
   短串 `****`)、与 `deriveWebhookPaths` 的互通、多账号 `redactWebhookPathAny`、**行为**测试 (真起 receiver、
   抓 console, 断言 addPath/removePath/listening 行里只有 `9f3c...68`、绝无原文), 外加源级守卫
   (两个文件里 `log.*` 不得直接插值该变量、全仓唯一 `maskSecret` 定义、receiver 的 5 处全走注入函数)。
@@ -142,8 +144,44 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
   教训: 删一个被 gitignore 掉的目录之前必须先看清楚内容 —— ignore 掉的目录在 `git status` 里是隐形的,
   删错了连"我删了什么"都要靠记忆。
 
-## [Unreleased] v1.16.0 审阅修正 (二): 部署门与 verify 的假报 + HMAC 自述降噪 (2026-10-16)
+### 部署后验收: 第 13 处 token 漏点 (`account-context.ts`) — 已修, 源码/门已就绪, **待第二次重启上线**
 
+- **怎么发现的**: 上面那条 `Security` 修完、`deploy.sh` PASS 19/FAIL 0/WARN 0、`deploy-swap.sh` 换树重启
+  (PID 2314290 → 2335271) 之后做验收 —— `journalctl --user -u openclaw-gateway --since 17:48:47 | grep "$TK"`
+  命中 **3 次**: 2 次来自**旧进程**关闭时的 `removePath` (旧版本来就漏, 属预期), 1 次来自**新进程**:
+  `[WPP:default] webhook server attached accountId=default port=4398 paths=["/wechatpadpro/035a9e17…/default/webhook", …]`。
+  即: **修好的 12 处都不在新进程里打了, 但还有第 13 处。**
+- **根因 (两层, 第二层才是真教训)**:
+  1. `src/accounts/account-context.ts` 的 `attachWebhookServer` 把 `paths` 数组原样塞进日志 ——
+     该文件不在我首轮人工审计的扫描范围 (当时只扫了 `index.ts` + `webhook-receiver.ts`)。
+  2. 那一行**连插值都不是** (`paths,` 对象简写), 而当时那条静态门只匹配 `${url}` / `${path}` 这类插值
+     ⇒ **即使扫了全库也照样看不见它**。"我知道的那几个文件" + "我想到的那几种写法" = 两道都靠人记得的边界。
+- **修法**: `paths.map((p) => redactWebhookPath(p, this.config.webhookPathToken))` —— 用**本账号自己的**
+  token 脱 (传进来的 paths 就是 `deriveWebhookPaths` 给本账号派生的)。`this.webhookPaths` 里存**原文**
+  (stop() 要拿它 `removePath`, 脱敏值摘不掉路由), 脱敏只作用于日志输出。
+- **门禁同步加固 (否则改了也会再漏一次)**:
+  - `tests/unit/webhook-token-redaction.test.mjs` 从 10 例 → **12 例**:
+    ① 新增**全库层**静态门: 扫 `src/**/*.ts` 里**全部** 272 处 `log.*` + `this.info/warn/error/debug` 调用,
+    抠出完整实参文本 → 剥掉字符串字面量的文字内容 (保留 `${…}` 里的表达式) → 看剩下的**代码**里有没有
+    path/token 类标识符 (`webhookPathToken|webhookPath|webhookPaths|businessPath|syncMessageUrl|logoutUrl|matchPath|paths`),
+    调了 `redact`/`mask` 的不算违规。**这条能认出 `paths,` 简写** (旧那条不能)。附两道反向自检:
+    把生产漏过的那一行喂进去必须报红、把脱敏过的同一写法喂进去必须报绿 (否则门会逼着人删脱敏)。
+    实测全库 272 处调用 / 0 误报 (`config.ts` 文案里的 `webhookPathToken (128-bit)` 因剥了字面量而不命中)。
+    (短别名 `${url}` / `${path}` 那一层**保持**按文件列规则: 这两个名字在别处是媒体 URL / 文件路径, 全库扫必误报 —— 两层各管一类。)
+    ② 新增**行为级**用例: 裸 new `AccountContext` (构造函数只做赋值, 无 I/O) 调 `attachWebhookServer`,
+    抓 console 断言只有 `9f3c...68`、绝无原文、路径骨架保留、且 `webhookPaths` 成员存的是原文。
+  - 反向注入实测 (两层各抓各的, 不能互相替代): 把那行改回 `paths,` ⇒ **全库层红** (行为级仍绿 —— 它跑 dist,
+    没重 build; 顺带发现: 该文件删掉脱敏后 `redactWebhookPath` 那个 import 会变成未使用 ⇒ tsc
+    `noUnusedLocals` 直接编译失败, 这类漏连编译都过不去); 把脱敏的 token 换成 `undefined` (调了但脱不掉 = 假脱敏)
+    ⇒ **全库层绿、行为级红**。
+- **诚实边界**: 本次只修到源码 + 门; **线上仍在漏** (运行中的 v1.16.1 进程每次 startAccount 仍打一行明文),
+  因为它需要**再一次重启**才生效, 而重启要老板点头。旧进程那 2 行明文属历史日志, 只能靠 journald 轮转退出。
+- **全量 (本次实跑)**: **783 passed / 0 failed / 2 skipped** (785 tests; 上一条"781"是本批收口时的数字,
+  新门 2 例后为 783); `tsc --noEmit` 0 错; `eslint src --max-warnings 0` 通过。
+
+## [v1.16.1] 第二批: 部署门与 verify 的假报 + HMAC 自述降噪 (2026-10-16)
+
+> (原 `[Unreleased] v1.16.0 审阅修正 (二)` —— v1.16.1 发布时并入本版。)
 > 同一类病: **看起来在把关, 其实在造假** —— 三条都长期存在, 且都朝"报告好消息"的方向骗人。
 > **deploy.sh / deploy-swap.sh 是 dev 侧脚本 (不进运行期); src/config.ts 的日志级别改动需重新部署才对线上生效。**
 
@@ -193,8 +231,9 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
   不剔的话"解释旧版错在哪"的注释会被当成旧版本身 (首跑即因此红 1 例, 已修)。
 - 全量: **742 passed / 0 failed / 2 skipped**; `tsc` 0 错; `eslint src --max-warnings 0` 通过。
 
-## [Unreleased] v1.16.0 发布当天审阅修正: caption 失败静默 + 存量排空 (2026-10-16)
+## [v1.16.1] 第一批: caption 失败静默 + 存量排空 (2026-10-16)
 
+> (原 `[Unreleased] v1.16.0 发布当天审阅修正` —— v1.16.1 发布时并入本版。)
 > 对 v1.16.0 的独立审阅发现 1 处真缺陷 + 1 处可观测缺口 + 1 处被实测证伪的注释估计。
 > **改的是 src/inbound/heartflow-caption.ts / heartflow-profile.ts / openclaw.plugin.json ⇒ 需重新部署。**
 
