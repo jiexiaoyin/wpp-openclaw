@@ -31,7 +31,7 @@ WeChatPadPro 微信 Pad 协议 → OpenClaw gateway → AI 自动回复。支持
 | 🔐 **安全门禁** | 私聊白名单 (fail-closed) + 群策略 + 凭证 env 隔离 |
 | 📊 **监控** | Prometheus metrics (消息/错误/性能) |
 
-> **200+ AI 工具 · 323 vendor 端点 (含小微 20) · 6 配置助手** — 完整能力见 [功能清单](#功能清单)。
+> **200+ AI 工具 · 324 vendor 端点 (含小微 20) · 6 配置助手** — 完整能力见 [功能清单](#功能清单)。
 
 ---
 
@@ -59,7 +59,7 @@ chmod +x install.sh check-proxy.sh
 
 # 5. 验证服务就绪
 curl http://127.0.0.1:18062          # HTTP API
-curl http://127.0.0.1:18062/swagger/  # 323 个 API 文档
+curl http://127.0.0.1:18062/swagger/  # 324 个 API 文档
 ```
 
 部署详情见 [`vendor/README.md`](./vendor/README.md) (host 网络 + 独立 Redis + 端口)。
@@ -159,7 +159,7 @@ bash deploy-swap.sh --force  # 真实部署
 
 ### 🔧 系统与安全
 - **安全门禁**: 私聊白名单 (fail-closed) + 群策略 (open/allowlist/disabled) + 凭证 env 隔离
-- **323 vendor endpoints**: 覆盖 WeChatPadPro 服务端全部 API
+- **324 vendor endpoints**: 覆盖 WeChatPadPro 服务端全部 API
 - **6 channel config helpers**: OpenClaw UI/诊断集成
 - **Prometheus metrics**: 消息/错误/性能监控
 - **WS 智能退避**: WebSocket 断线自动重连 + 监控告警
@@ -212,7 +212,7 @@ bash deploy-swap.sh --force  # 真实部署
 
 ## 已知风险
 
-**v1.16.0 复核汇总：清单作于 v1.9.2，2026-10-16 逐条复核，三条均仍成立**，按重要度排序：
+**v1.16.1 复核汇总：清单作于 v1.9.2，2026-10-16 逐条复核，三条均仍成立**，按重要度排序：
 
 ### 1. int64 精度风险（vendor 对齐引发的）
 
@@ -244,7 +244,7 @@ systemctl --user list-unit-files | grep openclaw
 ### 3. `decryptWeComSession` / `decryptFinderComment` 的语义
 
 工具名 `decryptFinderComment` 是历史误名（实际能力是企微会话记录解密，与视频号评论无关）。v1.9.2 已**新增正确命名的 `decryptWeComSession`**，旧 `decryptFinderComment` 保留为 deprecation alias 直至 v2.0。
-（2026-10-16 复核：v1.16.0 下该 alias 仍在、代码里计划的移除版本仍是 v2.0 —— 见 `src/dispatch/agent-tools/finder-meta.ts`。工具名对 LLM 是对外标识，改名属破坏性变更，故不随版本顺手改。）
+（2026-10-16 复核：v1.16.1 下该 alias 仍在、代码里计划的移除版本仍是 v2.0 —— 见 `src/dispatch/agent-tools/finder-meta.ts`。工具名对 LLM 是对外标识，改名属破坏性变更，故不随版本顺手改。）
 
 **当前 LLM 选型**：新代码请用 `decryptWeComSession`。旧名仍可用，但描述已明确告知其非视频号能力。
 
