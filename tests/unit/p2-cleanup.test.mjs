@@ -9,10 +9,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { execSync } from 'node:child_process';
 
 const ROOT = '/root/dev/wechatpadpro-openclaw';
 const DEPLOY = '/root/.openclaw/extensions/wechatpadpro';
+
+/**
+ * 递归列出目录下所有文件 (纯 JS)。v1.16.1 用它替掉 `execSync('grep -rl ...')` 找候选文件的做法:
+ *   那条链有三处不受控的失败面 —— ① 依赖 PATH 上存在 grep; ② 模式/路径被拼进 shell 命令 (含空格/
+ *   引号就散架); ③ `|| true` 把"grep 失败/没匹配"一律吞成空列表 ⇒ 候选为空时断言**空转通过**。
+ *   另: 交互 shell 里的 `grep` 是 Claude Code 的一个函数 (带 --ignore-files, 会跳过 gitignore 掉的
+ *   路径), 而 execSync 走 /bin/sh (dash) 用的是真 ugrep —— 同一句命令人和测试跑出的结果可以不同。
+ */
+function walkFiles(dir, filter = () => true, acc = []) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = `${dir}/${e.name}`;
+    if (e.isDirectory()) walkFiles(p, filter, acc);
+    else if (filter(e.name)) acc.push(p);
+  }
+  return acc;
+}
 
 // 去注释 (跨行 /* */ + 行内 //)。tsc 默认保留注释, 故「不许引用符号 X」类断言必须先剥注释,
 // 否则会把**解释为什么删**的注释误判成代码引用 (假红)。字符串里的 // 可能误伤, 粗扫够用。
@@ -69,17 +84,21 @@ test('P2-2.2: dispatcher.ts hardcode 消除 (resolveLlmModel)', () => {
 });
 
 test('P2-2.3: 全局 src/ 代码行 (非注释) 无 hardcode "MiniMax-M2.7-highspeed"', () => {
-  // 用 node 逐文件 read + 用 regex 找 hardcode (避免注释) — 复用文件顶部的 stripComments
-  const files = execSync(`grep -rl "MiniMax-M2.7-highspeed" ${ROOT}/src/ 2>/dev/null || true`, { encoding: 'utf-8' })
-    .split('\n').filter(f => f.trim());
-  const hits = [];
-  for (const f of files) {
-    const src = fs.readFileSync(f, 'utf-8');
-    const cleaned = stripComments(src);
-    if (/["']MiniMax-M2\.7-highspeed["']/.test(cleaned)) {
-      hits.push(f);
-    }
-  }
+  // v1.16.1: 候选文件不再靠 `execSync('grep -rl ...')` 找 (那条链的失败面见 walkFiles 注释),
+  //   改成纯 JS 递归遍历 + 就地读文件, 并加"控制针"自证没空转。
+  const NEEDLE = 'MiniMax-M2.7-highspeed';
+  const all = walkFiles(`${ROOT}/src`);
+  assert.ok(all.length >= 100, `只遍历到 ${all.length} 个文件 —— 遍历失配, 本条会假绿`);
+
+  const rawHits = all.filter((f) => fs.readFileSync(f, 'utf-8').includes(NEEDLE));
+  // 控制针: 这串在注释里本来就有 (解释"为什么必须走 env/配置, 不许 hardcode") ⇒ rawHits 必须非空。
+  //   空 = 扫描器根本没扫到这些文件, 那么下面的"代码行 0 命中"毫无意义 (原 grep 版就是这么假绿的)。
+  assert.ok(
+    rawHits.length >= 1,
+    `扫描器在 src/ 里一次都没看到 ${NEEDLE} —— 这是扫描失配, 不是"没有 hardcode"`,
+  );
+
+  const hits = rawHits.filter((f) => /["']MiniMax-M2\.7-highspeed["']/.test(stripComments(fs.readFileSync(f, 'utf-8'))));
   assert.deepStrictEqual(hits, [], 'src/ 代码行还有 hardcode 残留:\n' + hits.join('\n'));
 });
 

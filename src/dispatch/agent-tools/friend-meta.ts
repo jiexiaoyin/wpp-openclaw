@@ -77,9 +77,14 @@ export const FRIEND_META: ToolMeta = {
   ],
   /** /Friend/PassVerify */
   passFriendVerify: [
-    "通过好友请求 (v1/v2 来自 inbound 事件 payload).",
-    Type.Object({ v1: Type.String(), v2: Type.String() }),
-    (v1: string, v2: string) => getFriendApi().passVerify(v1, v2),
+    "通过好友请求 (v1/v2/scene 都来自 inbound 好友申请事件的 friend_request.accept_body).",
+    Type.Object({
+      v1: Type.String(),
+      v2: Type.String(),
+      // v1.16.1: 线上要求 scene 必填 (旧工具完全没法传, 只能吃默认 1); 事件里带着真值, 有就必须传
+      scene: Type.Optional(Type.Number({ description: "好友申请来源场景 (取事件的 friend_request.accept_body.scene); 省略则用历史默认 1" })),
+    }),
+    (v1: string, v2: string, scene?: number) => getFriendApi().passVerify(v1, v2, scene ?? 1),
   ],
   /** /Friend/SetRemarks */
   setFriendRemarks: [

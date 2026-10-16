@@ -4,6 +4,144 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [Unreleased] 六项收口: 工具 body 纠错 / swagger 漂移门 / 日志脱敏 / 值环摘除 / 编译残留 / 文档版本 (2026-10-16)
+
+> 对 v1.16.0 的又一批独立审阅结果, 六件事一起收。与上面两个 `[Unreleased]` 段一样**尚未发布**。
+> (标题不编号: 上面的 commit `审阅修正(三)` 已被 verify 那次修正占用了编号, 再叫 (三) 会指错地方。)
+> ⚠️ **版本号**仍写 v1.16.0: 本批含 src 改动 (`core/redact.ts` 新增; `index.ts` / `webhook-receiver.ts` /
+> `api-client.ts` / `send/tenpay.ts` / `dispatch/agent-tools/tenpay-meta.ts` 改写) ⇒ 必须重新部署才对线上生效,
+> 而 `deploy-swap.sh` 会顺带 restart gateway (重启要老板点头) ⇒ 升号与部署一并等窗口。
+> src 注释里把本批标为 `v1.16.1` 的几处 (tenpay 那几个) 指的就是这一批 —— 部署窗口里会连同
+> `package.json` / `openclaw.plugin.json` / 五份文档一起升到 v1.16.1。
+
+### Security
+
+- **webhook 路径 token 原样进日志 (12 处)**。该 token 是 32 hex / 128 位, 由 `config.ts ensureWebhookPathToken`
+  生成、经 `deriveWebhookPaths` 拼进路径, 且是 webhook 路径上**唯一的**鉴权 (vendor 不发 `X-Signature`,
+  HMAC 按 v1.1.10 既定策略关着) ⇒ 任何能看到日志的人都能给 webhook 打真消息。
+  泄漏点: `index.ts` 7 处 (setWebhook OK/failed、periodic OK/scheduled、setBusinessWebhook OK、
+  startAutoSync OK、启动横幅 `webhook=`) + `webhook-receiver.ts` 5 处 (addPath / removePath / 验签失败 /
+  验签通过 / listening), 另加 token 尾 1 处 (`token=${maskSecret(...)}`, 与 authcode 同款 mask)。
+  **修法: 按值脱敏 (`s.split(token).join(mask)`), 不按路径结构脱敏** —— 老账号可能**没有** token
+  (`/wechatpadpro/webhook`), 按结构切会把它变成 `/wechatpadpro/webh...ok/`, 恰好在要排查的时候把路径弄坏;
+  按值替换对无 token 的路径是恒等变换。新增 `src/core/redact.ts` 作为全仓唯一实现
+  (`maskSecret` / `redactWebhookPath` / `redactWebhookPathAny`), 有断言钉住"只有一个 `maskSecret` 定义"。
+  **多账号必须全脱**: v1.3.61 起一个 webhook server 服务多账号 (一 server 多 path), 只脱本条账号的 token 时,
+  A 账号日志里会出现 B 账号的 token (注入式验证过)。`index.ts` 传入 `redactPath: redactSharedWebhookPaths`,
+  它遍历 `registry.list()` 的**全部已启动账号**取 token (已核 `AccountContext.config` 与 `startAccountById`
+  的 `cfg` 是同一对象引用)。receiver 保持纯机制、不反向依赖策略: 脱敏函数由构造参数 `opts.redactPath` 注入。
+
+### Fixed
+
+- **两条 agent 工具 (微信支付/红包) 的 body 是发不出去的, 且因 Go 静默忽略未知字段而从不报错** (正在误用中, P1)。
+  以容器 swagger 为准逐个更正 `src/send/tenpay.ts` + `tenpay-meta.ts`:
+  - **`openHongBao` (抢红包) 从未成功过**: 工具层收 `{url, key}` 后把两个参数**都丢掉**, 调
+    `openHongBao(url, "", "", "")` ⇒ 发出去的是 `SendUserName:"" + Xml:""`; 而底层当时发的是
+    `SendId/SendUserName/Wxid/Xml`, 其中 `SendId`/`Wxid` 在线上 model 里**都不存在** (注释引的
+    `TenPay.HongBaoParam` 已不在 swagger 中)。现按线上 `TenPay.HongBaoParamDoc {SendUserName, Xml, contextId}`
+    暴露 `{xml, sendUserName, contextId}` (给 contextId 就只发 contextId —— 厂商标注"推荐使用")。
+  - **`collectMoney` (确认收款) 是空操作**: 旧 body 只有 `{wxid}`, 而线上 `TenPay.CollectmoneyModelDoc`
+    是 `{contextId, invalidTime, toUserName, transFerId, transactionId}` —— **没有 wxid**。也就是说
+    v1.3.19 那次"改为小写 wxid"本身是照着一个不存在的字段改的, 唯一那个键被静默忽略。
+  - **`confirmPreTransfer` (确认支付) 不可能成功**: 线上 `TenPay.ConfirmPreTransferDoc` 四个必填
+    (`bankSerial/bankType/payPassword/reqKey`, 全 string), 而工具层只暴露 wxid/transferId ⇒ 四个必填
+    只能填默认空串。现改为显式 opts, 工具层同步暴露这四个。
+  - **金额类型**: `geMaSkdPayQCode` / `sjSkdPayQCode` / `generatePayQCode` 的金额由 number 改为
+    **两位小数字符串** (`yuan()`, 如 `"10.00"`) —— 线上这几个 model 声明为 string, 厂商 Go 对类型严格
+    (同文件 `/Msg/Revoke` 实测: 传 string 给 int64 直接 `Code=-8 INVALID_ARGUMENT`)。
+  - **死负载清理**: `generatePayQCode` / `getRedPacketList` / `createRedPacket` 去掉线上 model 里没有的 `wxid`
+    (厂商从 AccessToken 取调用方身份)。
+- **`tests/` 里两处 `execSync('grep -rl ...')` 找候选文件的断言** (`p2-cleanup` P2-2.3 /
+  `enrich-single-judge` 第 6 条) 改成纯 JS 递归遍历 + **控制针**。旧写法的 `|| true` 会把"grep 失败/没匹配"
+  一律吞成空列表 ⇒ 候选表为空时后面的唯一性/存在性断言**空转通过** (假绿)。
+
+### Added
+
+- **`tools/check-swagger-drift.mjs` + 回归门**: 线上 vendor swagger ↔ 仓库快照的**属性级** diff
+  (新增/消失的路径、每个端点的字段增删、必填项变化), 退出码三段分明: `0` 无漂移 / `1` 有漂移 /
+  `2` **取不到**(容器没起/端口不对) —— "查不了"与"有漂移"不混为一谈。不塞进 `npm test`: 它要联网,
+  而单测必须离线可复现 (否则"测试红了"分不清是代码错还是容器没起)。离线那部分仍由
+  `tests/unit/wpp-swagger-alignment.test.mjs` 盯; 用法与退出码记在 `DEPLOY.md`。
+  产物: 快照 `tests/fixtures/vendor-swagger-endpoints.json` (323 → **324** paths) + 生成器
+  `tools/gen-swagger-snapshot.mjs` (幂等, 可重生成)。
+- **新端点 `/TenPay/PayQCodeStatus`** (上一条漂移门查出来的那条): 查收款二维码**是否真到账**。
+  配 `generatePayQCode` 用 (拿响应里的 `order_id` 轮询)。厂商判据很硬: 只有 `Data.status==="paid"`
+  **且** `Data.paid===true` 才算到账 (扫码/收到通知/金额相同都不算); 查询暂不可用返回 HTTP 503 +
+  `PAYMENT_STATUS_UNAVAILABLE` 且 `paid=false` ⇒ 应保持原订单状态稍后重试, **不得**判为支付失败。
+
+### Changed
+
+- **摘掉一个 9 模块的值导入环**: `api-client → send/{msg,group,friend,webhook} → api/client → account-state
+  → accounts/account-registry → accounts/account-context → api-client`。ESM 允许环, 但环上绑定若在
+  **模块求值期**被读就是 TDZ ReferenceError; "会不会炸"取决于文件求值顺序与 jiti 缓存状态 ⇒ 属
+  "改天换个写法才炸、而单测很可能仍全绿"的一类。4 个 send 工厂改**动态 import** (它们只在 async 方法里用、
+  返回值当次就用掉 ⇒ 多一个 `await` 无语义差别), 13 个调用点跟着改。**SCC 9 → 5**, `send/*` 与 `dispatch/*`
+  全部退出环。代价是动态 import 的路径写错不再在启动时报错 ⇒ 由新的静态 resolve 兜底 (见 Tests)。
+
+### Removed
+
+- **`src/` 下 35 个 `.js` + 35 个 `.js.map`** (全是 2026-09-05 15:26 的 tsc 产物, 每个都有 `.ts` 双胞胎)。
+  删前复核: 删后重建 `dist/` 与删前**逐字节相同** ⇒ 确实不参与构建; 删后 `src/` = 152 个文件, 全是 `.ts`。
+  它们此前被 4 处配置各自防着 (.gitignore / `sync-github.sh` 的 rsync exclude / eslint ignores /
+  tsconfig include) —— 问题不是"防没防住", 而是"**要 4 处防住才算安全**": 任何**新**的按扩展名扫 `src/` 的工具
+  都会读到过期逻辑, 而它们在 `git status` 里看不见 (被 ignore)。现在"src/ 只有 .ts"是**可断言的不变量**
+  (第 5 道防线, 也是唯一会主动报错的那道)。那 4 处配置保留不动 (防将来又落一个进来)。
+
+### Docs
+
+- **五份文档的「当前版本」从 v1.9.2 刷到 v1.16.0** —— 中间 7 次发版, 没有一条断言看过文档。
+  `README.md` 的「已知风险」清单是**逐条复核后**才改落款的 (三条在 v1.16.0 均仍成立: int64 精度、
+  `deploy-swap.sh` 只识别 systemd user 服务、`decryptFinderComment` alias 仍保留待 v2.0);
+  其中 `decryptFinderComment` 那句是**历史陈述** (改名确实发生在 v1.9.2) ⇒ 只补复核注, 不改版本号 ——
+  把历史改新等于伪造。
+- `DEV.md` 的测试计数 340 (v1.9.x 时代的数字) → **783**, 并写明 2 个 skip 是 `{ skip: true }` 而非 `# SKIP` 注释,
+  且指向新门禁。
+
+### Tests
+
+- 新增 `tests/unit/webhook-token-redaction.test.mjs` (10 例): 纯函数语义 (多次出现 / 无 token 恒等 /
+  短串 `****`)、与 `deriveWebhookPaths` 的互通、多账号 `redactWebhookPathAny`、**行为**测试 (真起 receiver、
+  抓 console, 断言 addPath/removePath/listening 行里只有 `9f3c...68`、绝无原文), 外加源级守卫
+  (两个文件里 `log.*` 不得直接插值该变量、全仓唯一 `maskSecret` 定义、receiver 的 5 处全走注入函数)。
+  ⚠️ 诚实边界: `index.ts` 那 7 处**没有**行为测试 (要真起网关), 只有源级守卫。
+- 新增 `tests/unit/module-cycle.test.mjs` (6 例): 用 TS AST (不用 regex —— 分不清 `import type` /
+  `{type A, B}` / 副作用 / 再导出) 建图 + Tarjan 求 SCC; 断言**分层不变量** (`send/`、`dispatch/` 不得在任何环里)、
+  现存环集合 = 文档记录的那一组、**环边必须是惰性的** (环上绑定只许在函数体内被引用, 顶层引用即红门 ——
+  这是"剩下的环为什么不致命"的证明而非口号)、以及动态 import 的路径必须真实存在 (上面那条代价的兜底)。
+- 新增 `tests/unit/src-artifact-hygiene.test.mjs` (3 例): `src/` 零 `.js`/`.js.map` (带 ≥100 个 `.ts` 反空转);
+  `tests/` 不得 shell 出去 `grep` 找候选 (含正则自检与剥注释); `sync-github.sh` 仍显式排除 `src/*.js` 等
+  (rsync **不读** .gitignore ⇒ 排除项必须在脚本里)。
+- 新增 `tests/unit/docs-version-consistency.test.mjs` (4 例): 文档「当前版本」= `package.json`;
+  CHANGELOG 里最高的 `## [vX.Y.Z]` = `package.json` (升号必须有发布记录兜底 —— 只在 `package.json` 里改号
+  会让"当前版本"这句话失去依据); manifest 的 `version` 与其 `description` **首句**版本号 = `package.json`
+  (首句是 plugin 列表里唯一看得见的版本, v1.16.0 当天就漂过一次); `DEV.md` 的计数**等于**实数
+  `test(` 个数且三个分量自洽 (今天实测两边都是 779 + 新文件, 本仓无循环生成用例 ⇒ 可以要求相等而非"不低于")。
+  本文件**不门 `README.md`**: 它全文没有"当前版本"声明, 唯一带版本号的那句是带日期的历史陈述。
+- 反向注入自证 (每条都先证明"能红"再报绿): ③ 4 处 (重新泄漏 index 日志 / 重新泄漏 receiver addPath /
+  去掉 `redactPath` 注入 / 阉掉 `maskSecret` — 全红); ④ 3 处 (改回静态 import 等 — 全红); ⑤ 4 处
+  (代码里 grep / 注释里 grep / 落一个 `.js` / 删掉 rsync exclude — 各自对应的那条红);
+  两个改写后的 finder 各注入真字符串验过非空转; ⑥ 4 处 (文档回退版本号 / manifest 首句回退 /
+  `package.json` 先升号 / 计数写回 779 — 各自对应的那条红)。
+- 全量: **781 passed / 0 failed / 2 skipped**; `tsc --noEmit` 0 错; `eslint src --max-warnings 0` 通过。
+
+### 自纠 (⚠️ 上一轮我自己的两条结论有误, 在此更正)
+
+- **"35 个 `src/*.js` 会进公开仓"是错的**: `sync-github.sh` 自 2026-09-28 起就有
+  `--exclude='src/*.js' --exclude='src/**/*.js'`, 它们从未进过公开快照。删它们的理由因此**不是**"堵发布泄漏",
+  而是上面 Removed 里那条 (让"src/ 只有 .ts"可断言, 且不再有按扩展名扫 `src/` 的工具读到过期逻辑)。
+- **"`execSync('grep')` 用的是 Claude Code 的 grep 函数 (会跳 .gitignore 路径)"也是错的**: 本机交互 shell 里
+  的 `grep` 确实是包装函数, 但它**没有被 export**, 而 `execSync` 走 `/bin/sh` (dash) 用的是真 ugrep。
+  改写那两处的理由仍然成立, 但是另外三条: 依赖 PATH、模式/路径被拼进 shell、`|| true` 把失败吞成空列表 (假绿)。
+
+### 运维事故 (已完全恢复, 主动披露)
+
+- 做 ⑤ 的 grep 实验时建了 `release/probe/leak.ts`, 收尾时**误把整个 `release/` 删掉** (本想只删探针文件),
+  4 条测试随即因 `release/deploy-swap.sh` 不存在而 ENOENT 红。已用 `bash build-release.sh` 原地重建
+  (152 个 `.js` + 24 条脱敏规则 + 323 文件检查 / 3 处改写, 敏感扫描 0 命中), 全套复绿。
+  影响面: `release/` 是**可重生成的构建产物**, 且 `sync-github.sh` 的 [1/4] 本来就会重建它 ⇒ 无内容损失。
+  教训: 删一个被 gitignore 掉的目录之前必须先看清楚内容 —— ignore 掉的目录在 `git status` 里是隐形的,
+  删错了连"我删了什么"都要靠记忆。
+
 ## [Unreleased] v1.16.0 审阅修正 (二): 部署门与 verify 的假报 + HMAC 自述降噪 (2026-10-16)
 
 > 同一类病: **看起来在把关, 其实在造假** —— 三条都长期存在, 且都朝"报告好消息"的方向骗人。
@@ -18,8 +156,12 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
   (默认 `${TMPDIR:-/tmp}/wpp-deploy-swap.dryrun-ok`; `DEPLOY_MARKER` / `GATE_MAX_AGE` 可覆盖);
   gate 校验 marker 存在且 ≤300s, 不在就明确指路 `bash deploy.sh`。重启机器后 marker 消失 ⇒ 需重跑 (fail-closed)。
 - **verify 的三处假报**: (a) `sleep 5` 后才找 `wppChannelPlugin registered`, 而插件**实测启动后约 6s 才注册**、
-  账号启动再晚约 4s ⇒ 健康部署也会印 `✗ plugin registered log 未找到`, 把人引去乱查。改为**轮询到期限**
-  (`VERIFY_WAIT`, 默认 90s)。(b) `grep -iE "error|fail"` 只认**子串** ⇒ 把正文含 error/fail 的 WARN 计成 error
+  账号启动再晚约 4s ⇒ 健康部署也会印 `✗ plugin registered log 未找到`, 把人引去乱查。
+  ⚠️ **本条的第一版修正 (只把盲等换成"轮询首个注册行 + `sleep 5` 兜底") 在同一次真实部署里自我证伪** ——
+  病根不是秒数而是"等最早信号 + 固定兜底"这个形状: 实测同一台机两次相差一个数量级
+  (15:44:40 重启 → 6s 注册完; 16:14:39 重启 → 注册 16:15:16、**账号启动 16:15:45 (37s+)**, 因为该次部署
+  全量拷贝 733M + 清了 jiti 缓存), 且日志里有**三次**注册行。**现版**: 轮询到**两个信号都出现**为止
+  (`VERIFY_WAIT`, 默认 120s), 命中即退, 不赌任何固定等待; 只读一次日志, 两个判据共用同一份输出。(b) `grep -iE "error|fail"` 只认**子串** ⇒ 把正文含 error/fail 的 WARN 计成 error
   (实例: accounts/ 拷贝窗口期的 `config hot-reload failed` WARN ⇒ 假报 3 error)。实测插件与框架的级别字段
   都是独立大写词 (`<ISO>Z ERROR [WPP …]` / `<ISO> ERROR: …`) ⇒ 改为只认**级别字段** `ERROR`/`FATAL` 并打印命中行。
   (c) 第 4 行 `grep "http server listening"` 在本部署**实测 0 命中** (永远打印空行, 却挂着 `PLUGINS=` 的名字)

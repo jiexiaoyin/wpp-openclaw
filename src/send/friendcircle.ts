@@ -67,7 +67,13 @@ export function makeWppFriendCircle(ctx: WppAccountCtx) {
     getList: (firstPageMd5 = "", maxid = "") =>
       dispatch("/FriendCircle/GetList", { fristpagemd5: firstPageMd5, maxid }),
 
-    /** /FriendCircle/Messages — 发布朋友圈 (SnsPostItemDoc) */
+    /** /FriendCircle/Messages — 发布朋友圈 (SnsPostItemDoc)
+     *  ⚠️ v1.16.1 属性级 diff 的发现: body 里的 `totalSize: 0` **线上没有这个字段** (声明的是
+     *  title/private/blackList/withUserList/images/video/link/location...), 疑似更早一版 model 的遗留。
+     *  本次**不动**: 发朋友圈默认被 assertFriendCirclePublishAllowed 禁用 (删它收益为零), 而"未声明"
+     *  不等于"厂商一定忽略" ⇒ 启用开关前先做一次真机发布验证再决定去留。已登记进
+     *  tests/unit/wpp-swagger-alignment.test.mjs 的 KNOWN_EXTRA_KEYS。
+     */
     publish: (
       title: string,
       _content: string,
@@ -105,6 +111,12 @@ export function makeWppFriendCircle(ctx: WppAccountCtx) {
      * /FriendCircle/Upload — 上传朋友圈媒体 (发朋友圈用).
      * v1.3.23 FIX: swagger summary 误写"下载CDN视频", 实测是上传 (报错"朋友圈图片上传失败" + StartPos/TotalLen 分片).
      * 参数: key=媒体标识, base64=媒体内容.
+     * ⚠️ v1.16.1 (2026-10-16) 属性级 diff 的发现: 线上 `FriendCircle.SnsUploadParamDoc` **只声明 base64**
+     *   (required: base64), 发的 `key` 是线上 model 里没有的键。与 tenpay 那几条不同, 这里**不改**:
+     *   ① 上传链路是在跑的, 而"线上 model 未声明"≠"厂商一定忽略"(厂商可能读的是别的结构体);
+     *   ② 删掉它的收益是"少一个死键", 代价是可能弄坏正在用的朋友圈发图 —— 不值得赌。
+     *   ⇒ 已登记进 tests/unit/wpp-swagger-alignment.test.mjs 的 KNOWN_EXTRA_KEYS (带本理由);
+     *     等有测试账号时做一次真机验证再决定去留。
      */
     upload: (key: string, base64: string) => dispatch("/FriendCircle/Upload", { key, base64 }),
 

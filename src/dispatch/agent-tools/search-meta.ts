@@ -85,17 +85,19 @@ export const SEARCH_META: ToolMeta = {
     Type.Object({ query: Type.String(), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),
     (query: string, cursor?: string, limit?: number) => getSearchApi().emoji(query, cursor ?? "", limit ?? 20),
   ],
-  /** /Search/AI */
+  /**
+   * /Search/AI — 新建 AI 搜索会话
+   * ⚠️ v1.16.1 (2026-10-16): 去掉 sessionId / turn 两个入参 —— 线上 AIRequestDoc 只有 {model, query}。
+   *   厂商文档: 「轮次由服务端维护, 客户端不需传 turn」; session_id 是**响应**里拿到、供 /Search/AI/FollowUp
+   *   追问用的 (追问走 aiFollowUp, 不是再调本端点)。旧工具让 agent 传这两个参数 = 传了也不生效。
+   */
   searchAI: [
-    "AI 搜索 (深度问答增强).",
+    "AI 搜索 (深度问答增强, 新建会话). 追问请用 aiFollowUp 并带上本次响应里的 session_id.",
     Type.Object({
       query: Type.String(),
-      model: Type.Optional(Type.String()),
-      sessionId: Type.Optional(Type.String()),
-      turn: Type.Optional(Type.Number()),
+      model: Type.Optional(Type.String({ description: "搜索模型; 线上文档称目前稳定公开值为 default" })),
     }),
-    (query: string, model?: string, sessionId?: string, turn?: number) =>
-      getSearchApi().ai(query, { model, sessionId, turn }),
+    (query: string, model?: string) => getSearchApi().ai(query, { model }),
   ],
   // ===== v1.3.25 SWAGGER-254: 新增 5 个通用搜索 =====
 

@@ -11,7 +11,9 @@
     "build": "tsc && node scripts/build-setup-wizard.mjs",
     "lint": "eslint src --max-warnings 0",
     "build:setup-wizard": "node scripts/build-setup-wizard.mjs",
-    "test:cov": "node --test --experimental-test-coverage tests/unit/*.test.mjs"
+    "test:cov": "node --test --experimental-test-coverage tests/unit/*.test.mjs",
+    "swagger:drift": "node tools/check-swagger-drift.mjs",
+    "swagger:snapshot": "node tools/gen-swagger-snapshot.mjs"
   },
   "openclaw": {
     "extensions": [
