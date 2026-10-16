@@ -27,6 +27,7 @@
 // 热路径 (judge) 零 DB 读: 画像文本在内存缓存里 (`_profiles`), 由 sweep 每轮用一条 listHfGroupProfiles 预热。
 import { debug, formatErr, info, warn } from "../core/logger.js";
 import { callJudge, resolveJudgeCreds } from "../llm-judge.js";
+import { captionPendingHfImages, hfCaptionSampleLine, loadHfCaptionsForBodies, resolveHfCaptionCfg, } from "./heartflow-caption.js";
 import { getHfGroupMessageStats, listHfGroupMsgHourBuckets, listHfGroupProfiles, upsertHfGroupProfile, getMessages, } from "../storage/db/index.js";
 import { HF_LEARNING_DEFAULTS, isHfGroupAllowed, resolveHfLearning } from "./heartflow.js";
 import { resolveHfBudget } from "./heartflow-budget.js";
@@ -50,6 +51,9 @@ export const HF_PROFILE_DEFAULTS = {
     timeoutMs: 20000,
     applyQuietHours: false,
     maxRaise: 0.1,
+    // v1.16.0: caption 逐键缺省在 HF_CAPTION_DEFAULTS (heartflow-caption.ts); 这里空对象只为过 Required 类型,
+    // 真实缺省解析由 resolveHfProfileCfg 里的 resolveHfCaptionCfg(p?.caption) 完成
+    caption: {},
 };
 export function resolveHfProfileCfg(cfg) {
     const p = cfg?.profile;
@@ -66,6 +70,8 @@ export function resolveHfProfileCfg(cfg) {
         timeoutMs: p?.timeoutMs ?? D.timeoutMs,
         applyQuietHours: p?.applyQuietHours ?? D.applyQuietHours,
         maxRaise: p?.maxRaise ?? D.maxRaise,
+        // v1.16.0: 嵌套块单独解 (不进 D 的 satisfies —— 它的默认在 HF_CAPTION_DEFAULTS)
+        caption: resolveHfCaptionCfg(p?.caption),
     };
 }
 /** 字段上限 (防 LLM 越写越长 ⇒ prompt 膨胀) */
@@ -514,6 +520,40 @@ export async function maybeGenerateHfGroupProfiles(accountId, cfg, nowSec) {
     }
     const byGroup = new Map(existing.map((r) => [r.group_id, r]));
     const creds = resolveJudgeCreds();
+    // v1.16.0 图片配文: 生成前给本轮要处理的群补配文 (单轮配额内的群才配, 不白打 LLM)。
+    //   失败全吞 (warn 一次) —— 增强件永不变成依赖件: caption 挂了画像照旧用占位样本生成。
+    const capCfg = resolveHfCaptionCfg(P.caption);
+    const capOut = { tasks: 0, ok: 0, fail: 0 };
+    if (capCfg.enabled && capCfg.perGroupMax > 0 && groups.length > 0) {
+        try {
+            const capSince = nowSec - P.lookbackDays * 86400;
+            // 只为本轮真会重新生成的群配文 (镜像主循环的 stale 判定 + maxPerRun 配额) ——
+            //   给"还新/超配额"的群配文 = 白花 LLM 调用 (下轮它仍到期, 届时再配)
+            let capDone = 0;
+            for (const groupId of groups) {
+                const prevForCap = byGroup.get(groupId);
+                if (!isHfProfileStale(prevForCap?.generated_at ?? null, nowSec, P.refreshHours))
+                    continue;
+                if (capDone >= Math.max(1, P.maxPerRun))
+                    break;
+                capDone += 1;
+                const r = await captionPendingHfImages(accountId, groupId, capSince, capCfg, model, creds);
+                capOut.tasks += r.tasks;
+                capOut.ok += r.ok;
+                capOut.fail += r.fail;
+            }
+            // v1.16.0: 只要本轮真走到了配文 (capDone>0) 就出声, **含 tasks=0** —— 否则"机制在跑、今天没待办"
+            //   与"机制根本没跑"在日志里都是静默 (生产首日正是 0 行, 无法自证)。全 fresh 的常态轮次 capDone=0
+            //   仍不出声 (5 分钟一轮, 出声会刷屏)。groups= 报的是"本轮配额内实数处理的群 / 候选群"。
+            if (capDone > 0)
+                info(`[WPP HF] caption pass: account=${accountId} groups=${capDone}/${groups.length} ` +
+                    `tasks=${capOut.tasks} ok=${capOut.ok} fail=${capOut.fail}`);
+        }
+        catch (e) {
+            warn(`[WPP HF] caption pass failed (画像用旧样本形态继续): ${formatErr(e)}`);
+        }
+    }
+    out.captions = capOut;
     for (const groupId of groups) {
         const prev = byGroup.get(groupId);
         if (!isHfProfileStale(prev?.generated_at ?? null, nowSec, P.refreshHours)) {
@@ -598,18 +638,27 @@ export async function maybeGenerateHfGroupProfiles(accountId, cfg, nowSec) {
  * 取最近入站消息作为样本 (`sender: content`, 单条截断 80 字)。
  * 复用既有 getMessages (不新增查询): 出站消息被 direction='inbound' 过滤掉 ⇒ 样本里没有 bot 自己的话
  * (画像要理解的是**群**, 不是 bot 的说话习惯 —— 把 bot 自己的话喂进去会让画像自我强化)。
+ *
+ * v1.16.0 图片配文: 图片行换成 `[图] <caption>` / `收到一张图片` (清掉 URL 噪声);
+ * 查配文失败退回旧形态 —— 增强件不是依赖件。
  */
-async function loadSampleLines(accountId, groupId, limit) {
+async function loadSampleLines(accountId, groupId, limit, captionsByHash) {
     const max = Math.max(1, Math.min(limit, 100));
     const rows = await getMessages({ accountId, peerKind: "group", peerId: groupId, limit: max * 2 });
+    // 调用方没预先注入时自己查 (失败 = 空 Map = 旧形态)
+    let caps = captionsByHash;
+    if (!caps) {
+        caps = await loadHfCaptionsForBodies(accountId, rows.filter((m) => m.direction === "inbound" && m.content).map((m) => m.content));
+    }
     const seen = new Set();
     const out = [];
     for (const m of rows) {
         if (m.direction !== "inbound")
             continue;
-        const body = (m.content ?? "").replace(/\s+/g, " ").trim();
-        if (!body || body.length < 2)
+        const rawBody = (m.content ?? "").replace(/\s+/g, " ").trim();
+        if (!rawBody || rawBody.length < 2)
             continue;
+        const body = hfCaptionSampleLine(rawBody, caps);
         const who = (m.from_wxid ?? "").slice(0, 6) + "**";
         const line = `${who}: ${body.slice(0, 80)}`;
         if (seen.has(line))

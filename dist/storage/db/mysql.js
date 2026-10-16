@@ -382,6 +382,24 @@ async function applyMigrations(pool) {
       KEY idx_hf_layer_acct (account_id, layer_kind, updated_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+    // v1.16.0 图片配文表: 群画像样本"看得见图"的支撑 (captionHfPendingImages 生成, loadSampleLines 消费).
+    //   PK=url_hash (sha1(OSS URL) 全局唯一 —— 同一张图跨群只配一次). caption NULL 且 fail_count<上限 = 可重试;
+    //   从不删行 (止损靠 fail_count, 重启/新 sweep 幂等).  ⚠️ 与 db/schema.sql 同步双写 (改一处必改另一处)
+    await pool.query(`
+    CREATE TABLE IF NOT EXISTS wpp_hf_image_caption (
+      url_hash CHAR(40) NOT NULL,
+      account_id VARCHAR(64) NOT NULL,
+      group_id VARCHAR(128) NULL,
+      url_sample VARCHAR(255) NULL,
+      caption TEXT NULL,
+      model VARCHAR(64) NULL,
+      fail_count INT UNSIGNED NOT NULL DEFAULT 0,
+      created_at INT UNSIGNED NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (url_hash),
+      KEY idx_hf_cap_acct (account_id, fail_count)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
     // v1.6.8 心流标签改造: 生产上 wpp_hf_ledger 早已存在, 上面的 CREATE ... IF NOT EXISTS 不会给它加列
     //   ⇒ 新列只能 ensureColumn 幂等补 (SHOW COLUMNS 判重). 见 heartflow-label.ts 的设计注释.
     await ensureColumn(pool, "wpp_hf_ledger", "bot_msg_id", "VARCHAR(128) NULL", "new_msg_id");
@@ -1078,6 +1096,65 @@ export function createMysqlAdapter(cfg) {
             const rows = await queryWithTimeout(p, `SELECT account_id, group_id, profile_json, stats_json, sample_msgs, model, version, generated_at
          FROM wpp_hf_group_profile WHERE account_id = ?`, [accountId]);
             return rows.map(rowToHfGroupProfile);
+        },
+        // ===== v1.16.0 图片配文 (caption) =====
+        async upsertHfImageCaption(record) {
+            const p = getPool();
+            await p.query(`INSERT INTO wpp_hf_image_caption
+         (url_hash, account_id, group_id, url_sample, caption, model, fail_count, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           caption = COALESCE(VALUES(caption), caption),
+           model = COALESCE(VALUES(model), model),
+           url_sample = COALESCE(VALUES(url_sample), url_sample),
+           fail_count = fail_count + VALUES(fail_count)`, [
+                record.url_hash,
+                record.account_id,
+                record.group_id ?? null,
+                record.url_sample ?? null,
+                record.caption ?? null,
+                record.model ?? null,
+                record.fail_delta ?? 0,
+                record.created_at ?? Math.floor(Date.now() / 1000),
+            ]);
+        },
+        async getHfCaptionsByHashes(accountId, urlHashes) {
+            if (!urlHashes || urlHashes.length === 0)
+                return [];
+            const p = getPool();
+            const list = urlHashes.slice(0, 1000);
+            const rows = await queryWithTimeout(p, `SELECT url_hash, caption, fail_count FROM wpp_hf_image_caption
+         WHERE account_id = ? AND url_hash IN (${list.map(() => "?").join(",")})`, [accountId, ...list]);
+            return rows.map((r) => ({
+                url_hash: String(r.url_hash),
+                caption: r.caption == null ? null : String(r.caption),
+                fail_count: Number(r.fail_count),
+            }));
+        },
+        async listHfImageMsgs(accountId, groupIds, sinceSec, limit) {
+            const p = getPool();
+            const safeLimit = Math.min(Math.max(limit ?? 100, 1), 500);
+            const where = [
+                "account_id = ?",
+                "direction = 'inbound'",
+                // msg_type 库里存的是字符串形态 ('3'=图片消息, 'image'=vendor 解析后的类型标记)
+                "msg_type IN ('3','image')",
+                "ts >= FROM_UNIXTIME(?)",
+            ];
+            const params = [accountId, sinceSec];
+            if (groupIds && groupIds.length > 0) {
+                // 出站行 chat_id 为 NULL ⇒ COALESCE 归群 (照 v1.9.0 listHfBotMsgShare 先例)
+                where.push(`COALESCE(NULLIF(chat_id, ''), peer_id) IN (${groupIds.map(() => "?").join(",")})`);
+                params.push(...groupIds);
+            }
+            const rows = await queryWithTimeout(p, `SELECT id, COALESCE(NULLIF(chat_id, ''), peer_id) AS group_id, content
+         FROM wpp_messages WHERE ${where.join(" AND ")}
+         ORDER BY id DESC LIMIT ${safeLimit}`, params);
+            return rows.map((r) => ({
+                id: Number(r.id),
+                group_id: String(r.group_id),
+                content: r.content == null ? null : String(r.content),
+            }));
         },
         // v1.7.0 画像素材: 4 条**单表**只读聚合 (wpp_messages). 每群每天只跑一次 (生成画像时), 不在热路径上.
         //   口径与 listHfGroupMsgHourBuckets 一致: peer_kind='group' + direction='inbound' (排除 bot 自己的出站),

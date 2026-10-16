@@ -257,3 +257,20 @@ CREATE TABLE IF NOT EXISTS wpp_sync_state (
   updated_at INT UNSIGNED NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- v1.16.0 图片配文 (群画像样本"看得见图"): PK=url_hash 全局唯一, 同图跨群只配一次;
+--   caption NULL + fail_count<上限 = 可重试, 到次数即止损 (从不删行)。
+-- ⚠️ 与 src/storage/db/mysql.ts 的行内 DDL 必须同步 (改一处必改另一处)
+CREATE TABLE IF NOT EXISTS wpp_hf_image_caption (
+  url_hash CHAR(40) NOT NULL,
+  account_id VARCHAR(64) NOT NULL,
+  group_id VARCHAR(128) NULL,
+  url_sample VARCHAR(255) NULL,
+  caption TEXT NULL,
+  model VARCHAR(64) NULL,
+  fail_count INT UNSIGNED NOT NULL DEFAULT 0,
+  created_at INT UNSIGNED NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (url_hash),
+  KEY idx_hf_cap_acct (account_id, fail_count)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

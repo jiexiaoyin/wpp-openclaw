@@ -123,4 +123,17 @@ export async function listHfBotMsgShare(accountId, sinceSec) {
 export async function listHfOutboundTexts(accountId, sinceSec, limit) {
     return getAdapter().listHfOutboundTexts(accountId, sinceSec, limit);
 }
+// ===== v1.16.0 图片配文 (caption) =====
+/** 存/更一条配文 (PK url_hash 幂等; caption=null + fail_delta=1 记一次失败) */
+export async function upsertHfImageCaption(record) {
+    return getAdapter().upsertHfImageCaption(record);
+}
+/** 批量查已试 URL 的配文状态 (调用侧按 caption==null && fail_count<上限 判可重试) */
+export async function getHfCaptionsByHashes(accountId, urlHashes) {
+    return getAdapter().getHfCaptionsByHashes(accountId, urlHashes);
+}
+/** 白名单群图片类入站消息轻量行 (caption 补做队列源) */
+export async function listHfImageMsgs(accountId, groupIds, sinceSec, limit) {
+    return getAdapter().listHfImageMsgs(accountId, groupIds, sinceSec, limit);
+}
 //# sourceMappingURL=heartflow.js.map
