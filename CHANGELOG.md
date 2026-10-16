@@ -4,6 +4,53 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [Unreleased] v1.16.0 审阅修正 (二): 部署门与 verify 的假报 + HMAC 自述降噪 (2026-10-16)
+
+> 同一类病: **看起来在把关, 其实在造假** —— 三条都长期存在, 且都朝"报告好消息"的方向骗人。
+> **deploy.sh / deploy-swap.sh 是 dev 侧脚本 (不进运行期); src/config.ts 的日志级别改动需重新部署才对线上生效。**
+
+### Fixed
+
+- **`deploy-swap.sh` 的 dry-run gate 是空操作 (且与自己的文字不符)**: 它声称"要求 5 分钟内 `bash deploy.sh`
+  跑过且 exit 0", 实现却只有 `[ FORCE != 1 ] && [ DRY_RUN != 1 ] && exit 1` —— 不读任何证据, 也没有任何
+  合法路径能过 (文末自己承认"gate 只认 --force, 没有 marker 文件")。后果不是更安全, 而是每次都只能
+  `--force` ⇒ 防呆名存实亡。**修法**: `deploy.sh` 干净通过 (exit 0, 即"0 警告"那条路径) 时写 marker
+  (默认 `${TMPDIR:-/tmp}/wpp-deploy-swap.dryrun-ok`; `DEPLOY_MARKER` / `GATE_MAX_AGE` 可覆盖);
+  gate 校验 marker 存在且 ≤300s, 不在就明确指路 `bash deploy.sh`。重启机器后 marker 消失 ⇒ 需重跑 (fail-closed)。
+- **verify 的三处假报**: (a) `sleep 5` 后才找 `wppChannelPlugin registered`, 而插件**实测启动后约 6s 才注册**、
+  账号启动再晚约 4s ⇒ 健康部署也会印 `✗ plugin registered log 未找到`, 把人引去乱查。改为**轮询到期限**
+  (`VERIFY_WAIT`, 默认 90s)。(b) `grep -iE "error|fail"` 只认**子串** ⇒ 把正文含 error/fail 的 WARN 计成 error
+  (实例: accounts/ 拷贝窗口期的 `config hot-reload failed` WARN ⇒ 假报 3 error)。实测插件与框架的级别字段
+  都是独立大写词 (`<ISO>Z ERROR [WPP …]` / `<ISO> ERROR: …`) ⇒ 改为只认**级别字段** `ERROR`/`FATAL` 并打印命中行。
+  (c) 第 4 行 `grep "http server listening"` 在本部署**实测 0 命中** (永远打印空行, 却挂着 `PLUGINS=` 的名字)
+  ⇒ 删除, 换成实测存在的 `gateway.startAccount: started`。另: 范围改用 `--since "$SINCE_TS"` (步骤 6 重启前记录),
+  不再只看 journal 末尾 N 行 (旧行会被数进来)。
+
+### Changed
+
+- **HMAC 验签 OFF 那条自述由 WARN 降为 info —— 注意这不是"打开验签"**: `webhookSecretEnv` 配了而 env 无值,
+  在本部署是**既定正确状态, 不是漏配**。证据: 网关 env 白名单 `OPENCLAW_SERVICE_MANAGED_ENV_KEYS` 与 `.env`
+  都不含该变量 (刻意不注入); 依据 `signature.ts` 的既定策略: vendor (WeChatPadPro) 推送不带 `X-Signature` 头,
+  secret 一旦为真值 `needsSignatureVerification` 就返 true ⇒ **入站被 401 全量拒收**
+  (2026-08-25 真实事故: 配了该 env ⇒ 0 入库 ⇒ v1.1.10 老板拍回 permissive)。每启动一次就 WARN = 长期狼来了,
+  真漏配会被这条噪声淹没 ⇒ 降为 info, 并把"为什么不能开 + 真要开时怎么做"写进句子自解释。
+  ⚠️ 若后人把它当漏配去补 env, 那是**复现事故**, 不是修 bug。
+
+### Removed
+
+- **`HfProfileGenResult.captions` 死字段**: 全仓无消费者 (唯一调用方 `heartflow-learn.ts` 丢返回值),
+  留着只会让人误以为"外部能观测配文进度"。配文计数已在 caption pass 内自行 info 出声。
+
+### Tests
+
+- 新增 `tests/unit/deploy-gate-verify-v1160.test.mjs` (8 例): gate 三条路径 (缺失 / 过期 / 新鲜) **真跑脚本**;
+  源级锁"不得退回空操作 / 盲等 / 子串判据", **并同时锁 `release/` 副本** (与 `deploy-integrity.test.mjs` 同规:
+  发出去的是 release 副本, 改了 dev 忘了重建 release 会被拦下); 锁 `deploy.sh` 的 marker 写入必须落在
+  "0 警告 PASS"之后 (exit 1/2 到不了那里); 锁 HMAC 那条的日志级别与"为什么"。
+  ⚠️ 源级断言**先剔整行注释**再比对 —— 修正说明里会引用被删掉的老写法 (如 `grep -iE "error|fail"`),
+  不剔的话"解释旧版错在哪"的注释会被当成旧版本身 (首跑即因此红 1 例, 已修)。
+- 全量: **742 passed / 0 failed / 2 skipped**; `tsc` 0 错; `eslint src --max-warnings 0` 通过。
+
 ## [Unreleased] v1.16.0 发布当天审阅修正: caption 失败静默 + 存量排空 (2026-10-16)
 
 > 对 v1.16.0 的独立审阅发现 1 处真缺陷 + 1 处可观测缺口 + 1 处被实测证伪的注释估计。
