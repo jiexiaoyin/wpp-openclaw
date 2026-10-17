@@ -25,8 +25,13 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
     `@modelcontextprotocol/sdk`、`mysql2`、`typebox`、`ws` —— **全在 `dependencies` 且已装**;
   - 唯一未声明的 `@node-rs/jieba` 是**刻意的可选增强** (`src/inbound/jargon.ts:77-92`
     `try{ require } catch { 降级 n-gram }`, 加载失败不影响主流程), 且当前本来就没装 ⇒ prune 不改变行为;
-  - **离线可用**: 整树已存在时 `npm prune --omit=dev` **不访问 registry** (有无 lockfile 皆然;
-    部署树本来也没有 lockfile) ⇒ 断网/内网部署不受影响。
+  - **离线可用 (真断网实测)**: 整树已存在时 `npm prune --omit=dev` 不需要 registry ——
+    `unshare -n` **真断网**下实测 730M → 65M 成功; 也不需要预先有 lockfile (部署树本来就没有,
+    缺失时 prune 会**自己生成**一份)。
+  - 副作用 (已核, 无害): prune 会在部署树里生成 `package-lock.json` (~258K / 533 条), 且按 npm 的
+    `--omit=dev` 语义**仍记录 devDependencies** —— omit 只影响"装什么", 不影响 lockfile 内容。
+    ⇒ 若有人在部署树里跑**不带** `--omit=dev` 的 `npm ci`/`npm install`, 会把 devDeps 装回来;
+    但注意 `package.json` 本来就声明着它们, 这不是本批引入的风险, 本批只是不再把 665M 预先搬上盘。
 - **prune 后 fail-fast 校验 7 个运行时依赖全部落地**, 缺任一即硬失败 (宁可不启动, 不可半启动)。
 - **位置必须留在 `DRY_RUN` 的 `else` 分支内**: `tests/unit/plugin-capture-paths.test.mjs` 会真跑
   `deploy-swap.sh --dry-run` 并断言假部署目录**逐字节未变**, 而本脚本顶部有 `set -e` ⇒ 放到守卫之外
