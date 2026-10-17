@@ -191,6 +191,9 @@ cp -a node_modules "$DEPLOY/"
 #   mysql2, typebox, ws) —— 全在 dependencies 且已装。唯一未声明的 @node-rs/jieba 是刻意的
 #   可选增强 (src/inbound/jargon.ts:77-92 try{require}catch{降级 n-gram}), 且当前本就没装 ⇒
 #   prune 不改变任何行为。实测 730M → 65M。
+#   离线已证: `unshare -n` 真断网下同样成功 (不需要 registry, 也不需要预置 lockfile)。
+#   副作用 (已核, 无害): prune 会在 $DEPLOY 生成 package-lock.json (~258K), 按 npm 的
+#   --omit=dev 语义仍记录 devDeps (omit 只影响"装什么", 不影响 lockfile 内容)。
 #   ⚠️ 必须留在 DRY_RUN 的 else 分支内: plugin-capture-paths.test.mjs 会真跑
 #   `deploy-swap.sh --dry-run` 并断言假部署目录逐字节未变, 而本脚本顶部有 set -e ⇒
 #   放到守卫之外会在 dry-run 时对不存在的 $DEPLOY 跑 prune → 非零退出 → 测试变红。
