@@ -165,16 +165,18 @@ else
 fi
 
 # ============ 步骤 4: 拷贝 artifacts ============
-step "[4/7] 拷贝 dist/ + manifest + package.json + node_modules + config + accounts + db"
+step "[4/7] 拷贝 dist/ + manifest + package.json + node_modules(裁剪 devDeps) + config + accounts + db"
 if [ "$DRY_RUN" = "1" ]; then
-  echo "    [dry-run] 跳过 rm -rf $DEPLOY + 拷贝; 只预检源仓文件"
+  echo "    [dry-run] 跳过 rm -rf $DEPLOY + 拷贝 + prune; 只预检源仓文件"
   [ -f "$DEVOPS_DIR/db/schema.sql" ] || fail "源仓缺 db/schema.sql — 真实部署会静默丢掉建表/加列"
   for f in config.json openclaw.plugin.json package.json; do
     [ -e "$DEVOPS_DIR/$f" ] || fail "源仓缺 $f"
   done
   [ -d "$DEVOPS_DIR/dist" ] || fail "源仓缺 dist/ (先跑 tsc build)"
   [ -d "$DEVOPS_DIR/accounts" ] || fail "源仓缺 accounts/"
-  echo "    源仓预检通过 (dist/manifest/package.json/config.json/accounts/db 齐)"
+  [ -d "$DEVOPS_DIR/node_modules" ] || fail "源仓缺 node_modules/ (拷贝后无处 prune)"
+  echo "    源仓预检通过 (dist/manifest/package.json/config.json/accounts/db/node_modules 齐)"
+  echo "    (真实部署本步末尾会跑 npm prune --omit=dev 裁掉 devDeps)"
 else
 rm -rf "$DEPLOY"
 mkdir -p "$DEPLOY"
@@ -182,6 +184,24 @@ cp -a dist "$DEPLOY/"
 cp openclaw.plugin.json "$DEPLOY/"
 cp package.json "$DEPLOY/"
 cp -a node_modules "$DEPLOY/"
+# v1.16.1 第四批 (2026-10-17): 部署树只留运行时依赖, 不再整份搬 devDeps。
+#   实测 devDeps 占 665M (光 devDependency 里那份 openclaw@2026.9.6 参考副本就 357M), 而
+#   dist/ 对**任何** devDependency 的 import/require 为 0 处 (逐包 grep 核过); 全部裸模块引用
+#   只有 6 个 (@aws-sdk/client-s3, @aws-sdk/s3-request-presigner, @modelcontextprotocol/sdk,
+#   mysql2, typebox, ws) —— 全在 dependencies 且已装。唯一未声明的 @node-rs/jieba 是刻意的
+#   可选增强 (src/inbound/jargon.ts:77-92 try{require}catch{降级 n-gram}), 且当前本就没装 ⇒
+#   prune 不改变任何行为。实测 730M → 65M。
+#   ⚠️ 必须留在 DRY_RUN 的 else 分支内: plugin-capture-paths.test.mjs 会真跑
+#   `deploy-swap.sh --dry-run` 并断言假部署目录逐字节未变, 而本脚本顶部有 set -e ⇒
+#   放到守卫之外会在 dry-run 时对不存在的 $DEPLOY 跑 prune → 非零退出 → 测试变红。
+( cd "$DEPLOY" && npm prune --omit=dev --no-audit --no-fund ) || fail "step 4: npm prune --omit=dev 失败"
+
+# fail-fast: 7 个运行时依赖必须落地, 缺了就硬失败 (宁可不启动, 不可半启动)
+for dep in @aws-sdk/client-s3 @aws-sdk/s3-request-presigner @modelcontextprotocol/sdk \
+           mysql2 typebox undici ws; do
+  [ -e "$DEPLOY/node_modules/$dep" ] || fail "step 4: prune 后缺运行时依赖 $dep"
+done
+echo "    node_modules 裁剪后: $(du -sh "$DEPLOY/node_modules" | cut -f1) (裁剪前含 devDeps)"
 cp config.json "$DEPLOY/"
 cp -a accounts "$DEPLOY/"
 # v1.6.5 (2026-09-13 事故): 上面那句 `rm -rf $DEPLOY` 会把**运行期资产**一起抹掉 —— 本次真实发生:
