@@ -4,6 +4,45 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.16.2] 调阈口径修复 (silence-exempt): 高置信回复被无视不再算负样本 (2026-10-17)
+
+> **P0 事故复现驱动**: v1.16.0/1 修好"看图+业务口径"后, 全员群晒单图 judge 从 0.548 → 0.825、
+> 回复内容被实测对味 (读出截图里型号/金额/直播数据), 但真人不会去 @/引用机器人 ⇒ engaged 恒 0
+> ⇒ 学习闭环 4h/步单调抬阈: 0.60 (16日人工重置) → 0.65 → 0.70 → 0.75 → 0.80 → **0.85 (17日 09:04)**,
+> 预计 13:04 回 0.90 钉死 —— 与 10-16 事故链逐字重演 (老板当日点名"阈值又被顶到 80 以上了吧", 实查证实)。
+
+### Changed
+
+- **silence-exempt (heartflow-label.ts 新纯函数 `isHfSilenceExempted`)**: `signal=silence × engaged=0 ×
+  (判定时 judge_overall − 当时生效阈) ≥ marginMin` ⇒ 该样本**不计入调阈统计** (既不计负也不计正)。
+  只豁免这一种组合: `negative`/`veto` 主动嫌弃永不豁免; 擦边回复 (margin 0.005/0.055) 被无视仍计负 ——
+  **9-26 老板治刷屏的收敛能力一字不动**, 只停"质量高但不抢镜被判死刑"的误伤路径。
+  缺省 `learning.silenceExemptMarginMin=0.1` (实排依据: 全员群 17 条 informative silence 的 margin 分布
+  {0.005×2, 0.055×2, ≥0.14×13}, 0.1 正落在空档); ≤0 = 关, 退回旧行为。
+- 取数扩展: `getHfClosedRecent` SELECT 补 `judge_overall, effective_threshold, sent_at` 三列
+  (判定当时快照对, 不是事后重读); `HfClosedSample` 类型同步。
+- 审计留痕: detail 加 `exempt=` 计数 (`rate=… skipped=… exempt=… ambientP=… sig=…`, varchar(255) 余量实测够)。
+- ⚠️ 只接 sweep 调阈主链路; 分层 (layer) 默认 apply=false 影子**未同步接线** —— 将来启用分层实应用必须同过
+  这道闸, 否则自锁从分层路重演 (接口注释 + 本条双备案)。
+- 浮点边界: margin 判定带 1e-9 容差 —— DECIMAL 经 Number 收口后 0.75−0.65=0.09999…98, 单测当场抓出,
+  恰在边距上的真样本会被错杀。
+- 新测试 4 条 (heartflow-label.test.mjs): 豁免矩阵 (含脏组合/负号词/引用正样本)、缺失值宁严勿宽、
+  **生产实排复现回归门** (17 条 margin 过闸后 usable=4 < minSample=10 ⇒ 抬阈路径死)、接线防断链源级守卫。
+
+### 配套运维 (同日, 老板批准口径延续 10-16)
+
+- 全员群 learned 0.85 → 0.60 人工重置 + 审计留痕 (DB 即时生效)。
+- ⚠️ **生效前提**: v1.16.2 代码在跑需要重启; 重启前旧代码在 4h 冷却到期 (~13:04) 会再 +0.05。
+  重置后样本池剩 4 条擦边负 (minSample=10) ⇒ 旧代码仍按 17 条全负计 —— 故重启窗口尽量在 13:04 前,
+  错过则重启后再重置一次即可 (新口径下不再复爬)。
+
+### 同期修正 (审阅自纠)
+
+- 上一轮审阅报告两处误判更正: ① "6 个 commit 未推 GitHub" —— 实为 claude 已发布 release 包 (1.16.1),
+  仅 `master`/`main` 落后 HEAD 且发布分支停在 `dev/v1.11.0`; ② 调试群 444444444 近 3 天入站为 **0**
+  (更正我上一版"26 条"口径), 其每 5 分钟 caption pass 空转的根因是 `groups` 清单含近 14 天有消息的群,
+  该群画像永 stale 永占配额 —— 本版未动 (无害噪音), 记入待办。
+
 ## [v1.16.1] 第四批: 部署树只留运行时依赖 — 733M → 68M (2026-10-17)
 
 > ⚠️ 本批**只动部署脚本** `deploy-swap.sh` (及其 `release/` 同步产物), **无 src 改动** ⇒ 对已上线

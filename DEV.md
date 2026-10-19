@@ -1,9 +1,9 @@
 # 开发者指南 (DEV.md)
 
-> **当前版本: v1.16.1**（2026-10-16 部署 + 重启）· 源码见 [README.md](./README.md) · 使用见 [USAGE.md](./USAGE.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
+> **当前版本: v1.16.2**（2026-10-17 调阈口径修复）· 源码见 [README.md](./README.md) · 使用见 [USAGE.md](./USAGE.md) · 部署见 [DEPLOY.md](./DEPLOY.md)
 > 文档里写的版本号一律指**已发布**版本（= `package.json`）；这一致的口径由 `tests/unit/docs-version-consistency.test.mjs` 断言，别再靠人记。
 
-面向接开发本插件（v1.16.1）的代码结构、构建、测试与多端同步说明。生产部署者在走 `build-release.sh`，开发者在本仓库改源码时以此为准。
+面向接开发本插件（v1.16.2）的代码结构、构建、测试与多端同步说明。生产部署者在走 `build-release.sh`，开发者在本仓库改源码时以此为准。
 
 ---
 
@@ -54,7 +54,7 @@ node --test tests/unit/*.test.mjs    # 全量
 npm run test:single -- <file>        # 单个
 ```
 
-当前基线 (2026-10-16 实跑): **783 pass / 0 fail / 2 skip**（785 tests；随版本演进, 以 `npm test`（= `node --test tests/unit/*.test.mjs`）实跑为准）
+当前基线 (2026-10-17 实跑): **787 pass / 0 fail / 2 skip**（789 tests；随版本演进, 以 `npm test`（= `node --test tests/unit/*.test.mjs`）实跑为准）
 （2 skip 是两条显式 `{ skip: true }` 的 HMAC 凭据保留 test：`hmac-fix-v1.5.1.test.mjs` / `p2-cleanup.test.mjs`；**不是** `# SKIP` 注释）。
 ⚠️ 上面这串数字由 `tests/unit/docs-version-consistency.test.mjs` 第 ④ 条盯住 —— 它实时数 `tests/unit/*.test.mjs` 里字面的
 `test(` 个数并要求与本行**相等**（本仓用例无循环生成，故可以要求相等而非"不低于"）。改了计数忘了改这行 ⇒ 直红。

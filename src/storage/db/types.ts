@@ -342,6 +342,12 @@ export interface HfClosedSample {
   closed_at?: number | null;
   /** v1.6.8: 命中信号 (quote/mention/negative/short-window/silence) —— 决定该样本是否可采信 */
   engage_signal?: string | null;
+  /** v1.16.2: 判定时 5 维合成分 (silence-exempt 算 margin 用; 旧行/无分 = null) */
+  judge_overall?: number | null;
+  /** v1.16.2: 判定当时的生效阈值 (与 judge_overall 同点快照, 不是事后值) */
+  effective_threshold?: number | null;
+  /** v1.16.2: 发送时刻 (部分消费方按小时段归桶用) */
+  sent_at?: number | null;
 }
 
 /** v1.6.8: 反事实基线素材行 (每群 × 每小时段的入站人类消息数) */

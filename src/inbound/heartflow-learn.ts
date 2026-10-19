@@ -42,6 +42,7 @@ import {
   asHfEngageSignal,
   classifyHfEngagement,
   isHfSampleInformative,
+  isHfSilenceExempted,
   type HfEngageCandidate,
 } from "./heartflow-label.js";
 import {
@@ -805,12 +806,24 @@ export async function runHeartflowSweep(
       // v1.6.8: 只采信"可鉴别"样本 —— 强信号(引用/@/负词)恒采信; 弱信号与沉默仅在
       //   该时段本来不热闹时采信. v1.6.8 之前的行 engage_signal 为 NULL ⇒ 全部排除
       //   (= 旧错误标签作废, 不再驱动阈值; 上线后需重新攒够 minSample 条新样本才会再调阈).
-      const usable = samples.filter((s) =>
-        isHfSampleInformative(asHfEngageSignal(s.engage_signal), ambientP, L.ambientMax),
-      );
+      // v1.16.2 silence-exempt: 高置信回复被无视 ≠ 不欢迎 —— 豁免的沉默样本不进统计 (既不计负
+      //   也不计正); negative/veto 永不豁免, 擦边回复被无视仍计负 —— 9-26 治刷屏的收敛力不动。
+      let exempted = 0;
+      const usable = samples.filter((s) => {
+        const signal = asHfEngageSignal(s.engage_signal);
+        if (!isHfSampleInformative(signal, ambientP, L.ambientMax)) return false;
+        if (
+          L.silenceExemptMarginMin > 0 &&
+          isHfSilenceExempted(signal, s.engaged, s.judge_overall, s.effective_threshold, L.silenceExemptMarginMin)
+        ) {
+          exempted++;
+          return false;
+        }
+        return true;
+      });
       if (usable.length === 0) {
         debug(
-          `[WPP HF] no informative sample: group=${groupId} window=${samples.length} ambientP=${ambientP.toFixed(3)}`,
+          `[WPP HF] no informative sample: group=${groupId} window=${samples.length} exempt=${exempted} ambientP=${ambientP.toFixed(3)}`,
         );
         continue;
       }
@@ -834,7 +847,7 @@ export async function runHeartflowSweep(
       // 护栏: 变更冷却
       if (!hfCooldownOk(st?.last_change_at ?? null, nowSec, L.minChangeCooldownSec)) continue;
       const oldEffective = st?.learned_threshold ?? baseThreshold;
-      const detail = `${res.reason} skipped=${samples.length - usable.length} ambientP=${ambientP.toFixed(3)} sig=${signalHistogram(usable)}`;
+      const detail = `${res.reason} skipped=${samples.length - usable.length - exempted} exempt=${exempted} ambientP=${ambientP.toFixed(3)} sig=${signalHistogram(usable)}`;
       await applyHfThresholdChange(accountId, groupId, oldEffective, res.newThreshold, detail, usable.length, engaged, nowSec);
       info(
         `[WPP HF] threshold adapted: group=${groupId} ${oldEffective.toFixed(2)} → ${res.newThreshold.toFixed(2)} (${res.direction}, ${detail})`,

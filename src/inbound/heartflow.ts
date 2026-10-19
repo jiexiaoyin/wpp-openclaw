@@ -181,6 +181,15 @@ export interface HfLearningConfig {
   reachabilityWindowSec?: number;
   /** 可达性判定最小样本 (默认 20; 样本太少时"没够着"可能只是没聊到) */
   reachabilityMinSample?: number;
+  /**
+   * v1.16.2 silence-exempt 边距 (默认 0.10; **≤0 = 关闭豁免退回旧行为**):
+   * signal=silence 且 engaged=0 且 判定时分−当时生效阈 ≥ 此值 ⇒ 该样本不计入调阈统计。
+   * 口径依据与生产实测见 heartflow-label.isHfSilenceExempted 注释；negative/veto 永不豁免，
+   * 擦边回复被无视仍计负 —— 9-26 治刷屏的收敛能力不动，只停掉"质量高但不抢镜被判死刑"的误伤。
+   * ⚠️ 只接在 sweep 调阈主链路 (heartflow-learn adapt); 分层 (layer) 默认 apply=false 影子，
+   *   未同步接线 —— 若将来启用分层实应用，必须同样过这道闸，否则自锁会从分层路重演。
+   */
+  silenceExemptMarginMin?: number;
 }
 
 /** v1.6.x 心流学习参数缺省表 (代码默认; schema default 与 accounts JSON 缺省保持一致) */
@@ -222,6 +231,10 @@ export const HF_LEARNING_DEFAULTS: Required<Omit<HfLearningConfig, "enabled">> &
   recoverUnreachable: true,
   reachabilityWindowSec: 7 * 86400,
   reachabilityMinSample: 20,
+  // v1.16.2 silence-exempt (见 HfLearningConfig.silenceExemptMarginMin):
+  //   0.10 不是拍的 —— 生产实排 (10-16/17 全员群 18 条 closed): margin 分布 {0.005×2, 0.055×2, 0.14+×14},
+  //   0.10 正落在"擦边负样本"与"高置信被无视"之间的空档 —— 豁免 14/18 条真误伤, 4 条擦边仍计负。
+  silenceExemptMarginMin: 0.1,
 };
 
 /** v1.6.x: 合并账号 learning 配置与缺省 (enabled 取配置或缺省) */
@@ -246,6 +259,7 @@ export function resolveHfLearning(cfg?: HeartflowConfig): Required<HfLearningCon
     recoverUnreachable: l?.recoverUnreachable ?? D.recoverUnreachable,
     reachabilityWindowSec: l?.reachabilityWindowSec ?? D.reachabilityWindowSec,
     reachabilityMinSample: l?.reachabilityMinSample ?? D.reachabilityMinSample,
+    silenceExemptMarginMin: l?.silenceExemptMarginMin ?? D.silenceExemptMarginMin,
   };
 }
 
