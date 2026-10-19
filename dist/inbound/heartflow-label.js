@@ -163,4 +163,33 @@ export function isHfSampleInformative(signal, ambientP, ambientMax) {
         return true;
     return ambientP < ambientMax;
 }
+/**
+ * v1.16.2 silence-exempt: 高置信回复被"无人接话"时，该沉默样本不得充当抬阈负样本。
+ *
+ * 为什么要改口径 (2026-10-16/17 生产两次复现的自锁):
+ *   全员群真人不会去 @/引用机器人 —— 修好"看图"后回复内容对味 (读出截图里的型号/金额/直播数据),
+ *   但 engaged 仍全 0 ⇒ 学习闭环把它读成"此群不欢迎我" ⇒ 4h/步单调抬阈 0.60→0.80，预计 13:01 回到
+ *   0.90 钉死 —— 和 10-16 事故的链逐字重演。实测账本: 全员群 18 条 closed 里 14 条是
+ *   margin≥0.10 的 silence (judge 明确认为值得回、回完没人接)，若照样计负 = 惩罚"质量高但不抢镜"。
+ *
+ * 判据 (只豁免一种组合，其余全部照常):
+ *   signal=silence 且 engaged=0 且 (judge_overall − 判定时生效阈值) ≥ marginMin ⇒ 不计入调阈样本。
+ *   ❗ negative/veto 永不豁免 —— 那是"主动嫌弃"，才是该收敛的真信号 (老板 9-26 治刷屏的本意不动)；
+ *   ❗ 低 margin 的沉默照常计负 —— 擦边回复被无视仍会抬阈，保留机制的收敛能力。
+ *   两个分数任一缺失/非数字 ⇒ 不豁免 (退回旧行为，宁严勿宽)。
+ */
+export function isHfSilenceExempted(signal, engaged, judgeOverall, thresholdAtJudgeTime, marginMin) {
+    if (!(marginMin > 0))
+        return false; // 旋钮置 0/负 = 总开关关, 退回旧行为 (纯函数自守, 不依赖调用方闸门)
+    if (signal !== "silence" || engaged !== 0)
+        return false;
+    if (typeof judgeOverall !== "number" || !Number.isFinite(judgeOverall))
+        return false;
+    if (typeof thresholdAtJudgeTime !== "number" || !Number.isFinite(thresholdAtJudgeTime))
+        return false;
+    // 1e-9 容差: judge_overall/effective_threshold 是 DECIMAL 经 mysql2 Number() 收口的值,
+    //   而 margin 是两者相减 —— 0.75-0.65 得 0.09999999999999998, 恰在边距上的真样本会被错杀
+    //   (2026-10-17 单测当场拓出这个坑)。容差只宽 1e-9, 不影响"擦边 0.055/0.005 仍计负"的收敛力。
+    return judgeOverall - thresholdAtJudgeTime >= marginMin - 1e-9;
+}
 //# sourceMappingURL=heartflow-label.js.map

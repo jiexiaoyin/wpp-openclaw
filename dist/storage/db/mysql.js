@@ -935,13 +935,18 @@ export function createMysqlAdapter(cfg) {
         },
         async getHfClosedRecent(accountId, groupId, limit) {
             const p = getPool();
-            const rows = await queryWithTimeout(p, `SELECT engaged, closed_at, engage_signal FROM wpp_hf_ledger
+            const rows = await queryWithTimeout(p, `SELECT engaged, closed_at, engage_signal, judge_overall, effective_threshold, sent_at FROM wpp_hf_ledger
          WHERE account_id = ? AND group_id = ? AND status = 'closed' AND engaged IS NOT NULL
          ORDER BY closed_at DESC LIMIT ?`, [accountId, groupId, Math.min(Math.max(limit, 1), 500)]);
             return rows.map((r) => ({
                 engaged: Number(r.engaged),
                 closed_at: r.closed_at == null ? null : Number(r.closed_at),
                 engage_signal: r.engage_signal == null ? null : String(r.engage_signal),
+                // v1.16.2: silence-exempt 算 margin 用 (判定当时的快照对, 不是事后重读);
+                // DECIMAL 经 mysql2 可能是字符串 ⇒ Number 收口, NULL 保持 null (不豁免)
+                judge_overall: r.judge_overall == null ? null : Number(r.judge_overall),
+                effective_threshold: r.effective_threshold == null ? null : Number(r.effective_threshold),
+                sent_at: r.sent_at == null ? null : Number(r.sent_at),
             }));
         },
         // v1.6.8 反事实基线: 每群 × 每小时段的**入站人类消息数** (供 hfAmbientP 算"那时段本来多热闹").

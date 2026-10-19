@@ -65,6 +65,10 @@ export const HF_LEARNING_DEFAULTS = {
     recoverUnreachable: true,
     reachabilityWindowSec: 7 * 86400,
     reachabilityMinSample: 20,
+    // v1.16.2 silence-exempt (见 HfLearningConfig.silenceExemptMarginMin):
+    //   0.10 不是拍的 —— 生产实排 (10-16/17 全员群 18 条 closed): margin 分布 {0.005×2, 0.055×2, 0.14+×14},
+    //   0.10 正落在"擦边负样本"与"高置信被无视"之间的空档 —— 豁免 14/18 条真误伤, 4 条擦边仍计负。
+    silenceExemptMarginMin: 0.1,
 };
 /** v1.6.x: 合并账号 learning 配置与缺省 (enabled 取配置或缺省) */
 export function resolveHfLearning(cfg) {
@@ -88,6 +92,7 @@ export function resolveHfLearning(cfg) {
         recoverUnreachable: l?.recoverUnreachable ?? D.recoverUnreachable,
         reachabilityWindowSec: l?.reachabilityWindowSec ?? D.reachabilityWindowSec,
         reachabilityMinSample: l?.reachabilityMinSample ?? D.reachabilityMinSample,
+        silenceExemptMarginMin: l?.silenceExemptMarginMin ?? D.silenceExemptMarginMin,
     };
 }
 /** v1.6.x: 群是否在心流白名单 (空数组=全放行; 与 checkHeartflowGate 白名单子句同语义, 供 sweep 过滤) */
