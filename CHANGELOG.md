@@ -4,9 +4,92 @@ WeChatPadPro OpenClaw Plugin 版本变更记录.
 
 格式: 基于 [Keep a Changelog](https://keepachangelog.com/), 版本号 [SemVer 2.0](https://semver.org/).
 
+## [v1.16.2] 调阈口径修复 (silence-exempt): 高置信回复被无视不再算负样本 (2026-10-17)
+
+> **P0 事故复现驱动**: v1.16.0/1 修好"看图+业务口径"后, 全员群晒单图 judge 从 0.548 → 0.825、
+> 回复内容被实测对味 (读出截图里型号/金额/直播数据), 但真人不会去 @/引用机器人 ⇒ engaged 恒 0
+> ⇒ 学习闭环 4h/步单调抬阈: 0.60 (16日人工重置) → 0.65 → 0.70 → 0.75 → 0.80 → **0.85 (17日 09:04)**,
+> 预计 13:04 回 0.90 钉死 —— 与 10-16 事故链逐字重演 (老板当日点名"阈值又被顶到 80 以上了吧", 实查证实)。
+
+### Changed
+
+- **silence-exempt (heartflow-label.ts 新纯函数 `isHfSilenceExempted`)**: `signal=silence × engaged=0 ×
+  (判定时 judge_overall − 当时生效阈) ≥ marginMin` ⇒ 该样本**不计入调阈统计** (既不计负也不计正)。
+  只豁免这一种组合: `negative`/`veto` 主动嫌弃永不豁免; 擦边回复 (margin 0.005/0.055) 被无视仍计负 ——
+  **9-26 老板治刷屏的收敛能力一字不动**, 只停"质量高但不抢镜被判死刑"的误伤路径。
+  缺省 `learning.silenceExemptMarginMin=0.1` (实排依据: 全员群 17 条 informative silence 的 margin 分布
+  {0.005×2, 0.055×2, ≥0.14×13}, 0.1 正落在空档); ≤0 = 关, 退回旧行为。
+- 取数扩展: `getHfClosedRecent` SELECT 补 `judge_overall, effective_threshold, sent_at` 三列
+  (判定当时快照对, 不是事后重读); `HfClosedSample` 类型同步。
+- 审计留痕: detail 加 `exempt=` 计数 (`rate=… skipped=… exempt=… ambientP=… sig=…`, varchar(255) 余量实测够)。
+- ⚠️ 只接 sweep 调阈主链路; 分层 (layer) 默认 apply=false 影子**未同步接线** —— 将来启用分层实应用必须同过
+  这道闸, 否则自锁从分层路重演 (接口注释 + 本条双备案)。
+- 浮点边界: margin 判定带 1e-9 容差 —— DECIMAL 经 Number 收口后 0.75−0.65=0.09999…98, 单测当场抓出,
+  恰在边距上的真样本会被错杀。
+- 新测试 4 条 (heartflow-label.test.mjs): 豁免矩阵 (含脏组合/负号词/引用正样本)、缺失值宁严勿宽、
+  **生产实排复现回归门** (17 条 margin 过闸后 usable=4 < minSample=10 ⇒ 抬阈路径死)、接线防断链源级守卫。
+
+### 配套运维 (同日, 老板批准口径延续 10-16)
+
+- 全员群 learned 0.85 → 0.60 人工重置 + 审计留痕 (DB 即时生效)。
+- ⚠️ **生效前提**: v1.16.2 代码在跑需要重启; 重启前旧代码在 4h 冷却到期 (~13:04) 会再 +0.05。
+  重置后样本池剩 4 条擦边负 (minSample=10) ⇒ 旧代码仍按 17 条全负计 —— 故重启窗口尽量在 13:04 前,
+  错过则重启后再重置一次即可 (新口径下不再复爬)。
+
+### 同期修正 (审阅自纠)
+
+- 上一轮审阅报告两处误判更正: ① "6 个 commit 未推 GitHub" —— 实为 claude 已发布 release 包 (1.16.1),
+  仅 `master`/`main` 落后 HEAD 且发布分支停在 `dev/v1.11.0`; ② 调试群 57737516566 近 3 天入站为 **0**
+  (更正我上一版"26 条"口径), 其每 5 分钟 caption pass 空转的根因是 `groups` 清单含近 14 天有消息的群,
+  该群画像永 stale 永占配额 —— 本版未动 (无害噪音), 记入待办。
+
+## [v1.16.1] 第四批: 部署树只留运行时依赖 — 733M → 68M (2026-10-17)
+
+> ⚠️ 本批**只动部署脚本** `deploy-swap.sh` (及其 `release/` 同步产物), **无 src 改动** ⇒ 对已上线
+> 代码零行为变化, 只改"下次部署后落在盘上的东西"。下面三段是 src 收口 (2026-10-16 随本版上线),
+> 本段是部署侧收口, 与它们互不影响。
+> 生产已执行并验证 (2026-10-17): 现网 `~/.openclaw/extensions/wechatpadpro` 由 733M → **68M**,
+> 重启网关后 journal 出现 `wppChannelPlugin registered` + `gateway.startAccount: started`,
+> 自重启时刻起 `ERROR`/`FATAL` 计数 **0**; 逐包实测 `dist/` 的全部裸模块引用裁剪后仍可解析。
+
+### Changed
+
+- **`deploy-swap.sh` 步骤 4: 拷完 node_modules 后跑 `npm prune --omit=dev`**。原先
+  `cp -a node_modules "$DEPLOY/"` 把 dev 仓**整份** node_modules (730M) 原样搬进生产树, 其中
+  devDependencies 占 **665M** —— 光 devDependency 里那份 `openclaw@2026.9.6` 参考副本就 **357M**
+  (本机跑的是 2026.10.4, 那份只是编译期类型/构建参考)。
+  安全性证据 (都在本机核过, 不是推断):
+  - `dist/` 对**任何** devDependency 的 import/require 为 **0 处** (逐包 grep);
+  - `dist/` 的全部裸模块引用只有 6 个 —— `@aws-sdk/client-s3`、`@aws-sdk/s3-request-presigner`、
+    `@modelcontextprotocol/sdk`、`mysql2`、`typebox`、`ws` —— **全在 `dependencies` 且已装**;
+  - 唯一未声明的 `@node-rs/jieba` 是**刻意的可选增强** (`src/inbound/jargon.ts:77-92`
+    `try{ require } catch { 降级 n-gram }`, 加载失败不影响主流程), 且当前本来就没装 ⇒ prune 不改变行为;
+  - **离线可用 (真断网实测)**: 整树已存在时 `npm prune --omit=dev` 不需要 registry ——
+    `unshare -n` **真断网**下实测 730M → 65M 成功; 也不需要预先有 lockfile (部署树本来就没有,
+    缺失时 prune 会**自己生成**一份)。
+  - 副作用 (已核, 无害): prune 会在部署树里生成 `package-lock.json` (~258K / 533 条), 且按 npm 的
+    `--omit=dev` 语义**仍记录 devDependencies** —— omit 只影响"装什么", 不影响 lockfile 内容。
+    ⇒ 若有人在部署树里跑**不带** `--omit=dev` 的 `npm ci`/`npm install`, 会把 devDeps 装回来;
+    但注意 `package.json` 本来就声明着它们, 这不是本批引入的风险, 本批只是不再把 665M 预先搬上盘。
+- **prune 后 fail-fast 校验 7 个运行时依赖全部落地**, 缺任一即硬失败 (宁可不启动, 不可半启动)。
+- **位置必须留在 `DRY_RUN` 的 `else` 分支内**: `tests/unit/plugin-capture-paths.test.mjs` 会真跑
+  `deploy-swap.sh --dry-run` 并断言假部署目录**逐字节未变**, 而本脚本顶部有 `set -e` ⇒ 放到守卫之外
+  会在 dry-run 时对不存在的 `$DEPLOY` 跑 prune → 非零退出 → 测试变红。
+- 现网那棵树 (733M) 同日手工裁剪, 裁前清单留痕 `/data/wpp-node-modules-baseline-<ts>.json`
+  (`npm ls --all --json`); 回滚路径 `npm install` 或从 dev 仓 `cp -a node_modules`。
+
+### Tests
+
+- `npm test`: 785 / 783 pass / 0 fail / 2 skip (与改前基线一致, 含 `deploy-integrity`、
+  `deploy-gate-verify-v1160`、`plugin-capture-paths` 三个 deploy 相关用例)。本批未增删用例。
+- 真实部署路径的实证 (沙箱假根, 不碰生产): step 4 打印 `node_modules 裁剪后: 65M` /
+  `$DEPLOY 总量: 68M`, 裁剪后树内旧包被 `rm -rf` 清掉、旧部署完整进备份、插件可加载、
+  `db/schema.sql` 14496B 落地。
+
 ## [v1.16.1] 第三批: 六项收口 — 工具 body 纠错 / swagger 漂移门 / 日志脱敏 / 值环摘除 / 编译残留 / 文档版本 (2026-10-16)
 
-> 📦 **v1.16.1 = 本文件下面三段 `[v1.16.1]` 一起发** (v1.16.0 之后的全部修正), 2026-10-16 部署 + 重启网关
+> 📦 **v1.16.1 = 本文件下面三段 `[v1.16.1]` 一起发** (v1.16.0 之后的全部 src 修正;
+> 另有一段「第四批」只动部署脚本, 不是 src, 见本文件最上), 2026-10-16 部署 + 重启网关
 > (老板批准)。三批都含 src 改动 ⇒ 三批都到这一版才对线上生效; 前端 2 批的 `Tests` 段里写的
 > 742 / 734 是各自收口那一刻的实跑值, 本版总账在第三批末尾。
 > ⚠️ 第三批末尾还有一段 `### 部署后验收` (部署当天从生产日志里抓出的第 13 处 token 漏点 + 修 + 门加固),

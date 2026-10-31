@@ -381,3 +381,69 @@ test('回归门: 阈值语义键不许丢 (observeWindowSec 保持; labelWindowS
   assert.match(h, /labelWindowSec:\s*60/, 'labelWindowSec 默认 60 (实测选死区中点, 见 HF_LEARNING_DEFAULTS 注释)');
   assert.match(h, /ambientMax:\s*0\.5/, 'ambientMax 默认 0.5');
 });
+
+// ===== 6. v1.16.2 silence-exempt: 高置信回复被无视 ≠ 不欢迎 =====
+
+test('isHfSilenceExempted: 只豁免 silence×engaged=0×margin≥边距 这一种组合', (t) => {
+  skipNoDist(t);
+  const M = 0.1; // silenceExemptMarginMin 缺省
+  // 豁免命中: 生产事故形态 (0.83 分过 0.65 阈, 无人接)
+  assert.equal(L.isHfSilenceExempted("silence", 0, 0.83, 0.65, M), true, 'margin 0.18 → 豁免');
+  assert.equal(L.isHfSilenceExempted("silence", 0, 0.75, 0.65, M), true, 'margin 恰 0.10 → 豁免 (>=)');
+  // 不豁免: 其余一切照常计负 (9-26 治刷屏的收敛力不动)
+  assert.equal(L.isHfSilenceExempted("silence", 0, 0.705, 0.65, M), false, 'margin 0.055 = 擦边回复, 仍计负');
+  assert.equal(L.isHfSilenceExempted("silence", 0, 0.655, 0.65, M), false, 'margin 0.005 = 擦边, 仍计负');
+  assert.equal(L.isHfSilenceExempted("negative", 0, 0.9, 0.6, M), false, '主动嫌弃永不豁免');
+  assert.equal(L.isHfSilenceExempted("veto", 0, 0.9, 0.6, M), false, '人工否决永不豁免');
+  assert.equal(L.isHfSilenceExempted("quote", 1, 0.9, 0.6, M), false, '被引用=正样本, 不在豁免射程');
+  assert.equal(L.isHfSilenceExempted("short-window", 1, 0.9, 0.6, M), false, 'engaged=1 不豁免');
+  assert.equal(L.isHfSilenceExempted("silence", 1, 0.9, 0.6, M), false, 'silence 必伴 engaged=0, 脏组合不豁免');
+});
+
+test('isHfSilenceExempted: 缺分数/非数字/旋钮归零 ⇒ 一律不豁免 (宁严勿宽, 退回旧行为)', (t) => {
+  skipNoDist(t);
+  const M = 0.1;
+  assert.equal(L.isHfSilenceExempted("silence", 0, null, 0.65, M), false, '无分 (legacy 行) 不豁免');
+  assert.equal(L.isHfSilenceExempted("silence", 0, 0.9, null, M), false, '无阈值快照不豁免');
+  assert.equal(L.isHfSilenceExempted("silence", 0, Number.NaN, 0.65, M), false, 'NaN 不豁免');
+  assert.equal(L.isHfSilenceExempted("silence", 0, "0.9", 0.65, M), false, '字符串分 (未经 Number 收口) 不豁免');
+  assert.equal(L.isHfSilenceExempted("silence", 0, 0.9, 0.6, 0), false, 'marginMin=0 = 开关关, 退回旧行为 (纯函数自守)');
+});
+
+test('⭐ 回归门 (生产实排复现): 全员群 17 条 silence 过豁免后 usable<minSample ⇒ 不再抬阈', (t) => {
+  skipNoDist(t);
+  // 2026-10-17 全员群 wpp_hf_ledger closed 实排的 margin 分布 (17 条 informative silence, engaged=0):
+  //   13 条 ≥0.14 (高置信被无视) + 2×0.055 + 2×0.005 (擦边) —— 另 1 条 margin=0.10 的行 engage_signal=NULL (legacy),
+  //   由 isHfSampleInformative 先行排除, 不在本 fixture 射程。
+  const P = { minSample: 10, lowEngageRate: 0.15, highEngageRate: 0.5, step: 0.05, bandMin: 0.5, bandMax: 0.9 };
+  const margins = [0.140, 0.180, 0.220, 0.200, 0.205, 0.150, 0.150, 0.235, 0.250, 0.250, 0.250, 0.250, 0.250,
+                   0.055, 0.055, 0.005, 0.005];
+  const usable = margins
+    .map((m) => (L.isHfSilenceExempted("silence", 0, 0.65 + m, 0.65, 0.1) ? null : { engaged: 0 }))
+    .filter(Boolean);
+  assert.equal(usable.length, 4, '17 条里豁免 13, 剩 4 条擦边负样本 (实排口径)');
+  const res = HL.evalHfThreshold({
+    stats: { total: usable.length, engaged: 0 },
+    learnedThreshold: 0.6, // 人工重置后的锚
+    baseThreshold: 0.6,
+    params: P,
+  });
+  assert.equal(res.changed, false, '旧口径这里会 rate=0 → 抬到 0.65; 新口径样本不足即停');
+  assert.equal(res.reason, "insufficient-sample");
+});
+
+test('v1.16.2 接线回归门: learn 过滤链/审计留痕/取数/三处键 一个不能少', (t) => {
+  const lab = src('src/inbound/heartflow-label.ts');
+  assert.match(lab, /export function isHfSilenceExempted\(/, '纯函数必须导出');
+  const hl = src('src/inbound/heartflow-learn.ts');
+  assert.match(hl, /isHfSilenceExempted\(signal, s\.engaged, s\.judge_overall, s\.effective_threshold/, 'sweep 过滤链必须接豁免');
+  assert.match(hl, /exempt=\$\{exempted\}/, '审计 detail 必须带 exempt= 留痕 (口径可追溯)');
+  const my = src('src/storage/db/mysql.ts');
+  assert.match(my, /SELECT engaged, closed_at, engage_signal, judge_overall, effective_threshold, sent_at FROM wpp_hf_ledger/, 'closed 取数必须带 margin 原料 (缺了=豁免静默失效)');
+  const h = src('src/inbound/heartflow.ts');
+  for (const k of ["silenceExemptMarginMin"]) {
+    const n = (h.match(new RegExp(`\\b${k}\\b`, "g")) ?? []).length;
+    assert.ok(n >= 3, `${k} 必须接口+缺省表+resolve 三处齐 (实测 ${n})`);
+  }
+  assert.match(h, /silenceExemptMarginMin:\s*0\.1,/, '缺省 0.1 (实排 margin 分布空档, 见缺省表注释)');
+});
